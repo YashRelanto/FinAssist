@@ -1,0 +1,13 @@
+user_id,full_name,email,password,created_at,deleted_at
+a9a11e1f-f158-4d8e-ae55-407a5e00410f,Arjun Mehta,arjun.mehta@gmail.com,$2b$12$e6ab4fec2e3642289ead7be470fd3633,2024-12-01 10:00:00+05:30,
+a7d561f7-e0f5-4e96-8c4d-c68fc2f873ff,Priya Sharma,priya.sharma@outlook.com,$2b$12$d2c40254ce6d4f5b8ca63f0d8dd90311,2024-12-01 10:00:00+05:30,
+a0f46e22-384b-4565-8d46-e2ffbc345c4e,Rohan Kapoor,rohan.kapoor@gmail.com,$2b$12$ab1f883e356f4a50b794e73a762dde4e,2024-12-01 10:00:00+05:30,
+2edb6c85-d3b9-4308-95e3-51fc107a6f92,Sneha Iyer,sneha.iyer@yahoo.com,$2b$12$1ac1fb457ba0460388cc90b95223f041,2024-12-01 10:00:00+05:30,
+bb0f1e5e-6e1a-4752-bb0e-9d8050c2f179,Vikram Nair,vikram.nair@gmail.com,$2b$12$c2e7352c199144998ef2e362525c93f6,2024-12-01 10:00:00+05:30,
+78606e52-9214-4016-8eaa-a82ef6a69267,Ananya Pillai,ananya.pillai@gmail.com,$2b$12$cf0b32a8850f46dabf6b892b1ae23374,2024-12-01 10:00:00+05:30,
+4e77c330-d820-4194-b664-1d0284606a59,Ramesh Kumar,ramesh.kumar@gmail.com,$2b$12$894106319b1940e48a0a7dfc7a110998,2024-12-01 10:00:00+05:30,
+f8bc1d5c-dc53-41b9-8fb3-e517e60ca753,Sunita Devi,sunita.devi@gmail.com,$2b$12$bb4fea5bf5ff473e80d2d32bad9372d6,2024-12-01 10:00:00+05:30,
+ff3b08e4-75c9-48f9-b0a1-bb3e107ffcf7,Mohan Das,mohan.das@outlook.com,$2b$12$d061698bfa94425b93032a3d853e663c,2024-12-01 10:00:00+05:30,
+22c9cbac-a27f-4dba-b9ba-b967ddf92674,Kavitha Reddy,kavitha.reddy@gmail.com,$2b$12$8d95f5fe5efa42dd897bb260394697bf,2024-12-01 10:00:00+05:30,
+48ef7beb-5d69-4f1e-93ad-28ae87781e11,Deepak Singh,deepak.singh@gmail.com,$2b$12$a55a3db9dce94e7c8e9c561c905fe6a2,2024-12-01 10:00:00+05:30,
+8b19e3da-e787-47e0-aeaf-09768372d9bc,Meera Joshi,meera.joshi@yahoo.com,$2b$12$e2f17806ac294514ba0dadd167f65acd,2024-12-01 10:00:00+05:30,

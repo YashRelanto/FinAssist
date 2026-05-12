@@ -1,0 +1,50 @@
+category_id,main_category,sub_category
+7226804c-9758-4d6c-ab1a-a630952b9021,Food & Drinks,Groceries
+945e1d34-0bc6-4f00-bc07-7e8ca5f2275a,Food & Drinks,Dining Out
+f4e594d6-238c-4621-ae45-31555b2bbf17,Food & Drinks,Cafes & Coffee
+f7726345-2f51-4a04-8b89-b4155f378e4b,Food & Drinks,Food Delivery
+c4e9cce2-2acf-4c66-a321-b974759bfada,Food & Drinks,Alcohol & Bars
+6fd11cf9-9bae-4b41-9a8c-92db4f168102,Food & Drinks,Bakery & Snacks
+fd4bbd12-b063-477e-b33b-1969e45b5bd8,Shopping,Clothing & Apparel
+3564a9ec-ee50-4fc4-a040-162bb592125d,Shopping,Electronics
+56237ce4-14a8-4f4f-b228-b203ecc2fb37,Shopping,Online Shopping
+4f4992be-af39-478b-9d2d-88bd02b48bbd,Shopping,Home & Kitchen
+e369ac7b-799d-4d82-a86e-2da8be49df4c,Shopping,Books & Stationery
+ab2d51ab-b0f5-47e7-af29-1f351c1de70b,Shopping,Personal Care
+2f45c235-b051-4b37-879c-9fc01c6c1e1a,Housing,Rent
+4968a48f-57c9-464c-9650-b779ff247a7a,Housing,Maintenance & Repairs
+383d4edb-9b0f-4f50-ab6a-a146ca284795,Housing,Household Supplies
+93c0a58a-a96a-41f6-948b-065f1f91a1a9,Housing,Furniture
+3a761f85-8454-47cc-8a75-66b574a49a71,Housing,Utilities
+58ab5798-a3aa-4fad-9df0-5a991d5a0ea0,Housing,Domestic Help
+f9afeb55-93a0-4008-b90d-fec112c00114,Transportation,Metro & Bus
+0137b166-bb1c-457a-83e0-fd6640f365b5,Transportation,Cab & Auto
+bc3902e4-5896-4ceb-9047-cb0a8e21f541,Transportation,Fuel
+28205557-3907-4680-9725-115158e013cb,Transportation,Parking
+09d5cc08-b9b3-4480-977e-8bd47c047fc3,Transportation,Toll
+a0b3e998-bac3-4500-ae66-52286c554141,Transportation,Flight & Train
+55c9a416-3bb0-42f9-9123-86dbf89f61dc,Vehicle,Vehicle EMI
+50e99870-1fff-4d44-864f-e016959c4470,Vehicle,Insurance
+bf4a5868-f2cd-48ca-9a28-b30eae4cb6ac,Vehicle,Service & Repair
+9b561959-f6e6-4a35-babb-1f8ebbaf899e,Vehicle,Registration & Tax
+09f46160-4209-41c2-9da0-b4dddc079bd2,Life & Entertainment,Movies & Events
+d3d3c59b-8199-4f91-b133-c6d86437efd5,Life & Entertainment,Subscriptions
+cf7945c3-1423-412e-a576-e9505b3150bd,Life & Entertainment,Gym & Sports
+fa05f7af-c3d3-4002-bf5e-2e2337afe9d4,Life & Entertainment,Travel & Hotels
+25d93cc5-d021-47f2-8775-882a92f001ff,Life & Entertainment,Gifting
+a3446379-0165-4242-b8c0-a04f7d27b25c,Life & Entertainment,Education
+8f45f5d3-c9d2-4806-b783-a29b0518d448,Financial Expenses,Loan EMI
+526c62e6-c294-4c20-bdb2-605044fd37ac,Financial Expenses,Credit Card Bill
+5b6c9b1b-0486-465a-af6a-b75c10f28f8c,Financial Expenses,Insurance Premium
+c284bcaa-2d1c-412d-9371-b822d54511d5,Financial Expenses,Bank Charges
+3982de45-bfdc-453f-86e8-3b19b500ff42,Financial Expenses,Tax Payment
+e75705a6-8769-4929-945c-2cbf3b06d72f,Investments,Mutual Fund SIP
+7075bbd1-13c8-4b8b-8c50-4de282fdb0fb,Investments,Stock Purchase
+c41fed1f-89a9-4827-9b97-3cde49ef6d48,Investments,Fixed Deposit
+7c0060a8-152c-4a3f-9c87-0be7a7846b13,Investments,PPF / NPS
+1774c6c5-804d-46a8-bcdc-764261ce304f,Investments,RD
+9010d482-5dd5-4397-8131-11a471649d0d,Income,Salary
+275fdc62-88f0-47c7-b8fa-d51b83fc335a,Income,Freelance
+98099a5d-64c0-46f0-9889-9eea63590b7e,Income,Rental Income
+2739e8c8-391a-4553-bf56-eea51eba99e1,Income,Bonus
+eaa84ddb-070d-43c6-af86-be02333bd60e,Income,Cashback & Refund
