@@ -60,7 +60,25 @@ const transactions = [
 ];
 
 export const Dashboard: React.FC = () => {
-  const { transactions, addTransaction, categories, navigateToAddTransaction } = useAppContext();
+  const { transactions, addTransaction, categories, navigateToAddTransaction, user } = useAppContext();
+  
+  React.useEffect(() => {
+    // Basic endpoint integration check
+    const checkConnection = async () => {
+      try {
+        const response = await fetch(`http://localhost:8000/api/dashboard-summary?user_id=${user?.id}`);
+        const data = await response.json();
+        if (data.success) {
+          console.log("Backend integration success:", data.message);
+          // We can show a toast or alert if needed, but console is less intrusive for now
+          // alert("Dashboard data synced with backend successfully!");
+        }
+      } catch (error) {
+        console.error("Failed to connect to backend dashboard API");
+      }
+    };
+    if (user?.isAuthenticated) checkConnection();
+  }, [user]);
   
   const handleQuickAdd = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();

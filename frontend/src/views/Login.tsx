@@ -8,16 +8,40 @@ export const Login: React.FC = () => {
   const { updateUser } = useAppContext();
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [name, setName] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Simulate authentication
-    updateUser({ 
-      isAuthenticated: true, 
-      name: name || 'User', 
-      email: email || 'user@example.com' 
-    });
+    
+    const endpoint = isSignUp ? '/api/register' : '/api/login';
+    const body = isSignUp 
+      ? { full_name: name, email, password } 
+      : { email, password };
+
+    try {
+      const response = await fetch(`http://localhost:8000${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        alert(data.message); // Showing success message as requested
+        updateUser({ 
+          isAuthenticated: true, 
+          name: data.user.full_name || 'User', 
+          email: data.user.email,
+          id: data.user.user_id
+        });
+      } else {
+        alert(data.detail || "Authentication failed");
+      }
+    } catch (error) {
+      alert("Error connecting to backend");
+    }
   };
 
   return (
@@ -109,6 +133,8 @@ export const Login: React.FC = () => {
                 <input 
                   required 
                   type="password" 
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                   className="w-full pl-12 pr-4 py-4 bg-surface-container-low border border-outline-variant rounded-xl focus:ring-2 focus:ring-primary outline-none transition-all font-medium text-sm" 
                   placeholder="••••••••" 
                 />

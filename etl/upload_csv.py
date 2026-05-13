@@ -3,6 +3,7 @@ import os
 
 import pandas as pd
 from dotenv import load_dotenv
+# pyrefly: ignore [missing-import]
 from supabase import create_client, Client
 
 
@@ -121,21 +122,28 @@ def main() -> None:
             # Calculate running balance per account
             def calculate_balance(group):
                 account_id = group.name
-                # Start with the initial balance from accounts.csv if available, else 0
-                current_bal = account_balances.get(account_id, 0)
+                # The balance in accounts.csv is the CURRENT balance (after all transactions)
+                final_bal = account_balances.get(account_id, 0)
+                
+                # Sort group by date descending to calculate backwards
+                group = group.sort_values(by='transaction_date', ascending=False)
                 
                 balances = []
+                temp_bal = final_bal
                 for idx, row in group.iterrows():
+                    # The running_balance AT this transaction is temp_bal
+                    balances.append(temp_bal)
+                    
+                    # To find the balance BEFORE this transaction:
                     amount = float(row['amount'])
                     if row['transaction_type'] == 'expense':
-                        current_bal -= amount
+                        temp_bal += amount # Add back the expense
                     elif row['transaction_type'] == 'income':
-                        current_bal += amount
-                    # Transfers can be complex; for now we assume they impact the current account
-                    
-                    balances.append(current_bal)
+                        temp_bal -= amount # Subtract the income
+                
                 group['running_balance'] = balances
-                return group
+                # Sort back to chronological for the final result
+                return group.sort_values(by='transaction_date')
 
             df = df.groupby('account_id', group_keys=False).apply(calculate_balance)
             

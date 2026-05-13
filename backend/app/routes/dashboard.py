@@ -11,37 +11,51 @@ router = APIRouter()
 async def home_get(user_id: str):
     # 1. Fetch Transactions for Balance Chart (Line Chart)
     trans_response = supabase.table("transactions")\
-        .select("transaction_date, amount, transaction_type")\
+        .select("transaction_date, running_balance")\
         .eq("user_id", user_id)\
         .order("transaction_date")\
         .execute()
     
     transactions = trans_response.data
-    dates = []
-    balances = []
-    current_balance = 0
     
-    for t in transactions:
-        amount = float(t["amount"])
-        if t["transaction_type"] == "expense":
-            current_balance -= amount
-        elif t["transaction_type"] == "income":
-            current_balance += amount
-        
-        dates.append(t["transaction_date"])
-        balances.append(current_balance)
+    # Fetch initial balance from accounts to use as the starting point
+    acc_response = supabase.table("accounts")\
+        .select("current_balance, created_at")\
+        .eq("user_id", user_id)\
+        .execute()
+    
+    # We'll sum up balances if there are multiple accounts
+    initial_balance = sum(float(a["current_balance"]) for a in acc_response.data) if acc_response.data else 0
+    
+    # Prepend the starting point
+    if transactions:
+        first_date = transactions[0]["transaction_date"]
+        # For the "Start" point, we use the date of the first transaction but show the balance BEFORE it
+        # Actually, since your ETL script starts WITH the initial balance, 
+        # we can just prepend a dummy "Start" entry.
+        dates = ["Start"] + [t["transaction_date"] for t in transactions]
+        balances = [initial_balance] + [float(t["running_balance"]) for t in transactions]
+    else:
+        dates = ["Start"]
+        balances = [initial_balance]
 
     # 2. Fetch Categorical Spending (Donut Chart)
-    cat_response = supabase.table("transactions")\
-        .select("amount, categories(main_category)")\
+    # We fetch transactions and categories separately and join them in Python 
+    # to avoid the "Relationship not found" error.
+    trans_expense_response = supabase.table("transactions")\
+        .select("amount, category_id")\
         .eq("user_id", user_id)\
         .eq("transaction_type", "expense")\
         .execute()
     
-    cat_data = cat_response.data
+    # Fetch all categories to map IDs to names
+    cat_list_response = supabase.table("categories").select("category_id, main_category").execute()
+    cat_map = {c["category_id"]: c["main_category"] for c in cat_list_response.data}
+    
     spending_by_cat = {}
-    for item in cat_data:
-        main_cat = item["categories"]["main_category"]
+    for item in trans_expense_response.data:
+        category_id = item["category_id"]
+        main_cat = cat_map.get(category_id, "Unknown")
         amount = float(item["amount"])
         spending_by_cat[main_cat] = spending_by_cat.get(main_cat, 0) + amount
     
