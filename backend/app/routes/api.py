@@ -1,6 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from app.utils.supabase_client import supabase
+from datetime import datetime
+from collections import defaultdict
 
 router = APIRouter(prefix="/api")
 
@@ -42,18 +44,65 @@ async def api_register(req: RegisterRequest):
 
 @router.get("/dashboard-summary")
 async def get_dashboard_summary(user_id: str):
-    # Fetch real data for charts (reusing our previous logic)
-    trans_response = supabase.table("transactions")\
-        .select("transaction_date, running_balance")\
-        .eq("user_id", user_id)\
-        .order("transaction_date")\
-        .execute()
-    
-    return {
-        "success": True, 
-        "message": "Dashboard summary loaded",
-        "transactions": trans_response.data
-    }
+    try:
+        # 1. Fetch Accounts
+        acc_response = supabase.table("accounts").select("*").eq("user_id", user_id).execute()
+        accounts = acc_response.data
+        total_balance = sum(float(a["current_balance"]) for a in accounts) if accounts else 0
+        
+        # 2. Fetch Transactions
+        trans_response = supabase.table("transactions")\
+            .select("amount, transaction_type, transaction_date")\
+            .eq("user_id", user_id)\
+            .order("transaction_date")\
+            .execute()
+        transactions = trans_response.data
+        
+        # 3. Aggregation logic
+        monthly_stats = defaultdict(lambda: {"income": 0, "expense": 0})
+        current_month_str = datetime.now().strftime("%Y-%m")
+        
+        for t in transactions:
+            date_str = t["transaction_date"]
+            month_key = date_str[:7] # YYYY-MM
+            amount = abs(float(t["amount"])) # Ensure positive amount for sums
+            
+            if t["transaction_type"] == "income":
+                monthly_stats[month_key]["income"] += amount
+            else:
+                monthly_stats[month_key]["expense"] += amount
+        
+        # Current month specific stats
+        curr_stats = monthly_stats.get(current_month_str, {"income": 0, "expense": 0})
+        
+        # Format chart data (last 7 months)
+        sorted_months = sorted(monthly_stats.keys())[-7:]
+        chart_data = []
+        for m in sorted_months:
+            inc = monthly_stats[m]["income"]
+            exp = monthly_stats[m]["expense"]
+            chart_data.append({
+                "name": datetime.strptime(m, "%Y-%m").strftime("%b"), # 'Jan', 'Feb', etc.
+                "income": inc,
+                "expense": exp,
+                "net": inc - exp
+            })
+            
+        return {
+            "success": True,
+            "summary": {
+                "total_balance": total_balance,
+                "monthly_income": curr_stats["income"],
+                "monthly_expenses": curr_stats["expense"],
+                "net_savings": curr_stats["income"] - curr_stats["expense"],
+                "savings_rate": round((curr_stats["income"] - curr_stats["expense"]) / curr_stats["income"] * 100, 1) if curr_stats["income"] > 0 else 0
+            },
+            "chart_data": chart_data,
+            "accounts": accounts
+        }
+    except Exception as e:
+        print(f"Error in dashboard-summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/transactions")
 async def get_transactions():
