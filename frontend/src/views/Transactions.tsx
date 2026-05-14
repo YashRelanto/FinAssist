@@ -6,10 +6,58 @@ import { cn, formatCurrency } from '../lib/utils';
 import { Transaction } from '../types';
 
 export const Transactions: React.FC = () => {
-  const { transactions, updateTransaction, deleteTransaction, categories, pendingDate } = useAppContext();
+  const { user, updateTransaction, deleteTransaction, categories, pendingDate } = useAppContext();
+  const [realTransactions, setRealTransactions] = useState<Transaction[]>([]);
+  const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | undefined>(undefined);
   const [search, setSearch] = useState('');
+
+  const fetchTransactions = async () => {
+    if (!user?.id) return;
+    try {
+      setLoading(true);
+      const response = await fetch(`http://localhost:8000/api/transactions?user_id=${user.id}`);
+      const data = await response.json();
+      if (data.success) {
+        setRealTransactions(data.data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch transactions", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
+    if (user?.isAuthenticated && user?.id) fetchTransactions();
+  }, [user]);
+
+  const handleUpdateCategory = async (trans: any, newMainCat: string) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/transactions/${trans.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: user?.id,
+          account_id: trans.account_id,
+          amount: trans.amount,
+          transaction_type: trans.type,
+          merchant_name: trans.merchant,
+          description: trans.notes || '',
+          main_category: newMainCat,
+          sub_category: 'General',
+          transaction_date: trans.date
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        fetchTransactions();
+      }
+    } catch (error) {
+      console.error("Failed to update category", error);
+    }
+  };
 
   const handleEdit = (t: Transaction) => {
     setEditingTransaction(t);
@@ -28,11 +76,34 @@ export const Transactions: React.FC = () => {
     }
   }, [pendingDate]);
 
-  const filtered = transactions.filter(t => 
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this transaction?')) return;
+    try {
+      const response = await fetch(`http://localhost:8000/api/transactions/${id}`, {
+        method: 'DELETE'
+      });
+      const data = await response.json();
+      if (data.success) {
+        fetchTransactions();
+      }
+    } catch (error) {
+      console.error("Failed to delete transaction", error);
+    }
+  };
+
+  const filtered = realTransactions.filter(t => 
     t.merchant.toLowerCase().includes(search.toLowerCase()) ||
     t.category.toLowerCase().includes(search.toLowerCase()) ||
     t.notes?.toLowerCase().includes(search.toLowerCase())
   );
+
+  if (loading && realTransactions.length === 0) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -89,19 +160,19 @@ export const Transactions: React.FC = () => {
       </div>
 
       {/* Categorize Unknown Section */}
-      {transactions.filter(t => t.category === 'Uncategorized').length > 0 && (
+      {realTransactions.filter(t => t.category === 'Uncategorized').length > 0 && (
         <section className="bg-primary/5 border-2 border-primary/20 rounded-2xl p-6 lg:p-8 space-y-6">
           <div className="flex justify-between items-center">
             <div>
               <h3 className="text-xl font-bold flex items-center gap-2">
-                Action Required: Categorize the Unknown <span className="px-2 py-0.5 bg-primary text-white text-[10px] rounded-full">{transactions.filter(t => t.category === 'Uncategorized').length}</span>
+                Action Required: Categorize the Unknown <span className="px-2 py-0.5 bg-primary text-white text-[10px] rounded-full">{realTransactions.filter(t => t.category === 'Uncategorized').length}</span>
               </h3>
               <p className="text-sm text-outline font-medium mt-1">Our AI identified transactions that need your classification or validation. High-amount anomalies are highlighted.</p>
             </div>
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {transactions.filter(t => t.category === 'Uncategorized').map(t => {
+            {realTransactions.filter(t => t.category === 'Uncategorized').map(t => {
               const isAnomaly = Math.abs(t.amount) > 5000 || t.notes?.includes('anomaly');
               return (
                 <div key={t.id} className={cn(
@@ -130,7 +201,7 @@ export const Transactions: React.FC = () => {
                   <div className="space-y-3">
                     <label className="text-[9px] font-bold text-outline uppercase tracking-widest pl-1">Assign Category</label>
                     <select 
-                      onChange={(e) => updateTransaction(t.id, { category: e.target.value })}
+                      onChange={(e) => handleUpdateCategory(t, e.target.value)}
                       className="w-full px-4 py-2.5 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none appearance-none font-bold"
                     >
                       <option value="Uncategorized">Select Category...</option>
@@ -182,7 +253,7 @@ export const Transactions: React.FC = () => {
                         <Edit2 className="w-3.5 h-3.5" />
                        </button>
                        <button 
-                        onClick={() => { if(confirm('Delete this transaction?')) deleteTransaction(row.id) }}
+                        onClick={() => handleDelete(row.id)}
                         className="p-1.5 text-outline hover:text-error transition-colors hover:bg-error-container/10 rounded"
                        >
                         <Trash2 className="w-3.5 h-3.5" />

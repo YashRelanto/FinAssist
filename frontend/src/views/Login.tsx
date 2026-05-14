@@ -29,18 +29,18 @@ export const Login: React.FC = () => {
       const data = await response.json();
 
       if (response.ok) {
-        alert(data.message); // Showing success message as requested
         updateUser({ 
           isAuthenticated: true, 
           name: data.user.full_name || 'User', 
           email: data.user.email,
-          id: data.user.user_id
+          id: data.user.user_id,
+          onboarded: !isSignUp // Redirect directly to dashboard on login, show onboarding on signup
         });
       } else {
-        alert(data.detail || "Authentication failed");
+        console.error(data.detail || "Authentication failed");
       }
     } catch (error) {
-      alert("Error connecting to backend");
+      console.error("Error connecting to backend", error);
     }
   };
 

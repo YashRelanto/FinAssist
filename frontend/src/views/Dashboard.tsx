@@ -15,25 +15,26 @@ export const Dashboard: React.FC = () => {
   const [dashboardData, setDashboardData] = React.useState<any>(null);
   const [loading, setLoading] = React.useState(true);
   
-  React.useEffect(() => {
-    const fetchDashboardData = async () => {
-      try {
-        setLoading(true);
-        const response = await fetch(`http://localhost:8000/api/dashboard-summary?user_id=${user?.id}`);
-        const data = await response.json();
-        if (data.success) {
-          setDashboardData(data);
-        }
-      } catch (error) {
-        console.error("Failed to connect to backend dashboard API", error);
-      } finally {
-        setLoading(false);
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+      const response = await fetch(`http://localhost:8000/api/dashboard-summary?user_id=${user?.id}`);
+      const data = await response.json();
+      if (data.success) {
+        setDashboardData(data);
       }
-    };
+    } catch (error) {
+      console.error("Failed to connect to backend dashboard API", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  React.useEffect(() => {
     if (user?.isAuthenticated) fetchDashboardData();
   }, [user]);
   
-  if (loading) {
+  if (loading && !dashboardData) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
@@ -80,8 +81,11 @@ export const Dashboard: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-         {/* Quick Add Form - Placeholder */}
-         <QuickAddForm />
+         {/* Quick Add Form - Live */}
+         <QuickAddForm 
+            onSuccess={fetchDashboardData} 
+            accounts={dashboardData?.accounts}
+         />
 
         {/* AI Insights Card - Placeholder */}
         <AIInsights />
