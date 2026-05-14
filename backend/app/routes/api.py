@@ -88,6 +88,27 @@ async def get_dashboard_summary(user_id: str):
                 "net": inc - exp
             })
             
+        # 4. Fetch Recent Transactions (last 5)
+        recent_res = supabase.table("transactions")\
+            .select("*, categories(main_category, sub_category), accounts(account_name)")\
+            .eq("user_id", user_id)\
+            .order("transaction_date", desc=True)\
+            .limit(5)\
+            .execute()
+        
+        recent_transactions = []
+        for t in recent_res.data:
+            recent_transactions.append({
+                "id": t["transaction_id"],
+                "date": t["transaction_date"],
+                "merchant": t["merchant_name"],
+                "amount": float(t["amount"]),
+                "type": t["transaction_type"],
+                "category": t["categories"]["main_category"] if t["categories"] else "Uncategorized",
+                "subCategory": t["categories"]["sub_category"] if t["categories"] else "General",
+                "account": t["accounts"]["account_name"] if t["accounts"] else "Unknown"
+            })
+
         return {
             "success": True,
             "summary": {
@@ -98,7 +119,8 @@ async def get_dashboard_summary(user_id: str):
                 "savings_rate": round((curr_stats["income"] - curr_stats["expense"]) / curr_stats["income"] * 100, 1) if curr_stats["income"] > 0 else 0
             },
             "chart_data": chart_data,
-            "accounts": accounts
+            "accounts": accounts,
+            "recent_transactions": recent_transactions
         }
     except Exception as e:
         print(f"Error in dashboard-summary: {e}")
@@ -168,14 +190,19 @@ async def create_transaction(req: TransactionCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/transactions")
-async def get_transactions(user_id: str):
+async def get_transactions(user_id: str, start_date: str = None, end_date: str = None):
     try:
-        # 1. Fetch Transactions
-        trans_res = supabase.table("transactions")\
+        # 1. Fetch Transactions with filtering
+        query = supabase.table("transactions")\
             .select("*")\
-            .eq("user_id", user_id)\
-            .order("transaction_date", desc=True)\
-            .execute()
+            .eq("user_id", user_id)
+        
+        if start_date:
+            query = query.gte("transaction_date", start_date)
+        if end_date:
+            query = query.lte("transaction_date", end_date)
+            
+        trans_res = query.order("transaction_date", desc=True).execute()
         transactions = trans_res.data
         
         # 2. Fetch Categories for mapping

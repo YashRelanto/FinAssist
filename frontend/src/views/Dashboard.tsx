@@ -76,8 +76,8 @@ export const Dashboard: React.FC = () => {
         {/* Budget Utilization - Placeholder */}
         <BudgetUtilization />
 
-        {/* Recent Transactions - Placeholder */}
-        <RecentTransactions />
+        {/* Recent Transactions - Live */}
+        <RecentTransactions transactions={dashboardData?.recent_transactions} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
