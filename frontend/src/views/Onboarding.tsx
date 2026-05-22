@@ -118,8 +118,8 @@ export const Onboarding: React.FC = () => {
                 <input 
                   type="range" 
                   min="0" 
-                  max="20000" 
-                  step="100"
+                  max="500000" 
+                  step="1000"
                   value={user.income}
                   onChange={(e) => updateUser({ income: parseInt(e.target.value) })}
                   className="w-full h-3 bg-surface-container-high rounded-lg appearance-none cursor-pointer accent-primary"

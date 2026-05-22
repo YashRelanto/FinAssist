@@ -193,6 +193,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Load real-time transactions from Supabase on Login / Sign-up
   useEffect(() => {
     if (user.isAuthenticated && user.userId) {
+      // Clear mock data for signed-in user
+      setTransactions([]);
+      setGoals([]);
+      setReports([]);
+
       fetch(`http://localhost:8000/api/transactions?user_id=${user.userId}`)
         .then(res => {
           if (!res.ok) throw new Error("Could not load transactions from database");
@@ -201,10 +206,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .then(data => {
           if (Array.isArray(data) && data.length > 0) {
             setTransactions(data);
+          } else {
+            setTransactions([]);
           }
         })
         .catch(err => {
-          console.warn("Using simulated transactions (FastAPI backend offline or database empty):", err);
+          console.warn("FastAPI backend offline or database empty, using empty transactions for real user:", err);
+          setTransactions([]);
         });
     }
   }, [user.isAuthenticated, user.userId]);
@@ -302,6 +310,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const signOut = () => {
     setUser(initialUser);
+    setTransactions(initialTransactions);
+    setGoals(initialGoals);
+    setReports([
+      { id: '1', title: 'Monthly Summary', date: 'Sept 2023', size: '2.4 MB', type: 'PDF' },
+    ]);
     setCurrentPage('dashboard');
   };
 

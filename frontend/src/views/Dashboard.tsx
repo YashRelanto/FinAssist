@@ -31,36 +31,186 @@ import {
   Legend,
   ComposedChart
 } from 'recharts';
+import { format } from 'date-fns';
 import { useAppContext } from '../context/AppContext';
 import { cn, formatCurrency, CURRENCY_SYMBOL } from '../lib/utils';
 
-const chartData = [
-  { name: 'Jan', income: 4000, expense: 2400, net: 1600 },
-  { name: 'Feb', income: 4500, expense: 2800, net: 1700 },
-  { name: 'Mar', income: 4200, expense: 2300, net: 1900 },
-  { name: 'Apr', income: 5000, expense: 3000, net: 2000 },
-  { name: 'May', income: 5500, expense: 3200, net: 2300 },
-  { name: 'Jun', income: 5800, expense: 3300, net: 2500 },
-  { name: 'Jul', income: 6000, expense: 3450, net: 2550 },
-];
-
-const pieData = [
-  { name: 'Housing', value: 1800, color: '#004ac6' },
-  { name: 'Food', value: 650, color: '#006c49' },
-  { name: 'Transport', value: 400, color: '#784b00' },
-  { name: 'Leisure', value: 600, color: '#ba1a1a' },
-];
-
-const transactions = [
-  { id: 1, date: 'Oct 24, 2023', merchant: 'Starbucks', category: 'Food & Drink', amount: -12.50, method: 'Apple Pay' },
-  { id: 2, date: 'Oct 23, 2023', merchant: 'Amazon', category: 'Shopping', amount: -89.99, method: 'Visa *4421' },
-  { id: 3, date: 'Oct 21, 2023', merchant: 'Landlord Prop', category: 'Housing', amount: -1800.00, method: 'Bank Transfer' },
-  { id: 4, date: 'Oct 20, 2023', merchant: 'Delta Air', category: 'Travel', amount: -450.00, method: 'Amex Platinum' },
-  { id: 5, date: 'Oct 19, 2023', merchant: 'Freelance Payment', category: 'Income', amount: 1200.00, method: 'Stripe' },
-];
-
 export const Dashboard: React.FC = () => {
-  const { transactions, addTransaction, categories, navigateToAddTransaction } = useAppContext();
+  const { transactions, addTransaction, categories, navigateToAddTransaction, user } = useAppContext();
+
+  // 1. Calculate dynamic statistics
+  const totalBalance = transactions.reduce((acc, t) => {
+    if (t.type === 'income') return acc + Math.abs(t.amount);
+    if (t.type === 'expense') return acc - Math.abs(t.amount);
+    return acc;
+  }, 0);
+
+  const monthlyIncome = transactions
+    .filter(t => t.type === 'income')
+    .reduce((acc, t) => acc + Math.abs(t.amount), 0) || user.income || 0;
+
+  const monthlyExpenses = transactions
+    .filter(t => t.type === 'expense')
+    .reduce((acc, t) => acc + Math.abs(t.amount), 0);
+
+  const netSavings = monthlyIncome - monthlyExpenses;
+  const savingsRatePercent = monthlyIncome > 0 ? Math.max(0, Math.round((netSavings / monthlyIncome) * 100)) : 0;
+
+  const stats = [
+    { label: 'Total Balance', value: formatCurrency(totalBalance), trend: transactions.length > 0 ? 'Active' : 'No activity', up: transactions.length > 0, desc: 'Current balance' },
+    { label: 'Monthly Income', value: `+${formatCurrency(monthlyIncome)}`, trend: `${transactions.filter(t => t.type === 'income').length} trans`, up: null, desc: 'Average flow', color: 'text-secondary' },
+    { label: 'Monthly Expenses', value: `-${formatCurrency(monthlyExpenses)}`, trend: `${transactions.filter(t => t.type === 'expense').length} trans`, up: null, desc: 'Discretionary & fixed', color: 'text-error' },
+    { label: 'Net Savings', value: `${netSavings >= 0 ? '+' : '-'}${formatCurrency(Math.abs(netSavings))}`, trend: netSavings >= 0 ? 'Surplus' : 'Deficit', up: netSavings >= 0, desc: 'Income - Expenses' },
+    { label: 'Savings Rate', value: `${savingsRatePercent}%`, trend: 'Goal: 60%', up: savingsRatePercent >= 60, desc: savingsRatePercent >= 60 ? 'On track' : 'Behind goal', progress: savingsRatePercent },
+  ];
+
+  // 2. Dynamic accounts calculation
+  const accountBalances: { [key: string]: number } = {};
+  transactions.forEach(t => {
+    const accName = t.account || 'Main Account';
+    if (!accountBalances[accName]) {
+      accountBalances[accName] = 0;
+    }
+    if (t.type === 'income') {
+      accountBalances[accName] += Math.abs(t.amount);
+    } else {
+      accountBalances[accName] -= Math.abs(t.amount);
+    }
+  });
+
+  const linkedAccounts = Object.keys(accountBalances).map(name => {
+    const balance = accountBalances[name];
+    let color = 'text-teal-600';
+    let bg = 'bg-teal-50';
+    let icon = CreditCard;
+    if (name.toLowerCase().includes('hdfc')) {
+      color = 'text-blue-600';
+      bg = 'bg-blue-50';
+      icon = Building2;
+    } else if (name.toLowerCase().includes('icici')) {
+      color = 'text-orange-600';
+      bg = 'bg-orange-50';
+      icon = Building2;
+    }
+    return {
+      name,
+      type: balance >= 0 ? 'Savings/Checking' : 'Credit Card',
+      balance,
+      icon,
+      color,
+      bg
+    };
+  });
+
+  // 3. Dynamic monthly performance chart data
+  const last6Months: { name: string; income: number; expense: number; net: number; monthIdx: number; year: number }[] = [];
+  const today = new Date();
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    last6Months.push({
+      name: format(d, 'MMM'),
+      income: 0,
+      expense: 0,
+      net: 0,
+      monthIdx: d.getMonth(),
+      year: d.getFullYear()
+    });
+  }
+
+  transactions.forEach(t => {
+    const tDate = new Date(t.date);
+    const tMonth = tDate.getMonth();
+    const tYear = tDate.getFullYear();
+    const monthObj = last6Months.find(m => m.monthIdx === tMonth && m.year === tYear);
+    if (monthObj) {
+      const amt = Math.abs(t.amount);
+      if (t.type === 'income') {
+        monthObj.income += amt;
+      } else {
+        monthObj.expense += amt;
+      }
+    }
+  });
+
+  last6Months.forEach(m => {
+    m.net = m.income - m.expense;
+  });
+
+  // 4. Dynamic category breakdown (Pie chart)
+  const categoryTotals: { [key: string]: number } = {};
+  transactions
+    .filter(t => t.type === 'expense')
+    .forEach(t => {
+      const cat = t.category || 'Other';
+      categoryTotals[cat] = (categoryTotals[cat] || 0) + Math.abs(t.amount);
+    });
+
+  const categoryColors = ['#004ac6', '#006c49', '#784b00', '#ba1a1a', '#1a9ba1', '#a11a9b', '#780078'];
+  const pieData = Object.keys(categoryTotals).map((name, index) => ({
+    name,
+    value: categoryTotals[name],
+    color: categoryColors[index % categoryColors.length]
+  }));
+
+  const totalExpenseSum = pieData.reduce((acc, item) => acc + item.value, 0);
+
+  // 5. Dynamic budget utilization
+  const housingSpent = transactions
+    .filter(t => t.category === 'Housing' || t.category === 'Housing & Rent')
+    .reduce((acc, t) => acc + Math.abs(t.amount), 0);
+  const housingBudget = user.fixedRent || (user.isAuthenticated ? 0 : 2000);
+
+  const emiSpent = transactions
+    .filter(t => t.category === 'Vehicle' || t.category === 'Financial Expense' || t.category === 'Financial Expenses')
+    .reduce((acc, t) => acc + Math.abs(t.amount), 0);
+  const emiBudget = user.fixedEMI || (user.isAuthenticated ? 0 : 1000);
+
+  const foodSpent = transactions
+    .filter(t => t.category === 'Food & Drinks' || t.category === 'Food & Dining')
+    .reduce((acc, t) => acc + Math.abs(t.amount), 0);
+  const foodBudget = user.isAuthenticated ? 0 : 5000;
+
+  const budgetUtilization = [
+    { label: 'Housing & Rent', spent: housingSpent, total: housingBudget, color: 'bg-primary' },
+    { label: 'Active EMIs & Loans', spent: emiSpent, total: emiBudget, color: 'bg-secondary' },
+    { label: 'Food & Dining', spent: foodSpent, total: foodBudget, color: 'bg-teal-600' },
+  ].map(item => ({
+    ...item,
+    over: item.spent > item.total ? item.spent - item.total : undefined
+  }));
+
+  // 6. Dynamic AI Insights
+  const aiInsights = [];
+  if (transactions.length === 0) {
+    aiInsights.push(
+      { icon: Sparkles, title: 'Welcome to FinAssist!', desc: 'To get started, add some transactions or upload your bank statements under Settings.' },
+      { icon: TrendingUp, title: 'AI Insights Awaiting Data', desc: 'Once transactions are logged, our AI engine will analyze your spending patterns in real-time.' },
+      { icon: Receipt, title: 'Statement Analysis Ready', desc: 'Did you know? Uploading statements under Settings unlocks detailed monthly forecasting instantly.' }
+    );
+  } else {
+    const foodExpenses = transactions.filter(t => t.category === 'Food & Drinks' || t.category === 'Food & Dining').reduce((acc, t) => acc + Math.abs(t.amount), 0);
+    aiInsights.push(
+      { 
+        icon: TrendingUp, 
+        title: 'Spending Pattern Analysis', 
+        desc: foodExpenses > 0 
+          ? `You have spent ${formatCurrency(foodExpenses)} on Food & Dining so far. Keep an eye on your discretionary food expenses.`
+          : 'Your discretionary spending is extremely healthy. Keep up the disciplined budget tracking!' 
+      },
+      { 
+        icon: CircleCheck, 
+        title: 'Savings Progress', 
+        desc: netSavings > 0 
+          ? `Great job! You have saved ${formatCurrency(netSavings)} this period. You are building positive financial momentum.`
+          : 'No net savings tracked for this period yet. Try setting monthly budget caps to save more.' 
+      },
+      { 
+        icon: Receipt, 
+        title: 'Active Accounts', 
+        desc: `FinAssist is currently tracking transaction activity across ${Object.keys(accountBalances).length} accounts.` 
+      }
+    );
+  }
   
   const handleQuickAdd = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -87,13 +237,7 @@ export const Dashboard: React.FC = () => {
     <div className="space-y-8 pb-10">
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
-        {[
-          { label: 'Total Balance', value: formatCurrency(42500), trend: '+2.4%', up: true, desc: 'vs last mo' },
-          { label: 'Monthly Income', value: `+${formatCurrency(8200)}`, trend: '12 trans', up: null, desc: 'Average flow', color: 'text-secondary' },
-          { label: 'Monthly Expenses', value: `-${formatCurrency(3450)}`, trend: '+12%', up: false, desc: 'spending spike', color: 'text-error' },
-          { label: 'Net Savings', value: `+${formatCurrency(4750)}`, trend: 'Active', up: true, desc: 'Auto-transfers' },
-          { label: 'Savings Rate', value: '58%', trend: 'Goal: 60%', up: true, desc: 'On track', progress: 58 },
-        ].map((stat, i) => (
+        {stats.map((stat, i) => (
           <div key={i} className="bg-surface-container-lowest p-6 rounded-[32px] soft-shadow border border-outline-variant/30 flex flex-col justify-between min-h-[160px]">
             <div>
               <p className="text-[10px] text-outline font-black uppercase tracking-[0.15em] mb-3">{stat.label}</p>
@@ -144,27 +288,30 @@ export const Dashboard: React.FC = () => {
 
         {/* Linked Accounts Card */}
         <div className="lg:col-span-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-           {[
-             { name: 'HDFC Bank', type: 'Savings', balance: 24500, icon: Building2, color: 'text-blue-600', bg: 'bg-blue-50' },
-             { name: 'ICICI Bank', type: 'Checking', balance: 12000, icon: Building2, color: 'text-orange-600', bg: 'bg-orange-50' },
-             { name: 'Amex Card', type: 'Credit', balance: 6000, icon: CreditCard, color: 'text-teal-600', bg: 'bg-teal-50' },
-           ].map((bank, i) => (
-             <div key={i} className="bg-surface-container-lowest p-6 rounded-[24px] border border-outline-variant/30 soft-shadow group hover:border-primary transition-all cursor-pointer">
-                <div className="flex justify-between items-start mb-4">
-                   <div className={cn("p-2.5 rounded-xl", bank.bg, bank.color)}>
-                      <bank.icon className="w-5 h-5" />
-                   </div>
-                   <div className="w-2 h-2 rounded-full bg-secondary animate-pulse" title="Synced"></div>
-                </div>
-                <p className="text-[10px] font-black text-outline uppercase tracking-widest leading-none">{bank.type}</p>
-                <h4 className="font-bold text-on-surface mt-1">{bank.name}</h4>
-                <p className="text-xl font-black text-on-surface mt-4 tracking-tighter">{formatCurrency(bank.balance)}</p>
-                <div className="flex items-center gap-1.5 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                   <History className="w-3 h-3 text-outline" />
-                   <span className="text-[10px] font-bold text-outline uppercase tracking-widest">Last Sync: 5m ago</span>
-                </div>
+           {linkedAccounts.length === 0 ? (
+             <div className="col-span-3 bg-surface-container-lowest p-8 rounded-[24px] border border-outline-variant/30 text-center flex flex-col items-center justify-center min-h-[160px] w-full">
+               <p className="text-sm font-bold text-outline">No linked accounts yet</p>
+               <p className="text-xs text-outline/70 mt-1">Upload your bank statements in settings or add a transaction to link accounts.</p>
              </div>
-           ))}
+           ) : (
+             linkedAccounts.map((bank, i) => (
+               <div key={i} className="bg-surface-container-lowest p-6 rounded-[24px] border border-outline-variant/30 soft-shadow group hover:border-primary transition-all cursor-pointer">
+                  <div className="flex justify-between items-start mb-4">
+                     <div className={cn("p-2.5 rounded-xl", bank.bg, bank.color)}>
+                        <bank.icon className="w-5 h-5" />
+                     </div>
+                     <div className="w-2 h-2 rounded-full bg-secondary animate-pulse" title="Synced"></div>
+                  </div>
+                  <p className="text-[10px] font-black text-outline uppercase tracking-widest leading-none">{bank.type}</p>
+                  <h4 className="font-bold text-on-surface mt-1">{bank.name}</h4>
+                  <p className="text-xl font-black text-on-surface mt-4 tracking-tighter">{formatCurrency(bank.balance)}</p>
+                  <div className="flex items-center gap-1.5 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                     <History className="w-3 h-3 text-outline" />
+                     <span className="text-[10px] font-bold text-outline uppercase tracking-widest">Last Sync: Just now</span>
+                  </div>
+               </div>
+             ))
+           )}
         </div>
 
         {/* Quick Add Action Card */}
@@ -199,101 +346,104 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
           <div className="h-[350px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748B' }} />
-                <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748B' }} />
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: '#FFFFFF', 
-                    borderRadius: '12px', 
-                    border: '1px solid #E2E8F0', 
-                    boxShadow: '0 4px 12px -1px rgb(0 0 0 / 0.1)' 
-                  }} 
-                />
-                <Legend iconType="circle" wrapperStyle={{ fontSize: '10px', fontWeight: 'bold', paddingTop: '20px' }} />
-                <Bar dataKey="income" name="Total Income" fill="#006c49" radius={[4, 4, 0, 0]} barSize={20} />
-                <Bar dataKey="expense" name="Total Expense" fill="#ba1a1a" radius={[4, 4, 0, 0]} barSize={20} />
-                <Line type="monotone" dataKey="net" name="Net Savings" stroke="#004ac6" strokeWidth={3} dot={{ r: 4, fill: '#004ac6' }} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* ... Breakdown area ... */}
-
-        <div className="lg:col-span-4 bg-surface-container-lowest p-6 rounded-xl soft-shadow border border-outline-variant/30 flex flex-col">
-          <h4 className="text-xl font-bold mb-6">Expense Breakdown</h4>
-          <div className="flex-1 flex items-center justify-center min-h-[250px]">
              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={pieData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={80}
-                    paddingAngle={5}
-                    dataKey="value"
-                  >
-                    {pieData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
+               <ComposedChart data={last6Months}>
+                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748B' }} />
+                 <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748B' }} />
+                 <Tooltip 
+                   contentStyle={{ 
+                     backgroundColor: '#FFFFFF', 
+                     borderRadius: '12px', 
+                     border: '1px solid #E2E8F0', 
+                     boxShadow: '0 4px 12px -1px rgb(0 0 0 / 0.1)' 
+                   }} 
+                 />
+                 <Legend iconType="circle" wrapperStyle={{ fontSize: '10px', fontWeight: 'bold', paddingTop: '20px' }} />
+                 <Bar dataKey="income" name="Total Income" fill="#006c49" radius={[4, 4, 0, 0]} barSize={20} />
+                 <Bar dataKey="expense" name="Total Expense" fill="#ba1a1a" radius={[4, 4, 0, 0]} barSize={20} />
+                 <Line type="monotone" dataKey="net" name="Net Savings" stroke="#004ac6" strokeWidth={3} dot={{ r: 4, fill: '#004ac6' }} />
+               </ComposedChart>
              </ResponsiveContainer>
-             <div className="absolute text-center">
-                <p className="text-[10px] text-outline font-bold uppercase">Total</p>
-                <p className="text-2xl font-bold">{formatCurrency(3450)}</p>
-             </div>
-          </div>
-          <div className="space-y-3 mt-6">
-            {pieData.map((item, i) => (
-              <div key={i} className="flex justify-between items-center text-sm">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }}></div>
-                  <span className="text-on-surface-variant">{item.name}</span>
+           </div>
+         </div>
+ 
+         {/* Expense Breakdown Card */}
+         <div className="lg:col-span-4 bg-surface-container-lowest p-6 rounded-xl soft-shadow border border-outline-variant/30 flex flex-col">
+           <h4 className="text-xl font-bold mb-6">Expense Breakdown</h4>
+           <div className="flex-1 flex items-center justify-center min-h-[250px] relative">
+              {pieData.length === 0 ? (
+                <div className="text-center text-outline text-xs">
+                  No expense data to display
                 </div>
-                <span className="font-bold">{formatCurrency(item.value)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Budget Utilization */}
-        <div className="lg:col-span-4 bg-surface-container-lowest p-6 rounded-xl soft-shadow border border-outline-variant/30 space-y-6">
-          <h4 className="text-lg font-bold">Budget Utilization</h4>
-          <div className="space-y-6">
-            {[
-              { label: 'Housing', spent: 1800, total: 2000, color: 'bg-primary' },
-              { label: 'Entertainment', spent: 845, total: 800, color: 'bg-error', over: 45 },
-              { label: 'Grocery', spent: 450, total: 1000, color: 'bg-secondary' },
-            ].map((item, i) => {
-              const percent = Math.min(100, (item.spent / item.total) * 100);
-              return (
-                <div key={i}>
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-sm font-bold">{item.label}</span>
-                    <span className={cn("text-sm font-bold", item.over ? "text-error" : "text-outline")}>
-                      {Math.round((item.spent / item.total) * 100)}%
-                    </span>
+              ) : (
+                <>
+                  <ResponsiveContainer width="100%" height="100%">
+                     <PieChart>
+                       <Pie
+                         data={pieData}
+                         cx="50%"
+                         cy="50%"
+                         innerRadius={60}
+                         outerRadius={80}
+                         paddingAngle={5}
+                         dataKey="value"
+                       >
+                         {pieData.map((entry, index) => (
+                           <Cell key={`cell-${index}`} fill={entry.color} />
+                         ))}
+                       </Pie>
+                       <Tooltip />
+                     </PieChart>
+                  </ResponsiveContainer>
+                  <div className="absolute text-center">
+                     <p className="text-[10px] text-outline font-bold uppercase">Total</p>
+                     <p className="text-2xl font-bold">{formatCurrency(totalExpenseSum)}</p>
                   </div>
-                  <div className="w-full bg-surface-container-high h-2 rounded-full overflow-hidden">
-                    <div className={cn(item.color, "h-full rounded-full transition-all duration-1000")} style={{ width: `${percent}%` }}></div>
-                  </div>
-                  <div className="flex justify-between mt-2">
-                    <span className="text-[10px] text-outline font-medium">{formatCurrency(item.spent)} / {formatCurrency(item.total)}</span>
-                    {item.over && <span className="text-[10px] text-error font-bold uppercase tracking-widest">Exceeded by {formatCurrency(item.over)}</span>}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
+                </>
+              )}
+           </div>
+           <div className="space-y-3 mt-6">
+             {pieData.map((item, i) => (
+               <div key={i} className="flex justify-between items-center text-sm">
+                 <div className="flex items-center gap-2">
+                   <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }}></div>
+                   <span className="text-on-surface-variant">{item.name}</span>
+                 </div>
+                 <span className="font-bold">{formatCurrency(item.value)}</span>
+               </div>
+             ))}
+           </div>
+         </div>
+       </div>
+ 
+       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+         {/* Budget Utilization */}
+         <div className="lg:col-span-4 bg-surface-container-lowest p-6 rounded-xl soft-shadow border border-outline-variant/30 space-y-6">
+           <h4 className="text-lg font-bold">Budget Utilization</h4>
+           <div className="space-y-6">
+             {budgetUtilization.map((item, i) => {
+               const percent = item.total > 0 ? Math.min(100, (item.spent / item.total) * 100) : 0;
+               return (
+                 <div key={i}>
+                   <div className="flex justify-between items-center mb-2">
+                     <span className="text-sm font-bold">{item.label}</span>
+                     <span className={cn("text-sm font-bold", item.over ? "text-error" : "text-outline")}>
+                       {item.total > 0 ? Math.round((item.spent / item.total) * 100) : 0}%
+                     </span>
+                   </div>
+                   <div className="w-full bg-surface-container-high h-2 rounded-full overflow-hidden">
+                     <div className={cn(item.color, "h-full rounded-full transition-all duration-1000")} style={{ width: `${percent}%` }}></div>
+                   </div>
+                   <div className="flex justify-between mt-2">
+                     <span className="text-[10px] text-outline font-medium">{formatCurrency(item.spent)} / {formatCurrency(item.total)}</span>
+                     {item.over && <span className="text-[10px] text-error font-bold uppercase tracking-widest">Exceeded by {formatCurrency(item.over)}</span>}
+                   </div>
+                 </div>
+               )
+             })}
+           </div>
+         </div>
 
         {/* Transactions Table */}
         <div className="lg:col-span-8 bg-surface-container-lowest p-6 rounded-xl soft-shadow border border-outline-variant/30">
@@ -380,11 +530,7 @@ export const Dashboard: React.FC = () => {
             <h4 className="text-xl font-bold">FinAssist AI Insights</h4>
           </div>
           <div className="space-y-4 relative z-10">
-            {[
-              { icon: TrendingUp, title: 'Spending Pattern Alert', desc: 'Spending increased in Dining by 24% this month. Consider checking your entertainment budget.' },
-              { icon: CircleCheck, title: 'Goal Achievement Progress', desc: 'Excellent work! You are currently on track for your Vacation goal set for December.' },
-              { icon: Receipt, title: 'Recurring Charges Detected', desc: '3 new recurring subscriptions detected this week. Review them in the Subscriptions tab.' },
-            ].map((insight, i) => {
+            {aiInsights.map((insight, i) => {
               const Icon = insight.icon;
               return (
                 <div key={i} className="flex items-start gap-4 p-4 bg-white/10 rounded-xl backdrop-blur-sm border border-white/10 hover:bg-white/15 transition-all">
