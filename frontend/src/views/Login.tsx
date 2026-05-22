@@ -9,15 +9,46 @@ export const Login: React.FC = () => {
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [isConnecting, setIsConnecting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Simulate authentication
-    updateUser({ 
-      isAuthenticated: true, 
-      name: name || 'User', 
-      email: email || 'user@example.com' 
-    });
+    setError('');
+    setIsConnecting(true);
+
+    try {
+      const endpoint = isSignUp ? 'register' : 'login';
+      const body = isSignUp
+        ? { full_name: name, email, password }
+        : { email, password };
+
+      const response = await fetch(`http://localhost:8000/api/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.detail || 'Authentication failed');
+      }
+
+      const data = await response.json();
+      
+      updateUser({
+        isAuthenticated: true,
+        userId: data.user_id,
+        name: data.full_name || name || 'User',
+        email: data.email || email || 'user@example.com'
+      });
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Could not connect to authentication server.');
+    } finally {
+      setIsConnecting(false);
+    }
   };
 
   return (
@@ -109,11 +140,19 @@ export const Login: React.FC = () => {
                 <input 
                   required 
                   type="password" 
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                   className="w-full pl-12 pr-4 py-4 bg-surface-container-low border border-outline-variant rounded-xl focus:ring-2 focus:ring-primary outline-none transition-all font-medium text-sm" 
                   placeholder="••••••••" 
                 />
               </div>
             </div>
+
+            {error && (
+              <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-500 rounded-xl text-xs font-bold">
+                {error}
+              </div>
+            )}
 
             {!isSignUp && (
               <div className="flex items-center justify-end">
@@ -125,13 +164,13 @@ export const Login: React.FC = () => {
 
             <button 
               type="submit"
-              className="w-full py-4 bg-primary text-white font-bold rounded-xl shadow-lg shadow-primary/20 hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-2 group"
+              disabled={isConnecting}
+              className="w-full py-4 bg-primary text-white font-bold rounded-xl shadow-lg shadow-primary/20 hover:brightness-110 active:scale-[0.98] transition-all flex items-center justify-center gap-2 group disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isSignUp ? 'Create Account' : 'Sign In'}
+              {isConnecting ? 'Authenticating...' : (isSignUp ? 'Create Account' : 'Sign In')}
               <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
             </button>
           </form>
-
           <div className="mt-8 pt-8 border-t border-outline-variant/30 space-y-4">
             <div className="flex items-center gap-4">
               <div className="h-[1px] flex-1 bg-outline-variant/30" />

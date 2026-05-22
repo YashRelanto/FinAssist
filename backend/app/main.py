@@ -2,15 +2,26 @@
 from fastapi import FastAPI
 # pyrefly: ignore [missing-import]
 from fastapi.responses import RedirectResponse
-from app.routes import auth, dashboard
+from fastapi.middleware.cors import CORSMiddleware
+from app.routes import auth, dashboard, statement_parser
 # pyrefly: ignore [missing-import]
 import uvicorn
 
 app = FastAPI(title="FinAssist API")
 
+# Enable CORS for frontend integration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Include authentication routes
 app.include_router(auth.router)
 app.include_router(dashboard.router)
+app.include_router(statement_parser.router)
 
 @app.get("/")
 async def root():

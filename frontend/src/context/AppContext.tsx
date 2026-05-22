@@ -190,8 +190,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateUser = (u: Partial<UserProfile>) => setUser(prev => ({ ...prev, ...u }));
 
+  // Load real-time transactions from Supabase on Login / Sign-up
+  useEffect(() => {
+    if (user.isAuthenticated && user.userId) {
+      fetch(`http://localhost:8000/api/transactions?user_id=${user.userId}`)
+        .then(res => {
+          if (!res.ok) throw new Error("Could not load transactions from database");
+          return res.json();
+        })
+        .then(data => {
+          if (Array.isArray(data) && data.length > 0) {
+            setTransactions(data);
+          }
+        })
+        .catch(err => {
+          console.warn("Using simulated transactions (FastAPI backend offline or database empty):", err);
+        });
+    }
+  }, [user.isAuthenticated, user.userId]);
+
   const addTransaction = (t: Omit<Transaction, 'id'>) => {
-    setTransactions(prev => [{ ...t, id: Math.random().toString(36).substr(2, 9) }, ...prev]);
+    if (user.userId) {
+      fetch('http://localhost:8000/api/transactions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: user.userId,
+          transaction_date: t.date,
+          amount: t.amount,
+          transaction_type: t.type,
+          merchant_name: t.merchant,
+          description: t.notes || "",
+          category_name: t.category,
+          sub_category_name: t.subCategory
+        })
+      })
+      .then(res => res.json())
+      .then(saved => {
+        setTransactions(prev => [{ ...t, id: saved.id }, ...prev]);
+      })
+      .catch(err => {
+        console.error("Database save failed, using local transaction fallback:", err);
+        setTransactions(prev => [{ ...t, id: Math.random().toString(36).substr(2, 9) }, ...prev]);
+      });
+    } else {
+      setTransactions(prev => [{ ...t, id: Math.random().toString(36).substr(2, 9) }, ...prev]);
+    }
   };
 
   const addTransactions = (ts: Omit<Transaction, 'id'>[]) => {

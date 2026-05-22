@@ -1,8 +1,12 @@
 import os
-from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Try to load environment variables from .env file if python-dotenv is installed
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # dotenv not installed; assume environment variables are set elsewhere
+    pass
 
 class Settings:
     SUPABASE_URL: str = os.getenv("SUPABASE_URL")
