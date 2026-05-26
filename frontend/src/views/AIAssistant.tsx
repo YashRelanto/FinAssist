@@ -1,20 +1,92 @@
-import React, { useState } from 'react';
-import { Send, User, Bot, Paperclip, Sparkles } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Send, User, Bot, Paperclip, Sparkles, Loader2 } from 'lucide-react';
 import { cn, formatCurrency } from '../lib/utils';
+import { useAppContext } from '../context/AppContext';
 
 const initialMessages = [
-  { id: 1, role: 'ai', time: '10:42 AM', text: `Hello. I've analyzed your transaction patterns for the first half of October. Based on your current trajectory, I predict your month-end expenses will be approximately ${formatCurrency(4250)}.`, type: 'text' },
-  { id: 2, role: 'user', time: '10:43 AM', text: "That seems higher than last month. Where is the increase coming from?", type: 'text' },
-  { id: 3, role: 'ai', time: '10:44 AM', text: "The primary driver is a 24% increase in 'Home Improvement' and 'Subscriptions'. Here is the breakdown of your top categories:", type: 'card', data: [
-    { label: 'Home Improvement', value: 842, percent: 65, color: '#004ac6' },
-    { label: 'Essential Utilities', value: 315, percent: 40, color: '#006c49' },
-  ]},
-  { id: 4, role: 'ai', time: '10:44 AM', text: `If you reduce non-essential subscriptions, you could save approximately ${formatCurrency(120)} by the end of the quarter. Would you like me to identify which subscriptions have low engagement?`, type: 'text' },
+  { 
+    id: 1, 
+    role: 'ai', 
+    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 
+    text: "Hello! I am your FinAssist AI Advisor. I have access to your transactions and our latest financial knowledge base. How can I help you today?", 
+    type: 'text' 
+  }
 ];
 
 export const AIAssistant: React.FC = () => {
-  const [messages, setMessages] = useState(initialMessages);
+  const { user } = useAppContext();
+  const [messages, setMessages] = useState<any[]>(initialMessages);
   const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleSendMessage = async (text: string) => {
+    if (!text.trim()) return;
+
+    const userMessage = {
+      id: Date.now(),
+      role: 'user',
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      text: text,
+      type: 'text'
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+    setIsLoading(true);
+
+    try {
+      const response = await fetch('http://localhost:8000/api/chat/message', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id: user.userId || 'guest-user',
+          message: text,
+          thread_id: 'default-thread'
+        })
+      });
+
+      if (!response.ok) throw new Error('API request failed');
+
+      const data = await response.json();
+      
+      const aiMessage = {
+        id: Date.now() + 1,
+        role: 'ai',
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        text: data.answer || data.response || "I didn't quite catch that.",
+        type: 'text'
+      };
+
+      setMessages(prev => [...prev, aiMessage]);
+    } catch (error) {
+      console.error("Chat API error:", error);
+      const errorMessage = {
+        id: Date.now() + 1,
+        role: 'ai',
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        text: "I'm sorry, I couldn't connect to the backend server. Please make sure the FastAPI server is running.",
+        type: 'text'
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage(input);
+    }
+  };
 
   return (
     <div className="flex h-[calc(100vh-140px)] gap-6">
@@ -41,6 +113,20 @@ export const AIAssistant: React.FC = () => {
                 <p className="text-[10px] text-outline font-medium mt-1">{item.time} • {item.sub}</p>
              </button>
            ))}
+           {isLoading && (
+             <div className="flex gap-4 max-w-2xl">
+               <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 shadow-sm bg-primary-container text-white">
+                 <Bot className="w-5 h-5" />
+               </div>
+               <div className="space-y-2 w-full max-w-lg">
+                 <div className="p-5 rounded-2xl soft-shadow border border-outline-variant/10 leading-relaxed font-medium bg-surface-container-low rounded-tl-none text-on-surface flex items-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                    <span className="text-sm text-outline font-bold">Thinking...</span>
+                 </div>
+               </div>
+             </div>
+           )}
+           <div ref={messagesEndRef} />
         </div>
       </aside>
 
@@ -57,7 +143,7 @@ export const AIAssistant: React.FC = () => {
                 </div>
                 <div className="space-y-2 w-full max-w-lg">
                    <div className={cn(
-                     "p-5 rounded-2xl soft-shadow border border-outline-variant/10 leading-relaxed font-medium",
+                     "p-5 rounded-2xl soft-shadow border border-outline-variant/10 leading-relaxed font-medium whitespace-pre-wrap",
                      m.role === 'user' ? "bg-primary text-white rounded-tr-none text-left" : "bg-surface-container-low rounded-tl-none text-on-surface"
                    )}>
                       <p className="text-sm">{m.text}</p>
@@ -90,8 +176,12 @@ export const AIAssistant: React.FC = () => {
         <div className="absolute bottom-0 left-0 right-0 p-8 bg-gradient-to-t from-surface-container-lowest via-surface-container-lowest/90 to-transparent">
            <div className="max-w-3xl mx-auto">
              <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-hide pb-2">
-               {['Summarize my spending', "Predict next month's expenses", "Where can I save?"].map((chip) => (
-                 <button key={chip} className="shrink-0 px-4 py-1.5 bg-white border border-outline-variant/50 rounded-full text-[10px] font-bold text-outline hover:border-primary hover:text-primary transition-all shadow-sm">
+               {['Best FD rates in India?', "Predict next month's expenses", "How much should I save for emergency?"].map((chip) => (
+                 <button 
+                   key={chip} 
+                   onClick={() => handleSendMessage(chip)}
+                   className="shrink-0 px-4 py-1.5 bg-white border border-outline-variant/50 rounded-full text-[10px] font-bold text-outline hover:border-primary hover:text-primary transition-all shadow-sm"
+                 >
                    {chip}
                  </button>
                ))}
@@ -104,11 +194,17 @@ export const AIAssistant: React.FC = () => {
                   type="text" 
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyPress}
                   placeholder="Ask about your finances or portfolio..." 
                   className="flex-1 bg-transparent border-none focus:ring-0 text-sm font-medium py-3 px-1"
+                  disabled={isLoading}
                 />
-                <button className="bg-primary text-white w-12 h-12 rounded-xl flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-lg">
-                  <Send className="w-5 h-5" />
+                <button 
+                  onClick={() => handleSendMessage(input)}
+                  disabled={isLoading || !input.trim()}
+                  className="bg-primary text-white w-12 h-12 rounded-xl flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-lg disabled:opacity-50 disabled:hover:scale-100"
+                >
+                  {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
                 </button>
              </div>
            </div>

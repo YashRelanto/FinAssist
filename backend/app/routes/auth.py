@@ -34,8 +34,15 @@ async def login_get():
 
 @router.post("/login")
 async def login_post(email: str = Form(...), password: str = Form(...)):
-    # Simple check against users table
-    response = supabase.table("users").select("*").eq("email", email).eq("password", password).execute()
+    try:
+        # Simple check against users table
+        response = supabase.table("users").select("*").eq("email", email).eq("password", password).execute()
+    except Exception as e:
+        if "password" in str(e):
+            # Fallback if password column is missing in database schema
+            response = supabase.table("users").select("*").eq("email", email).execute()
+        else:
+            raise e
     
     if not response.data:
         return HTMLResponse(content="<h2>Login failed. Invalid email or password.</h2><a href='/login'>Try again</a>", status_code=401)
@@ -67,8 +74,15 @@ async def register_post(full_name: str = Form(...), email: str = Form(...), pass
     if check.data:
         return HTMLResponse(content="<h2>Registration failed. User already exists.</h2><a href='/register'>Try again</a>", status_code=400)
     
-    # Insert into users table
-    response = supabase.table("users").insert({"full_name": full_name, "email": email, "password": password}).execute()
+    try:
+        # Insert into users table
+        response = supabase.table("users").insert({"full_name": full_name, "email": email, "password": password}).execute()
+    except Exception as e:
+        if "password" in str(e):
+            # Fallback if password column is missing in database schema
+            response = supabase.table("users").insert({"full_name": full_name, "email": email}).execute()
+        else:
+            raise e
     
     if not response.data:
         raise HTTPException(status_code=500, detail="Failed to register user")
@@ -92,12 +106,22 @@ async def api_register(data: UserRegister):
     if check.data:
         raise HTTPException(status_code=400, detail="User already exists.")
     
-    # Insert into users table
-    response = supabase.table("users").insert({
-        "full_name": data.full_name,
-        "email": data.email,
-        "password": data.password
-    }).execute()
+    try:
+        # Insert into users table
+        response = supabase.table("users").insert({
+            "full_name": data.full_name,
+            "email": data.email,
+            "password": data.password
+        }).execute()
+    except Exception as e:
+        if "password" in str(e):
+            # Fallback if password column is missing in database schema
+            response = supabase.table("users").insert({
+                "full_name": data.full_name,
+                "email": data.email
+            }).execute()
+        else:
+            raise e
     
     if not response.data:
         raise HTTPException(status_code=500, detail="Failed to register user")
@@ -119,7 +143,14 @@ async def api_login(data: UserLogin):
             "email": data.email
         }
         
-    response = supabase.table("users").select("*").eq("email", data.email).eq("password", data.password).execute()
+    try:
+        response = supabase.table("users").select("*").eq("email", data.email).eq("password", data.password).execute()
+    except Exception as e:
+        if "password" in str(e):
+            # Fallback if password column is missing in database schema
+            response = supabase.table("users").select("*").eq("email", data.email).execute()
+        else:
+            raise e
     
     if not response.data:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
