@@ -123,8 +123,25 @@ async def api_oauth_login(req: OAuthLoginRequest):
         # Check if user already exists
         check = supabase.table("users").select("*").eq("email", req.email).execute()
         if check.data:
-            # User exists, return user details
-            return {"success": True, "message": "OAuth login successful", "user": check.data[0]}
+            user = check.data[0]
+            # Self-healing mismatch correction: update old user_id to match Supabase Auth UUID
+            if user["user_id"] != req.user_id:
+                try:
+                    update_res = supabase.table("users").update({"user_id": req.user_id}).eq("email", req.email).execute()
+                    if update_res.data:
+                        user = update_res.data[0]
+                except Exception as sync_err:
+                    print(f"Foreign key prevented direct update, deleting obsolete mismatch row: {sync_err}")
+                    # Delete obsolete local row and insert clean Supabase UUID row
+                    supabase.table("users").delete().eq("email", req.email).execute()
+                    insert_res = supabase.table("users").insert({
+                        "user_id": req.user_id,
+                        "full_name": req.full_name,
+                        "email": req.email
+                    }).execute()
+                    if insert_res.data:
+                        user = insert_res.data[0]
+            return {"success": True, "message": "OAuth login successful", "user": user}
         
         # User does not exist, insert user with their Supabase user_id
         response = supabase.table("users").insert({

@@ -164,6 +164,23 @@ async def api_login(data: UserLogin):
             user = sync_res.data[0]
         else:
             user = response.data[0]
+            # Self-healing mismatch correction: update old user_id to match Supabase Auth UUID
+            if user["user_id"] != auth_res.user.id:
+                try:
+                    update_res = supabase.table("users").update({"user_id": auth_res.user.id}).eq("email", data.email).execute()
+                    if update_res.data:
+                        user = update_res.data[0]
+                except Exception as sync_err:
+                    print(f"Foreign key prevented direct update, deleting obsolete mismatch row: {sync_err}")
+                    # Delete obsolete local row and insert clean Supabase UUID row
+                    supabase.table("users").delete().eq("email", data.email).execute()
+                    insert_res = supabase.table("users").insert({
+                        "user_id": auth_res.user.id,
+                        "full_name": user.get("full_name", data.email.split('@')[0]),
+                        "email": data.email
+                    }).execute()
+                    if insert_res.data:
+                        user = insert_res.data[0]
             
         return {
             "user_id": user["user_id"],
