@@ -188,7 +188,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     { id: '1', title: 'Monthly Summary', date: 'Sept 2023', size: '2.4 MB', type: 'PDF' },
   ]);
 
-  const updateUser = (u: Partial<UserProfile>) => setUser(prev => ({ ...prev, ...u }));
+  const updateUser = (u: Partial<UserProfile>) => {
+    setUser(prev => {
+      const newUser = { ...prev, ...u };
+      
+      // If user is logged in, sync changes to the database
+      if (newUser.isAuthenticated && newUser.userId) {
+        fetch(`http://localhost:8000/api/users/${newUser.userId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            full_name: newUser.name,
+            email: newUser.email,
+            onboarded: newUser.onboarded,
+            income: newUser.income,
+            city_tier: newUser.cityTier,
+            fixed_rent: newUser.fixedRent,
+            fixed_emi: newUser.fixedEMI,
+            biggest_category: newUser.biggestCategory,
+            primary_goal: newUser.primaryGoal
+          })
+        }).catch(err => console.error("Failed to sync profile changes:", err));
+      }
+      
+      return newUser;
+    });
+  };
 
   // Check for Supabase OAuth redirect parameters in URL hash
   useEffect(() => {
@@ -226,13 +251,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   userId: user_id,
                   name: full_name,
                   email: email,
-                  onboarded: false, // Triggers standard session onboarding
-                  income: 0,
-                  cityTier: 'Metro',
-                  fixedRent: 0,
-                  fixedEMI: 0,
-                  biggestCategory: '',
-                  primaryGoal: '',
+                  onboarded: data.user.onboarded || false,
+                  income: data.user.income || 0,
+                  cityTier: data.user.city_tier || 'Metro',
+                  fixedRent: data.user.fixed_rent || 0,
+                  fixedEMI: data.user.fixed_emi || 0,
+                  biggestCategory: data.user.biggest_category || '',
+                  primaryGoal: data.user.primary_goal || '',
                   statementUploaded: false
                 });
               }

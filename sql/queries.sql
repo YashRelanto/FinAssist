@@ -6,6 +6,7 @@
 drop table if exists public.transactions cascade;
 drop table if exists public.accounts cascade;
 drop table if exists public.categories cascade;
+drop table if exists public.user_profiles cascade;
 drop table if exists public.users cascade;
 
 -- Optional: remove extension only if you are sure nothing else uses it
@@ -28,6 +29,21 @@ create table public.users (
 
     created_at timestamptz not null default now(),
     deleted_at timestamptz
+);
+
+-- ============================================================
+-- 1.5 USER PROFILES TABLE (Normalized Extensible Fields)
+-- ============================================================
+create table public.user_profiles (
+    user_id uuid primary key references public.users(user_id) on delete cascade,
+    onboarded boolean not null default false,
+    income numeric(14,2) not null default 0,
+    city_tier text not null default 'Metro',
+    fixed_rent numeric(14,2) not null default 0,
+    fixed_emi numeric(14,2) not null default 0,
+    biggest_category text not null default '',
+    primary_goal text not null default '',
+    created_at timestamptz not null default now()
 );
 
 -- ============================================================

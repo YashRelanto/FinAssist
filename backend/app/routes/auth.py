@@ -77,6 +77,50 @@ async def register_post(full_name: str = Form(...), email: str = Form(...), pass
     return RedirectResponse(url=f"/home?user_id={user_id}", status_code=303)
 
 # JSON API routes for React Frontend
+async def get_user_with_profile(user_id: str, email: str, full_name: str) -> dict:
+    # 1. Fetch from public.users table
+    u_res = supabase.table("users").select("*").eq("user_id", user_id).execute()
+    if not u_res.data:
+        # User row missing, sync insert it!
+        u_res = supabase.table("users").insert({
+            "user_id": user_id,
+            "full_name": full_name,
+            "email": email
+        }).execute()
+        
+    user = u_res.data[0]
+    
+    # 2. Fetch from public.user_profiles table
+    p_res = supabase.table("user_profiles").select("*").eq("user_id", user_id).execute()
+    if not p_res.data:
+        # Profile row missing, sync insert a default one!
+        p_res = supabase.table("user_profiles").insert({
+            "user_id": user_id,
+            "onboarded": False,
+            "income": 0,
+            "city_tier": "Metro",
+            "fixed_rent": 0,
+            "fixed_emi": 0,
+            "biggest_category": "",
+            "primary_goal": ""
+        }).execute()
+        
+    profile = p_res.data[0]
+    
+    # 3. Merge and return unified dictionary
+    return {
+        "user_id": user["user_id"],
+        "full_name": user["full_name"],
+        "email": user["email"],
+        "onboarded": profile["onboarded"],
+        "income": float(profile["income"]),
+        "city_tier": profile["city_tier"],
+        "fixed_rent": float(profile["fixed_rent"]),
+        "fixed_emi": float(profile["fixed_emi"]),
+        "biggest_category": profile["biggest_category"],
+        "primary_goal": profile["primary_goal"]
+    }
+
 @router.post("/api/register")
 async def api_register(data: UserRegister):
     if not supabase:
@@ -84,7 +128,14 @@ async def api_register(data: UserRegister):
         return {
             "user_id": "a9a11e1f-f158-4d8e-ae55-407a5e00410f",
             "full_name": data.full_name,
-            "email": data.email
+            "email": data.email,
+            "onboarded": False,
+            "income": 0,
+            "city_tier": "Metro",
+            "fixed_rent": 0,
+            "fixed_emi": 0,
+            "biggest_category": "",
+            "primary_goal": ""
         }
     
     try:
@@ -107,22 +158,17 @@ async def api_register(data: UserRegister):
         if not auth_res.user:
             raise HTTPException(status_code=500, detail="Failed to create auth user")
             
-        # 2. Insert into users table
-        response = supabase.table("users").insert({
-            "user_id": auth_res.user.id,
-            "full_name": data.full_name,
-            "email": data.email
-        }).execute()
-        
-        if not response.data:
-            raise HTTPException(status_code=500, detail="Failed to register user")
-        
-        user = response.data[0]
-        return {
-            "user_id": user["user_id"],
-            "full_name": user["full_name"],
-            "email": user["email"]
-        }
+        # Check if email confirmation is required/pending
+        email_confirmed = False
+        if auth_res.session is not None:
+            email_confirmed = True
+        elif auth_res.user and auth_res.user.email_confirmed_at:
+            email_confirmed = True
+
+        # 2. Retrieve user record with profile
+        user = await get_user_with_profile(auth_res.user.id, data.email, data.full_name)
+        user["email_confirmed"] = email_confirmed
+        return user
     except Exception as e:
         print(f"Error in auth.py api_register: {e}")
         if hasattr(e, 'message'):
@@ -136,7 +182,15 @@ async def api_login(data: UserLogin):
         return {
             "user_id": "a9a11e1f-f158-4d8e-ae55-407a5e00410f",
             "full_name": "Demo User",
-            "email": data.email
+            "email": data.email,
+            "onboarded": True,
+            "income": 45000,
+            "city_tier": "Metro",
+            "fixed_rent": 1500,
+            "fixed_emi": 500,
+            "biggest_category": "Shopping",
+            "primary_goal": "Save More Money",
+            "email_confirmed": True
         }
         
     try:
@@ -149,46 +203,21 @@ async def api_login(data: UserLogin):
         if not auth_res.user:
             raise HTTPException(status_code=401, detail="Invalid credentials")
             
-        # 2. Retrieve user record from public.users table
-        response = supabase.table("users").select("*").eq("email", data.email).execute()
-        if not response.data:
-            # Sync user if they somehow exist in auth but not in public table
-            full_name = auth_res.user.user_metadata.get("full_name", data.email.split('@')[0]) if auth_res.user.user_metadata else data.email.split('@')[0]
-            sync_res = supabase.table("users").insert({
-                "user_id": auth_res.user.id,
-                "full_name": full_name,
-                "email": data.email
-            }).execute()
-            if not sync_res.data:
-                raise HTTPException(status_code=500, detail="User record not found and failed to sync")
-            user = sync_res.data[0]
-        else:
-            user = response.data[0]
-            # Self-healing mismatch correction: update old user_id to match Supabase Auth UUID
-            if user["user_id"] != auth_res.user.id:
-                try:
-                    update_res = supabase.table("users").update({"user_id": auth_res.user.id}).eq("email", data.email).execute()
-                    if update_res.data:
-                        user = update_res.data[0]
-                except Exception as sync_err:
-                    print(f"Foreign key prevented direct update, deleting obsolete mismatch row: {sync_err}")
-                    # Delete obsolete local row and insert clean Supabase UUID row
-                    supabase.table("users").delete().eq("email", data.email).execute()
-                    insert_res = supabase.table("users").insert({
-                        "user_id": auth_res.user.id,
-                        "full_name": user.get("full_name", data.email.split('@')[0]),
-                        "email": data.email
-                    }).execute()
-                    if insert_res.data:
-                        user = insert_res.data[0]
+        # 2. Retrieve user record from database
+        user = await get_user_with_profile(
+            auth_res.user.id,
+            data.email,
+            auth_res.user.user_metadata.get("full_name", data.email.split('@')[0]) if auth_res.user.user_metadata else data.email.split('@')[0]
+        )
+        user["email_confirmed"] = True
             
-        return {
-            "user_id": user["user_id"],
-            "full_name": user["full_name"],
-            "email": user["email"]
-        }
+        return user
     except Exception as e:
         print(f"Error in auth.py api_login: {e}")
+        err_msg = str(e)
+        if "email not confirmed" in err_msg.lower() or "email_not_confirmed" in err_msg.lower() or "confirm" in err_msg.lower():
+            raise HTTPException(status_code=400, detail="email_not_confirmed")
+            
         detail_msg = "Invalid email or password."
         if "Invalid login credentials" in str(e) or "invalid" in str(e).lower():
             detail_msg = "Invalid email or password"
