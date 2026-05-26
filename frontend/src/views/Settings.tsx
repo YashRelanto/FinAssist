@@ -29,7 +29,8 @@ export const Settings: React.FC = () => {
     addSubCategory, 
     deleteSubCategory,
     navigateToAddTransaction,
-    addTransactions
+    addTransactions,
+    setCurrentPage
   } = useAppContext();
 
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -365,7 +366,15 @@ export const Settings: React.FC = () => {
           { icon: Fingerprint, label: 'Fingerprint Lock', desc: 'Biometric security layer.' },
           { icon: CreditCard, label: 'Linked Accounts', desc: 'Plaid & Bank connections.' },
         ].map((item, i) => (
-          <button key={i} className="flex items-center justify-between p-6 bg-surface-container-lowest border border-outline-variant/30 rounded-2xl soft-shadow hover:bg-surface-container-low transition-all group text-left">
+          <button 
+            key={i} 
+            onClick={() => {
+              if (item.label === 'Linked Accounts') {
+                setCurrentPage('linked-accounts');
+              }
+            }}
+            className="flex items-center justify-between p-6 bg-surface-container-lowest border border-outline-variant/30 rounded-2xl soft-shadow hover:bg-surface-container-low transition-all group text-left"
+          >
             <div className="flex items-center gap-5">
               <div className="w-10 h-10 rounded-xl bg-surface-container-high flex items-center justify-center text-primary group-hover:bg-white transition-colors">
                 <item.icon className="w-5 h-5" />

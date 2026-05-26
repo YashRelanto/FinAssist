@@ -12,6 +12,8 @@ import { Settings } from '../views/Settings';
 import { Forecasting } from '../views/Forecasting';
 import { Onboarding } from '../views/Onboarding';
 import { Login } from '../views/Login';
+import { LinkedAccounts } from '../views/LinkedAccounts';
+import { EditProfile } from '../views/EditProfile';
 import { MessageSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAppContext } from '../context/AppContext';
@@ -38,6 +40,8 @@ export const Layout: React.FC = () => {
       case 'investments': return <Investments />;
       case 'reports': return <Reports />;
       case 'settings': return <Settings />;
+      case 'linked-accounts': return <LinkedAccounts />;
+      case 'edit-profile': return <EditProfile />;
       default: return <Dashboard />;
     }
   };

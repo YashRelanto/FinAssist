@@ -13,8 +13,13 @@ import {
   CreditCard,
   Building2,
   PlusCircle,
-  History
+  History,
+  Plus,
+  Wallet,
+  ShieldCheck,
+  DollarSign
 } from 'lucide-react';
+import { AccountModal } from '../components/AccountModal';
 import { 
   BarChart,
   Bar,
@@ -37,6 +42,27 @@ import { cn, formatCurrency, CURRENCY_SYMBOL } from '../lib/utils';
 
 export const Dashboard: React.FC = () => {
   const { transactions, addTransaction, categories, navigateToAddTransaction, user } = useAppContext();
+
+  const [dbAccounts, setDbAccounts] = React.useState<any[]>([]);
+  const [isAccountModalOpen, setIsAccountModalOpen] = React.useState(false);
+
+  const fetchAccounts = async () => {
+    if (user.isAuthenticated && user.userId) {
+      try {
+        const res = await fetch(`http://localhost:8000/api/accounts?user_id=${user.userId}`);
+        const data = await res.json();
+        if (data.success) {
+          setDbAccounts(data.data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch accounts:", err);
+      }
+    }
+  };
+
+  React.useEffect(() => {
+    fetchAccounts();
+  }, [user.userId, user.isAuthenticated]);
 
   // 1. Calculate dynamic statistics
   const totalBalance = transactions.reduce((acc, t) => {
@@ -101,6 +127,50 @@ export const Dashboard: React.FC = () => {
       bg
     };
   });
+
+  const getAccountIcon = (type: string) => {
+    switch (type?.toLowerCase()) {
+      case 'credit_card':
+        return CreditCard;
+      case 'savings':
+        return ShieldCheck;
+      case 'wallet':
+        return Wallet;
+      case 'cash':
+        return DollarSign;
+      default:
+        return Building2;
+    }
+  };
+
+  const getAccountColorClass = (type: string) => {
+    switch (type?.toLowerCase()) {
+      case 'credit_card':
+        return { color: "text-teal-600", bg: "bg-teal-50" };
+      case 'savings':
+        return { color: "text-secondary", bg: "bg-secondary/10" };
+      case 'wallet':
+        return { color: "text-purple-600", bg: "bg-purple-50" };
+      case 'cash':
+        return { color: "text-emerald-600", bg: "bg-emerald-50" };
+      default:
+        return { color: "text-primary", bg: "bg-primary/10" };
+    }
+  };
+
+  const accountsToDisplay = dbAccounts.length > 0 
+    ? dbAccounts.map(acc => {
+        const style = getAccountColorClass(acc.account_type);
+        return {
+          name: acc.account_name,
+          type: acc.account_type?.replace('_', ' '),
+          balance: parseFloat(acc.current_balance),
+          icon: getAccountIcon(acc.account_type),
+          color: style.color,
+          bg: style.bg
+        };
+      })
+    : linkedAccounts;
 
   // 3. Dynamic monthly performance chart data
   const last6Months: { name: string; income: number; expense: number; net: number; monthIdx: number; year: number }[] = [];
@@ -282,35 +352,62 @@ export const Dashboard: React.FC = () => {
         <div className="lg:col-span-12">
           <div className="flex items-center justify-between mb-4">
              <h3 className="text-sm font-black text-outline uppercase tracking-[0.2em] px-2">Your Financial Hub</h3>
-             <button className="text-[10px] font-black text-primary uppercase tracking-widest hover:underline">Manage Accounts</button>
+             <button onClick={() => setIsAccountModalOpen(true)} className="text-[10px] font-black text-primary uppercase tracking-widest hover:underline">Manage Accounts</button>
           </div>
         </div>
 
         {/* Linked Accounts Card */}
         <div className="lg:col-span-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-           {linkedAccounts.length === 0 ? (
-             <div className="col-span-3 bg-surface-container-lowest p-8 rounded-[24px] border border-outline-variant/30 text-center flex flex-col items-center justify-center min-h-[160px] w-full">
-               <p className="text-sm font-bold text-outline">No linked accounts yet</p>
-               <p className="text-xs text-outline/70 mt-1">Upload your bank statements in settings or add a transaction to link accounts.</p>
+           {accountsToDisplay.length === 0 ? (
+             <div className="col-span-3 bg-surface-container-lowest p-8 rounded-[24px] border border-outline-variant/30 text-center flex flex-col items-center justify-center min-h-[180px] w-full transition-all duration-300 hover:border-primary/20">
+               <div className="w-12 h-12 bg-primary/10 text-primary rounded-full flex items-center justify-center mb-3">
+                 <Building2 className="w-6 h-6 animate-pulse" />
+               </div>
+               <p className="text-sm font-extrabold text-on-surface">No linked accounts yet</p>
+               <p className="text-xs text-outline/70 mt-1 mb-4">Link checking, savings, or credit card manually or upload bank statements to start tracking.</p>
+               <button 
+                 onClick={() => setIsAccountModalOpen(true)}
+                 className="px-5 py-2.5 bg-primary text-white font-bold text-xs rounded-xl shadow-md hover:brightness-110 active:scale-95 transition-all flex items-center gap-1.5"
+               >
+                 <Plus className="w-4 h-4" /> Link New Account
+               </button>
              </div>
            ) : (
-             linkedAccounts.map((bank, i) => (
-               <div key={i} className="bg-surface-container-lowest p-6 rounded-[24px] border border-outline-variant/30 soft-shadow group hover:border-primary transition-all cursor-pointer">
-                  <div className="flex justify-between items-start mb-4">
-                     <div className={cn("p-2.5 rounded-xl", bank.bg, bank.color)}>
-                        <bank.icon className="w-5 h-5" />
-                     </div>
-                     <div className="w-2 h-2 rounded-full bg-secondary animate-pulse" title="Synced"></div>
-                  </div>
-                  <p className="text-[10px] font-black text-outline uppercase tracking-widest leading-none">{bank.type}</p>
-                  <h4 className="font-bold text-on-surface mt-1">{bank.name}</h4>
-                  <p className="text-xl font-black text-on-surface mt-4 tracking-tighter">{formatCurrency(bank.balance)}</p>
-                  <div className="flex items-center gap-1.5 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                     <History className="w-3 h-3 text-outline" />
-                     <span className="text-[10px] font-bold text-outline uppercase tracking-widest">Last Sync: Just now</span>
-                  </div>
-               </div>
-             ))
+             <>
+               {accountsToDisplay.slice(0, 5).map((bank, i) => (
+                 <div key={i} className="bg-surface-container-lowest p-6 rounded-[24px] border border-outline-variant/30 soft-shadow group hover:border-primary transition-all cursor-pointer flex flex-col justify-between min-h-[160px] hover:-translate-y-0.5 duration-300">
+                    <div>
+                      <div className="flex justify-between items-start mb-4">
+                         <div className={cn("p-2.5 rounded-xl", bank.bg, bank.color)}>
+                            <bank.icon className="w-5 h-5" />
+                         </div>
+                         <div className="w-2 h-2 rounded-full bg-secondary animate-pulse" title="Synced"></div>
+                      </div>
+                      <p className="text-[10px] font-black text-outline uppercase tracking-widest leading-none">{bank.type}</p>
+                      <h4 className="font-bold text-on-surface mt-1 text-sm line-clamp-1">{bank.name}</h4>
+                    </div>
+                    <div>
+                      <p className="text-xl font-black text-on-surface mt-4 tracking-tighter">{formatCurrency(bank.balance)}</p>
+                      <div className="flex items-center gap-1.5 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                         <History className="w-3 h-3 text-outline" />
+                         <span className="text-[10px] font-bold text-outline uppercase tracking-widest">Last Sync: Just now</span>
+                      </div>
+                    </div>
+                 </div>
+               ))}
+               
+               {/* Dash plus card */}
+               <button 
+                 onClick={() => setIsAccountModalOpen(true)}
+                 className="bg-surface-container-lowest/30 p-6 rounded-[24px] border-2 border-dashed border-outline-variant/60 hover:border-primary/60 hover:bg-surface-container-lowest hover:text-primary transition-all duration-300 cursor-pointer flex flex-col items-center justify-center min-h-[160px] group hover:-translate-y-0.5"
+               >
+                 <div className="w-10 h-10 rounded-full border border-dashed border-outline-variant group-hover:border-primary group-hover:bg-primary/5 flex items-center justify-center mb-2 transition-all">
+                   <Plus className="w-5 h-5 text-outline group-hover:text-primary transition-all" />
+                 </div>
+                 <span className="text-xs font-black text-outline uppercase tracking-widest group-hover:text-primary transition-all">Link Account</span>
+                 <span className="text-[9px] text-outline/60 mt-1 font-medium group-hover:text-primary/75 transition-all text-center">Add Checking, Savings, or Credit Card</span>
+               </button>
+             </>
            )}
         </div>
 
@@ -548,6 +645,12 @@ export const Dashboard: React.FC = () => {
           </button>
         </div>
       </div>
+
+      <AccountModal 
+        isOpen={isAccountModalOpen} 
+        onClose={() => setIsAccountModalOpen(false)} 
+        onSuccess={fetchAccounts} 
+      />
     </div>
   );
 };

@@ -3,7 +3,7 @@ from fastapi import FastAPI
 # pyrefly: ignore [missing-import]
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import auth, dashboard, statement_parser
+from app.routes import auth, dashboard, statement_parser, api
 # pyrefly: ignore [missing-import]
 import uvicorn
 
@@ -22,6 +22,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(dashboard.router)
 app.include_router(statement_parser.router)
+app.include_router(api.router)
 
 @app.get("/")
 async def root():
