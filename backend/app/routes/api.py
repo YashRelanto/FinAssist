@@ -62,6 +62,36 @@ async def update_user_profile(user_id: str, req: UserUpdateRequest):
         print(f"Error updating user profile: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+class OAuthLoginRequest(BaseModel):
+    user_id: str
+    email: str
+    full_name: str
+
+@router.post("/oauth-login")
+async def api_oauth_login(req: OAuthLoginRequest):
+    try:
+        # Check if user already exists
+        check = supabase.table("users").select("*").eq("email", req.email).execute()
+        if check.data:
+            # User exists, return user details
+            return {"success": True, "message": "OAuth login successful", "user": check.data[0]}
+        
+        # User does not exist, insert user with their Supabase user_id and placeholder password
+        response = supabase.table("users").insert({
+            "user_id": req.user_id,
+            "full_name": req.full_name,
+            "email": req.email,
+            "password": "OAUTH_GOOGLE"
+        }).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Failed to register OAuth user")
+            
+        return {"success": True, "message": "OAuth registration successful", "user": response.data[0]}
+    except Exception as e:
+        print(f"Error in oauth-login: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/dashboard-summary")
 async def get_dashboard_summary(user_id: str):
     try:

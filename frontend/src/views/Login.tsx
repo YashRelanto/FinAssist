@@ -94,6 +94,31 @@ export const Login: React.FC = () => {
             </button>
           </div>
 
+          {/* Continue with Google button */}
+          <div className="mb-6 space-y-4">
+            <button
+              type="button"
+              onClick={() => {
+                window.location.href = "https://wequiafwuvugkzgqzety.supabase.co/auth/v1/authorize?provider=google&redirect_to=http://localhost:3000";
+              }}
+              className="w-full flex items-center justify-center gap-3 py-3.5 bg-white border border-outline-variant hover:bg-surface-container-low transition-all rounded-xl font-bold text-sm text-on-surface shadow-sm active:scale-[0.98]"
+            >
+              <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
+                <path fill="#EA4335" d="M12 5.04c1.66 0 3.2.57 4.38 1.69l3.27-3.27C17.67 1.57 15 0 12 0 7.35 0 3.37 2.67 1.43 6.56l3.86 3C6.26 6.94 8.92 5.04 12 5.04z" />
+                <path fill="#4285F4" d="M23.49 12.27c0-.81-.07-1.59-.2-2.36H12v4.51h6.46c-.29 1.48-1.14 2.73-2.42 3.58l3.76 2.92c2.2-2.03 3.69-5.02 3.69-8.65z" />
+                <path fill="#FBBC05" d="M5.29 14.14c-.24-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29L1.43 6.56C.52 8.38 0 10.42 0 12.5s.52 4.12 1.43 5.94l3.86-3z" />
+                <path fill="#34A853" d="M12 24c3.24 0 5.97-1.08 7.96-2.91l-3.76-2.92c-1.04.7-2.38 1.11-4.2 1.11-3.08 0-5.74-1.9-6.67-4.52L1.47 17.7C3.42 21.39 7.39 24 12 24z" />
+              </svg>
+              <span>Continue with Google</span>
+            </button>
+
+            <div className="flex items-center gap-4">
+              <div className="h-[1px] flex-1 bg-outline-variant/30" />
+              <span className="text-[10px] font-black text-outline uppercase tracking-widest leading-none">or continue with email</span>
+              <div className="h-[1px] flex-1 bg-outline-variant/30" />
+            </div>
+          </div>
+
           <form onSubmit={handleSubmit} className="space-y-5">
             {isSignUp && (
               <div className="space-y-2">

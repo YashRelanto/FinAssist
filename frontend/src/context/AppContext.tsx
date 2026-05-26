@@ -190,6 +190,64 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateUser = (u: Partial<UserProfile>) => setUser(prev => ({ ...prev, ...u }));
 
+  // Check for Supabase OAuth redirect parameters in URL hash
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash && hash.includes("access_token=")) {
+      const params = new URLSearchParams(hash.substring(1)); // Remove the leading '#'
+      const accessToken = params.get("access_token");
+      if (accessToken) {
+        try {
+          const base64Url = accessToken.split('.')[1];
+          const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+          const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+              return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+          }).join(''));
+          const decoded = JSON.parse(jsonPayload);
+          
+          if (decoded && decoded.sub && decoded.email) {
+            const user_id = decoded.sub;
+            const email = decoded.email;
+            const full_name = decoded.user_metadata?.full_name || decoded.email.split('@')[0];
+            
+            fetch('http://localhost:8000/api/oauth-login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ user_id, email, full_name })
+            })
+            .then(res => res.json())
+            .then(data => {
+              if (data.success) {
+                // Clear the hash from the URL so it looks clean
+                window.history.replaceState(null, "", window.location.pathname);
+                
+                setUser({
+                  isAuthenticated: true,
+                  userId: user_id,
+                  name: full_name,
+                  email: email,
+                  onboarded: false, // Triggers standard session onboarding
+                  income: 0,
+                  cityTier: 'Metro',
+                  fixedRent: 0,
+                  fixedEMI: 0,
+                  biggestCategory: '',
+                  primaryGoal: '',
+                  statementUploaded: false
+                });
+              }
+            })
+            .catch(err => {
+              console.error("Backend OAuth login failed:", err);
+            });
+          }
+        } catch (e) {
+          console.error("Failed to parse JWT from hash:", e);
+        }
+      }
+    }
+  }, []);
+
   // Load real-time transactions from Supabase on Login / Sign-up
   useEffect(() => {
     if (user.isAuthenticated && user.userId) {
