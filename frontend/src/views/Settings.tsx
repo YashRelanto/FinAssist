@@ -14,7 +14,8 @@ import {
   eachMonthOfInterval 
 } from 'date-fns';
 
-import { analyzeStatement } from '../lib/statementParser';
+import { analyzeStatementFile } from '../lib/statementParser';
+import { PdfPasswordModal } from '../components/PdfPasswordModal';
 
 export const Settings: React.FC = () => {
   const { 
@@ -31,20 +32,39 @@ export const Settings: React.FC = () => {
     addTransactions
   } = useAppContext();
 
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [passwordModal, setPasswordModal] = useState<{ open: boolean; wrongPassword: boolean }>({ open: false, wrongPassword: false });
+  const [uploadStatus, setUploadStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const processFile = async (file: File, password?: string) => {
+    setUploadStatus(null);
+    try {
+      const { transactions, summary } = await analyzeStatementFile(file, categories, password);
+      addTransactions(transactions);
+      updateUser({ statementUploaded: true });
+      setPendingFile(null);
+      setPasswordModal({ open: false, wrongPassword: false });
+      setUploadStatus({
+        type: 'success',
+        message: `✓ Parsed ${transactions.length} transactions — ${summary.totalCategorized} categorized, ${summary.totalUnknown} unknown, ${summary.highAmountAnomalies} anomalies.`,
+      });
+    } catch (err: any) {
+      if (err?.type === 'password_required') {
+        setPendingFile(file);
+        setPasswordModal({ open: true, wrongPassword: false });
+      } else if (err?.type === 'wrong_password') {
+        setPasswordModal({ open: true, wrongPassword: true });
+      } else {
+        setUploadStatus({ type: 'error', message: err?.message || 'Failed to parse the statement.' });
+      }
+    }
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    // Analyze statement
-    const { transactions, summary } = analyzeStatement(file.name, categories);
-    
-    // Add transactions to global state
-    addTransactions(transactions);
-    
-    // Update user state
-    updateUser({ statementUploaded: true });
-
-    alert(`Statement Analyzed!\n- Categorized: ${summary.totalCategorized}\n- Unknown: ${summary.totalUnknown}\n- Anomalies: ${summary.highAmountAnomalies}\n\nPlease check the transactions page to review.`);
+    processFile(file);
+    e.target.value = '';
   };
 
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
@@ -58,7 +78,20 @@ export const Settings: React.FC = () => {
   };
 
   return (
-    <div className="max-w-5xl space-y-12 pb-20">
+    <>
+      {/* Password modal for encrypted PDFs */}
+      {passwordModal.open && pendingFile && (
+        <PdfPasswordModal
+          fileName={pendingFile.name}
+          isWrongPassword={passwordModal.wrongPassword}
+          onSubmit={(pw) => processFile(pendingFile, pw)}
+          onCancel={() => {
+            setPasswordModal({ open: false, wrongPassword: false });
+            setPendingFile(null);
+          }}
+        />
+      )}
+      <div className="max-w-5xl space-y-12 pb-20">
       <header>
         <h2 className="text-3xl font-bold text-on-surface">Settings & Profile</h2>
         <p className="text-on-surface-variant font-medium text-sm mt-1">Configure your personal assistant and view your financial activity streaks.</p>
@@ -299,6 +332,16 @@ export const Settings: React.FC = () => {
                    onChange={handleFileUpload}
                 />
              </div>
+             {/* Upload status banner */}
+             {uploadStatus && (
+               <div className={`mt-3 px-4 py-3 rounded-xl text-sm font-bold ${
+                 uploadStatus.type === 'success'
+                   ? 'bg-secondary/10 border border-secondary/20 text-secondary'
+                   : 'bg-error/10 border border-error/20 text-error'
+               }`}>
+                 {uploadStatus.message}
+               </div>
+             )}
           </div>
           <div className="lg:w-1/3 flex flex-col justify-center gap-4">
              <div className="flex items-start gap-3 bg-primary/5 p-4 rounded-xl border border-primary/10">
@@ -336,5 +379,6 @@ export const Settings: React.FC = () => {
         ))}
       </div>
     </div>
+    </>
   );
 };

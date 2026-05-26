@@ -20,31 +20,75 @@ import {
 import { useAppContext } from '../context/AppContext';
 import { cn, formatCurrency, CURRENCY_SYMBOL } from '../lib/utils';
 
-import { analyzeStatement } from '../lib/statementParser';
+import { analyzeStatementFile, AnalysisResult, ParseError } from '../lib/statementParser';
+import { PdfPasswordModal } from '../components/PdfPasswordModal';
 
 export const Onboarding: React.FC = () => {
   const { user, updateUser, categories, addTransactions } = useAppContext();
   const [step, setStep] = useState(1);
   const totalSteps = 6;
   const [isUploading, setIsUploading] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [passwordModal, setPasswordModal] = useState<{ open: boolean; wrongPassword: boolean }>({ open: false, wrongPassword: false });
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const processFile = async (file: File, password?: string) => {
+    setIsUploading(true);
+    setUploadError(null);
+    try {
+      const { transactions } = await analyzeStatementFile(file, categories, password);
+
+      // Sync to local state
+      addTransactions(transactions);
+      updateUser({ statementUploaded: true });
+
+      // Optionally push to Supabase when a real user session exists
+      if (user.userId) {
+        try {
+          await fetch('http://localhost:8000/api/statement/ingest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user_id: user.userId,
+              transactions: transactions.map((t) => ({
+                transaction_date: t.date,
+                amount: Math.abs(t.amount),
+                transaction_type: t.type === 'income' ? 'Credit' : 'Debit',
+                merchant_name: t.merchant,
+                description: t.merchant,
+                running_balance: null,
+              })),
+            }),
+          });
+        } catch (e) {
+          console.warn('Supabase ingest skipped (offline mode):', e);
+        }
+      }
+
+      setPendingFile(null);
+      setPasswordModal({ open: false, wrongPassword: false });
+      handleNext();
+    } catch (err: any) {
+      if (err?.type === 'password_required') {
+        setPendingFile(file);
+        setPasswordModal({ open: true, wrongPassword: false });
+      } else if (err?.type === 'wrong_password') {
+        setPasswordModal({ open: true, wrongPassword: true });
+      } else {
+        setUploadError(err?.message || 'Failed to parse the statement. Please try again.');
+      }
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    setIsUploading(true);
-    
-    // Simulate processing time
-    setTimeout(() => {
-      const { transactions, summary } = analyzeStatement(file.name, categories);
-      addTransactions(transactions);
-      updateUser({ statementUploaded: true });
-      setIsUploading(false);
-
-      alert(`Statement Analyzed!\n- Categorized: ${summary.totalCategorized}\n- Unknown: ${summary.totalUnknown}\n- Anomalies/High: ${summary.highAmountAnomalies}`);
-      handleNext();
-    }, 2000);
+    processFile(file);
+    e.target.value = '';
   };
+
 
   const handleNext = () => {
     if (step < totalSteps) setStep(step + 1);
@@ -286,50 +330,72 @@ export const Onboarding: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-surface flex items-center justify-center p-4">
-      <div className="w-full max-w-xl bg-surface-container-lowest rounded-3xl shadow-2xl border border-outline-variant/30 overflow-hidden flex flex-col">
-        {/* Progress Bar */}
-        <div className="h-2 bg-surface-container-high flex">
-          {Array.from({ length: totalSteps }).map((_, i) => (
-            <div 
-              key={i} 
-              className={cn(
-                "flex-1 h-full transition-all duration-500",
-                i + 1 <= step ? "bg-primary" : "bg-transparent"
-              )} 
-            />
-          ))}
-        </div>
+    <>
+      {/* Password modal for encrypted PDFs */}
+      {passwordModal.open && pendingFile && (
+        <PdfPasswordModal
+          fileName={pendingFile.name}
+          isWrongPassword={passwordModal.wrongPassword}
+          onSubmit={(pw) => processFile(pendingFile, pw)}
+          onCancel={() => {
+            setPasswordModal({ open: false, wrongPassword: false });
+            setPendingFile(null);
+          }}
+        />
+      )}
 
-        <div className="p-10 flex-1">
-          <div className="mb-12 flex justify-between items-center text-[10px] font-bold text-outline uppercase tracking-[0.2em]">
-            <span>Step {step} of 5</span>
-            <span className="text-primary tracking-normal font-black">FinAssist Setup</span>
+      <div className="min-h-screen bg-surface flex items-center justify-center p-4">
+        <div className="w-full max-w-xl bg-surface-container-lowest rounded-3xl shadow-2xl border border-outline-variant/30 overflow-hidden flex flex-col">
+          {/* Progress Bar */}
+          <div className="h-2 bg-surface-container-high flex">
+            {Array.from({ length: totalSteps }).map((_, i) => (
+              <div 
+                key={i} 
+                className={cn(
+                  "flex-1 h-full transition-all duration-500",
+                  i + 1 <= step ? "bg-primary" : "bg-transparent"
+                )} 
+              />
+            ))}
           </div>
 
-          <div className="min-h-[400px]">
-             {renderStep()}
-          </div>
-          
-          <div className="flex gap-4 mt-12">
-            {step > 1 && (
-              <button 
-                onClick={handleBack}
-                className="flex-[0.5] flex items-center justify-center gap-2 py-4 bg-surface-container-high text-on-surface font-bold rounded-xl hover:brightness-95 transition-all"
-              >
-                <ChevronLeft className="w-5 h-5" /> Back
-              </button>
+          <div className="p-10 flex-1">
+            <div className="mb-12 flex justify-between items-center text-[10px] font-bold text-outline uppercase tracking-[0.2em]">
+              <span>Step {step} of 5</span>
+              <span className="text-primary tracking-normal font-black">FinAssist Setup</span>
+            </div>
+
+            {/* Upload error banner */}
+            {uploadError && (
+              <div className="mb-4 flex items-center gap-2 px-4 py-3 bg-error/10 border border-error/20 rounded-xl text-error text-sm font-bold">
+                {uploadError}
+              </div>
             )}
-            <button 
-              onClick={handleNext}
-              disabled={step === 1 && user.income === 0}
-              className="flex-1 flex items-center justify-center gap-2 py-4 bg-primary text-white font-bold rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition-all disabled:opacity-50 disabled:grayscale"
-            >
-              {step === totalSteps ? 'Finish Setup' : 'Continue'} <ChevronRight className="w-5 h-5" />
-            </button>
+
+            <div className="min-h-[400px]">
+               {renderStep()}
+            </div>
+            
+            <div className="flex gap-4 mt-12">
+              {step > 1 && (
+                <button 
+                  onClick={handleBack}
+                  className="flex-[0.5] flex items-center justify-center gap-2 py-4 bg-surface-container-high text-on-surface font-bold rounded-xl hover:brightness-95 transition-all"
+                >
+                  <ChevronLeft className="w-5 h-5" /> Back
+                </button>
+              )}
+              <button 
+                onClick={handleNext}
+                disabled={step === 1 && user.income === 0}
+                className="flex-1 flex items-center justify-center gap-2 py-4 bg-primary text-white font-bold rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition-all disabled:opacity-50 disabled:grayscale"
+              >
+                {step === totalSteps ? 'Finish Setup' : 'Continue'} <ChevronRight className="w-5 h-5" />
+              </button>
+            </div>
           </div>
         </div>
       </div>
-    </div>
+    </>
   );
 };

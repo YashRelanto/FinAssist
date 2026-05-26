@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import auth, dashboard, api
+from app.routes import auth, dashboard, statement_parser, chatbot,api
+# pyrefly: ignore [missing-import]
 import uvicorn
 
 app = FastAPI(title="FinAssist API")
@@ -15,9 +16,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include authentication and dashboard routes
+# Include authentication routes
 app.include_router(auth.router)
 app.include_router(dashboard.router)
+app.include_router(statement_parser.router)
+app.include_router(chatbot.router)
 app.include_router(api.router)
 
 @app.get("/")

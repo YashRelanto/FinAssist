@@ -1,3 +1,16 @@
 .env
-venv/
-__pycache__
+.venv/
+backend/.venv/
+**/__pycache__/
+*.pyc
+node_modules/
+frontend/node_modules/
+dist/
+build/
+.DS_Store
+
+# ── FinAssist runtime-generated artifacts (do NOT commit) ─────────────────────
+backend/chroma_db/
+backend/sessions.json
+*.sqlite
+*.db
