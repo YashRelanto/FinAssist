@@ -26,9 +26,6 @@ create table public.users (
     full_name text not null,
     email text not null unique,
 
-    -- Store hashed passwords only
-    password text not null,
-
     created_at timestamptz not null default now(),
     deleted_at timestamptz
 );

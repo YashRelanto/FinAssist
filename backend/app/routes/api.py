@@ -17,30 +17,80 @@ class RegisterRequest(BaseModel):
 
 @router.post("/login")
 async def api_login(req: LoginRequest):
-    response = supabase.table("users").select("*").eq("email", req.email).eq("password", req.password).execute()
-    if not response.data:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    user = response.data[0]
-    return {"success": True, "message": "Login successful!", "user": user}
+    try:
+        # 1. Sign in with Supabase Auth
+        auth_res = supabase.auth.sign_in_with_password({
+            "email": req.email,
+            "password": req.password
+        })
+        
+        if not auth_res.user:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+            
+        # 2. Retrieve user record from public.users table
+        response = supabase.table("users").select("*").eq("email", req.email).execute()
+        if not response.data:
+            # Sync user if they somehow exist in auth but not in public table
+            full_name = auth_res.user.user_metadata.get("full_name", req.email.split('@')[0]) if auth_res.user.user_metadata else req.email.split('@')[0]
+            sync_res = supabase.table("users").insert({
+                "user_id": auth_res.user.id,
+                "full_name": full_name,
+                "email": req.email
+            }).execute()
+            if not sync_res.data:
+                raise HTTPException(status_code=500, detail="User record not found and failed to sync")
+            user = sync_res.data[0]
+        else:
+            user = response.data[0]
+            
+        return {"success": True, "message": "Login successful!", "user": user}
+    except Exception as e:
+        print(f"Error in api_login: {e}")
+        detail_msg = "Invalid credentials"
+        if "Invalid login credentials" in str(e) or "invalid" in str(e).lower():
+            detail_msg = "Invalid email or password"
+        elif hasattr(e, 'message'):
+            detail_msg = e.message
+        raise HTTPException(status_code=401, detail=detail_msg)
 
 @router.post("/register")
 async def api_register(req: RegisterRequest):
-    # Check if exists
-    check = supabase.table("users").select("*").eq("email", req.email).execute()
-    if check.data:
-        raise HTTPException(status_code=400, detail="User already exists")
-    
-    response = supabase.table("users").insert({
-        "full_name": req.full_name,
-        "email": req.email,
-        "password": req.password
-    }).execute()
-    
-    if not response.data:
-        raise HTTPException(status_code=500, detail="Registration failed")
+    try:
+        # Check if already exists in public table
+        check = supabase.table("users").select("*").eq("email", req.email).execute()
+        if check.data:
+            raise HTTPException(status_code=400, detail="User already exists")
         
-    return {"success": True, "message": "Registration successful!", "user": response.data[0]}
+        # 1. Sign up with Supabase Auth
+        auth_res = supabase.auth.sign_up({
+            "email": req.email,
+            "password": req.password,
+            "options": {
+                "data": {
+                    "full_name": req.full_name
+                }
+            }
+        })
+        
+        if not auth_res.user:
+            raise HTTPException(status_code=500, detail="Failed to create auth user")
+            
+        # 2. Insert user into public.users table mapping the user_id to the Supabase UUID
+        response = supabase.table("users").insert({
+            "user_id": auth_res.user.id,
+            "full_name": req.full_name,
+            "email": req.email
+        }).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Registration failed to sync to ledger")
+            
+        return {"success": True, "message": "Registration successful!", "user": response.data[0]}
+    except Exception as e:
+        print(f"Error in api_register: {e}")
+        if hasattr(e, 'message'):
+            raise HTTPException(status_code=400, detail=e.message)
+        raise HTTPException(status_code=500, detail=str(e))
 
 class UserUpdateRequest(BaseModel):
     full_name: str
@@ -76,12 +126,11 @@ async def api_oauth_login(req: OAuthLoginRequest):
             # User exists, return user details
             return {"success": True, "message": "OAuth login successful", "user": check.data[0]}
         
-        # User does not exist, insert user with their Supabase user_id and placeholder password
+        # User does not exist, insert user with their Supabase user_id
         response = supabase.table("users").insert({
             "user_id": req.user_id,
             "full_name": req.full_name,
-            "email": req.email,
-            "password": "OAUTH_GOOGLE"
+            "email": req.email
         }).execute()
         
         if not response.data:

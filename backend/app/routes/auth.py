@@ -87,27 +87,47 @@ async def api_register(data: UserRegister):
             "email": data.email
         }
     
-    # Check if user already exists
-    check = supabase.table("users").select("*").eq("email", data.email).execute()
-    if check.data:
-        raise HTTPException(status_code=400, detail="User already exists.")
-    
-    # Insert into users table
-    response = supabase.table("users").insert({
-        "full_name": data.full_name,
-        "email": data.email,
-        "password": data.password
-    }).execute()
-    
-    if not response.data:
-        raise HTTPException(status_code=500, detail="Failed to register user")
-    
-    user = response.data[0]
-    return {
-        "user_id": user["user_id"],
-        "full_name": user["full_name"],
-        "email": user["email"]
-    }
+    try:
+        # Check if user already exists
+        check = supabase.table("users").select("*").eq("email", data.email).execute()
+        if check.data:
+            raise HTTPException(status_code=400, detail="User already exists.")
+        
+        # 1. Sign up with Supabase Auth
+        auth_res = supabase.auth.sign_up({
+            "email": data.email,
+            "password": data.password,
+            "options": {
+                "data": {
+                    "full_name": data.full_name
+                }
+            }
+        })
+        
+        if not auth_res.user:
+            raise HTTPException(status_code=500, detail="Failed to create auth user")
+            
+        # 2. Insert into users table
+        response = supabase.table("users").insert({
+            "user_id": auth_res.user.id,
+            "full_name": data.full_name,
+            "email": data.email
+        }).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Failed to register user")
+        
+        user = response.data[0]
+        return {
+            "user_id": user["user_id"],
+            "full_name": user["full_name"],
+            "email": user["email"]
+        }
+    except Exception as e:
+        print(f"Error in auth.py api_register: {e}")
+        if hasattr(e, 'message'):
+            raise HTTPException(status_code=400, detail=e.message)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/api/login")
 async def api_login(data: UserLogin):
@@ -119,15 +139,43 @@ async def api_login(data: UserLogin):
             "email": data.email
         }
         
-    response = supabase.table("users").select("*").eq("email", data.email).eq("password", data.password).execute()
-    
-    if not response.data:
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
-    
-    user = response.data[0]
-    return {
-        "user_id": user["user_id"],
-        "full_name": user["full_name"],
-        "email": user["email"]
-    }
+    try:
+        # 1. Sign in with Supabase Auth
+        auth_res = supabase.auth.sign_in_with_password({
+            "email": data.email,
+            "password": data.password
+        })
+        
+        if not auth_res.user:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+            
+        # 2. Retrieve user record from public.users table
+        response = supabase.table("users").select("*").eq("email", data.email).execute()
+        if not response.data:
+            # Sync user if they somehow exist in auth but not in public table
+            full_name = auth_res.user.user_metadata.get("full_name", data.email.split('@')[0]) if auth_res.user.user_metadata else data.email.split('@')[0]
+            sync_res = supabase.table("users").insert({
+                "user_id": auth_res.user.id,
+                "full_name": full_name,
+                "email": data.email
+            }).execute()
+            if not sync_res.data:
+                raise HTTPException(status_code=500, detail="User record not found and failed to sync")
+            user = sync_res.data[0]
+        else:
+            user = response.data[0]
+            
+        return {
+            "user_id": user["user_id"],
+            "full_name": user["full_name"],
+            "email": user["email"]
+        }
+    except Exception as e:
+        print(f"Error in auth.py api_login: {e}")
+        detail_msg = "Invalid email or password."
+        if "Invalid login credentials" in str(e) or "invalid" in str(e).lower():
+            detail_msg = "Invalid email or password"
+        elif hasattr(e, 'message'):
+            detail_msg = e.message
+        raise HTTPException(status_code=401, detail=detail_msg)
 
