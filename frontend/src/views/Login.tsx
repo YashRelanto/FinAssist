@@ -1,15 +1,25 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { Mail, Lock, LogIn, ChevronRight, LayoutDashboard, ShieldCheck, Zap } from 'lucide-react';
+import {
+  Mail,
+  Lock,
+  LogIn,
+  ChevronRight,
+  LayoutDashboard,
+  ShieldCheck,
+  Zap
+} from 'lucide-react';
+
 import { useAppContext } from '../context/AppContext';
 import { cn } from '../lib/utils';
 
 export const Login: React.FC = () => {
   const { updateUser } = useAppContext();
+
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
-  const [name, setName] = useState('');
   const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
   const [emailVerificationSent, setEmailVerificationSent] = useState(false);
@@ -17,20 +27,33 @@ export const Login: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
     setError('');
     setIsConnecting(true);
 
-    try {
-      const endpoint = isSignUp ? 'register' : 'login';
-      const body = isSignUp
-        ? { full_name: name, email, password }
-        : { email, password };
+    const endpoint = isSignUp ? '/api/register' : '/api/login';
 
-      const response = await fetch(`http://localhost:8000/api/${endpoint}`, {
+    const body = isSignUp
+      ? {
+          full_name: name,
+          email,
+          password
+        }
+      : {
+          email,
+          password
+        };
+
+    try {
+      const response = await fetch(`http://localhost:8000${endpoint}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify(body)
       });
+
+      const data = await response.json();
 
       if (!response.ok) {
         const errData = await response.json();
@@ -42,8 +65,7 @@ export const Login: React.FC = () => {
         }
         throw new Error(errData.detail || 'Authentication failed');
       }
-
-      const data = await response.json();
+      
       
       // Support both flat response (e.g. from auth.py) and nested response (e.g. from api.py)
       const emailConfirmed = data.email_confirmed !== undefined ? data.email_confirmed : data.user?.email_confirmed;
@@ -81,9 +103,14 @@ export const Login: React.FC = () => {
         primaryGoal: resolvedPrimaryGoal,
         statementUploaded: resolvedStatement
       });
+
     } catch (err: any) {
       console.error(err);
-      setError(err.message || 'Could not connect to authentication server.');
+
+      setError(
+        err.message || 'Could not connect to authentication server.'
+      );
+
     } finally {
       setIsConnecting(false);
     }
@@ -91,25 +118,35 @@ export const Login: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-surface flex flex-col items-center justify-center p-4 relative overflow-hidden">
+      
       {/* Background Decor */}
       <div className="absolute top-0 left-0 w-full h-full pointer-events-none opacity-5">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary rounded-full blur-[120px]" />
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-secondary rounded-full blur-[120px]" />
       </div>
 
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         className="w-full max-w-md space-y-8 z-10"
       >
+        
+        {/* Header */}
         <div className="text-center space-y-3">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary text-white shadow-xl shadow-primary/20 mb-4">
             <LayoutDashboard className="w-8 h-8" />
           </div>
-          <h1 className="text-4xl font-black tracking-tight text-on-surface">FinAssist</h1>
-          <p className="text-outline font-medium">Elevate your financial intelligence.</p>
+
+          <h1 className="text-4xl font-black tracking-tight text-on-surface">
+            FinAssist
+          </h1>
+
+          <p className="text-outline font-medium">
+            Elevate your financial intelligence.
+          </p>
         </div>
 
+        {/* Card */}
         <div className="bg-surface-container-lowest p-8 rounded-3xl shadow-2xl border border-outline-variant/30">
           {emailVerificationSent ? (
             <motion.div
@@ -287,28 +324,48 @@ export const Login: React.FC = () => {
             </>
           )}
 
+            
+        
+
+          {/* Security Footer */}
           <div className="mt-8 pt-8 border-t border-outline-variant/30 space-y-4">
+
             <div className="flex items-center gap-4">
               <div className="h-[1px] flex-1 bg-outline-variant/30" />
-              <span className="text-[10px] font-bold text-outline uppercase tracking-widest">Trust & Security</span>
+
+              <span className="text-[10px] font-bold text-outline uppercase tracking-widest">
+                Trust & Security
+              </span>
+
               <div className="h-[1px] flex-1 bg-outline-variant/30" />
             </div>
-            
+
             <div className="flex justify-center gap-6">
+
               <div className="flex items-center gap-2 text-outline">
                 <ShieldCheck className="w-4 h-4" />
-                <span className="text-[9px] font-bold uppercase tracking-wider">AES-256</span>
+                <span className="text-[9px] font-bold uppercase tracking-wider">
+                  AES-256
+                </span>
               </div>
+
               <div className="flex items-center gap-2 text-outline">
                 <Zap className="w-4 h-4" />
-                <span className="text-[9px] font-bold uppercase tracking-wider">Fast Auth</span>
+                <span className="text-[9px] font-bold uppercase tracking-wider">
+                  Fast Auth
+                </span>
               </div>
+
             </div>
           </div>
         </div>
 
+        {/* Footer */}
         <p className="text-center text-[10px] text-outline font-bold uppercase tracking-widest">
-          By continuing, you agree to our <button className="text-on-surface hover:underline">Terms of Service</button>
+          By continuing, you agree to our{' '}
+          <button className="text-on-surface hover:underline">
+            Terms of Service
+          </button>
         </p>
       </motion.div>
     </div>

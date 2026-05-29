@@ -173,7 +173,9 @@ def _parse_pdf_text_robust(raw_text: str) -> List[ParsedTransaction]:
             
         rest = line.replace(date_str, " ").strip()
         
-        amount_pattern = re.compile(r'[-+]?\s*[\d,]+\.\d{2}\b|[-+]?\s*\b\d{3,}\b')
+        # Strict regex: amounts must have two decimal places (e.g., 50.00, 1,000.50). 
+        # This prevents 12-digit NEFT/UPI reference numbers from being parsed as amounts.
+        amount_pattern = re.compile(r'[-+]?\s*[\d,]+\.\d{2}\b')
         amounts = amount_pattern.findall(rest)
         
         if not amounts:

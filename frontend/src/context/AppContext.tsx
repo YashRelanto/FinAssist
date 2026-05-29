@@ -43,9 +43,10 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const initialUser: UserProfile = {
-  name: 'Alex Thompson',
-  email: 'alex@example.com',
+  name: 'Guest User',
+  email: '',
   isAuthenticated: false,
+  userId: '',
   onboarded: false,
   income: 0,
   cityTier: 'Metro',
@@ -273,8 +274,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
-  // Load real-time transactions from Supabase on Login / Sign-up
-  useEffect(() => {
+  const loadTransactions = () => {
     if (user.isAuthenticated && user.userId) {
       // Clear mock data for signed-in user
       setTransactions([]);
@@ -298,6 +298,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setTransactions([]);
         });
     }
+  };
+
+  // Load real-time transactions from Supabase on Login / Sign-up
+  useEffect(() => {
+    loadTransactions();
   }, [user.isAuthenticated, user.userId]);
 
   const addTransaction = (t: Omit<Transaction, 'id'>) => {
@@ -403,7 +408,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addReport = (r: Report) => setReports(prev => [r, ...prev]);
   
-  const uploadReport = (file: File) => {
+  const uploadReport = async (file: File) => {
     const newReport: Report = {
       id: Math.random().toString(36).substr(2, 9),
       title: file.name,
@@ -412,6 +417,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: file.name.endsWith('.csv') ? 'CSV' : 'PDF'
     };
     addReport(newReport);
+
+    if (user.userId) {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("user_id", user.userId);
+      formData.append("account_name", "Primary Checking");
+
+      try {
+        const response = await fetch("http://localhost:8000/api/statement/upload", {
+          method: "POST",
+          body: formData,
+        });
+        if (response.ok) {
+          console.log("Statement successfully uploaded and parsed.");
+          loadTransactions(); // Refetch transactions to update UI immediately
+        } else {
+          console.error("Backend failed to parse the statement.");
+        }
+      } catch (err) {
+        console.error("Failed to connect to backend:", err);
+      }
+    }
   };
 
   // Generate heatmap data based on transaction dates

@@ -3,6 +3,7 @@ import os
 
 import pandas as pd
 from dotenv import load_dotenv
+# pyrefly: ignore [missing-import]
 from supabase import create_client, Client
 
 
@@ -86,7 +87,15 @@ def upload_csv_to_supabase(
 
 # Main execution
 def main() -> None:
-    data_dir = Path("./data")
+    data_dir = Path("./data/processed/")
+
+    # 1. First, load accounts to get initial balances
+    accounts_file = data_dir / "accounts.csv"
+    account_balances = {}
+    if accounts_file.exists():
+        accounts_df = pd.read_csv(accounts_file)
+        # Map account_id to its current_balance (which we treat as the starting point)
+        account_balances = dict(zip(accounts_df['account_id'], accounts_df['current_balance']))
 
     files_to_upload = [
         ("users.csv", "users"),
@@ -102,10 +111,64 @@ def main() -> None:
             print(f"Skipping {csv_file}: file not found.")
             continue
 
-        upload_csv_to_supabase(
-            csv_path=str(csv_file),
-            table_name=table_name,
-        )
+        if table_name == "transactions":
+            print(f"\nCalculating running balances for {filename}...")
+            df = pd.read_csv(csv_file)
+            
+            # Sort by date to ensure chronological balance calculation
+            df['transaction_date'] = pd.to_datetime(df['transaction_date'])
+            df = df.sort_values(by=['account_id', 'transaction_date'])
+            
+            # Calculate running balance per account
+            def calculate_balance(group):
+                account_id = group.name
+                # The balance in accounts.csv is the CURRENT balance (after all transactions)
+                final_bal = account_balances.get(account_id, 0)
+                
+                # Sort group by date descending to calculate backwards
+                group = group.sort_values(by='transaction_date', ascending=False)
+                
+                balances = []
+                temp_bal = final_bal
+                for idx, row in group.iterrows():
+                    # The running_balance AT this transaction is temp_bal
+                    balances.append(temp_bal)
+                    
+                    # To find the balance BEFORE this transaction:
+                    amount = float(row['amount'])
+                    if row['transaction_type'] == 'expense':
+                        temp_bal += amount # Add back the expense
+                    elif row['transaction_type'] == 'income':
+                        temp_bal -= amount # Subtract the income
+                
+                group['running_balance'] = balances
+                # Sort back to chronological for the final result
+                return group.sort_values(by='transaction_date')
+
+            df = df.groupby('account_id', group_keys=False).apply(calculate_balance)
+            
+            # Convert dates to strings for upload
+            df['transaction_date'] = pd.to_datetime(df['transaction_date']).dt.strftime('%Y-%m-%d')
+            
+            # Convert back to dict records for upload
+            df = df.astype(object).where(pd.notna(df), None)
+            records = df.to_dict(orient="records")
+            
+            # Use custom upload logic for the processed transactions
+            print(f"Uploading processed transactions -> {table_name}")
+            conflict_cols = CONFLICT_COLUMNS.get(table_name)
+            total_rows = len(records)
+            batch_size = 500
+            for start in range(0, total_rows, batch_size):
+                end = min(start + batch_size, total_rows)
+                batch = records[start:end]
+                supabase.table(table_name).upsert(batch, on_conflict=conflict_cols).execute()
+                print(f"Uploaded rows {start + 1}-{end} of {total_rows}")
+        else:
+            upload_csv_to_supabase(
+                csv_path=str(csv_file),
+                table_name=table_name,
+            )
 
     print("\nAll tables populated successfully.")
 
