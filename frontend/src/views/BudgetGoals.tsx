@@ -6,9 +6,61 @@ import { GoalModal } from '../components/GoalModal';
 import { Goal } from '../types';
 
 export const BudgetGoals: React.FC = () => {
-  const { goals, deleteGoal } = useAppContext();
+  const { goals, deleteGoal, transactions, user } = useAppContext();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | undefined>(undefined);
+
+  // 1. Calculate dynamic budget allocations
+  const housingSpent = transactions
+    .filter(t => t.category === 'Housing' || t.category === 'Housing & Rent' || t.category === 'Housing & Utilities')
+    .reduce((acc, t) => acc + Math.abs(t.amount), 0);
+  const housingBudget = user.fixedRent || (user.isAuthenticated ? 0 : 2400);
+
+  const diningSpent = transactions
+    .filter(t => t.category === 'Food & Drinks' || t.category === 'Food & Dining' || t.category === 'Life & Entertainment')
+    .reduce((acc, t) => acc + Math.abs(t.amount), 0);
+  const diningBudget = user.isAuthenticated ? 0 : 800;
+
+  const transportSpent = transactions
+    .filter(t => t.category === 'Transportation' || t.category === 'Vehicle')
+    .reduce((acc, t) => acc + Math.abs(t.amount), 0);
+  const transportBudget = user.isAuthenticated ? 0 : 450;
+
+  const grocerySpent = transactions
+    .filter(t => t.category === 'Shopping')
+    .reduce((acc, t) => acc + Math.abs(t.amount), 0);
+  const groceryBudget = user.isAuthenticated ? 0 : 600;
+
+  const budgetItems = [
+    { icon: Home, label: 'Housing & Utilities', sub: 'Fixed Monthly', spent: housingSpent, total: housingBudget, color: 'bg-secondary' },
+    { 
+      icon: Utensils, 
+      label: 'Dining & Entertainment', 
+      sub: diningSpent >= diningBudget && diningBudget > 0 ? 'Exceeded Limit' : 'Dining & Outing', 
+      spent: diningSpent, 
+      total: diningBudget, 
+      color: diningSpent > diningBudget && diningBudget > 0 ? 'bg-error' : 'bg-secondary', 
+      alert: diningBudget > 0 && diningSpent >= diningBudget * 0.9 
+    },
+    { icon: Car, label: 'Transportation', sub: 'Gas & Maintenance', spent: transportSpent, total: transportBudget, color: 'bg-primary' },
+    { icon: ShoppingBasket, label: 'Groceries', sub: 'Household Essentials', spent: grocerySpent, total: groceryBudget, color: 'bg-primary' },
+  ].map(item => ({
+    ...item,
+    status: item.total > 0 ? `${Math.round((item.spent / item.total) * 100)}% Utilized` : '0% Utilized',
+    percent: item.total > 0 ? Math.min(100, (item.spent / item.total) * 100) : 0
+  }));
+
+  const totalSpent = budgetItems.reduce((acc, item) => acc + item.spent, 0);
+  const totalBudget = budgetItems.reduce((acc, item) => acc + item.total, 0);
+
+  // 2. Dynamic trajectory insight
+  const isAuthNoData = user.isAuthenticated && transactions.length === 0;
+  const trajectoryTitle = isAuthNoData ? "No Trajectory Data Yet" : "Financial Trajectory";
+  const trajectoryDesc = isAuthNoData 
+    ? "Once you log your income and start recording transactions, we'll project your savings trajectory and growth rates in real-time."
+    : "You are saving 18% more than last month. At this rate, your Emergency Fund will be fully funded 2 months ahead of schedule. Your investment portfolio is also showing a strong upward trend.";
+  const trajectoryGrowth = isAuthNoData ? "0%" : "75%";
+  const strokeOffset = isAuthNoData ? 351.8 : 88;
 
   const handleEdit = (g: Goal) => {
     setEditingGoal(g);
@@ -103,17 +155,12 @@ export const BudgetGoals: React.FC = () => {
           <h3 className="text-xl font-bold">Monthly Budget Allocations</h3>
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-outline uppercase tracking-widest">Spent:</span>
-            <span className="text-sm font-bold text-on-surface">{formatCurrency(4850)} / {formatCurrency(6200)}</span>
+            <span className="text-sm font-bold text-on-surface">{formatCurrency(totalSpent)} / {formatCurrency(totalBudget)}</span>
           </div>
         </div>
 
         <div className="space-y-8">
-          {[
-            { icon: Home, label: 'Housing & Utilities', sub: 'Fixed Monthly', spent: 2400, total: 2400, status: '100% Utilized', color: 'bg-secondary' },
-            { icon: Utensils, label: 'Dining & Entertainment', sub: 'Nearing Budget Limit', spent: 760, total: 800, status: '95% Utilized', color: 'bg-error', alert: true },
-            { icon: Car, label: 'Transportation', sub: 'Gas & Maintenance', spent: 240, total: 450, status: '53% Utilized', color: 'bg-primary' },
-            { icon: ShoppingBasket, label: 'Groceries', sub: 'Household Essentials', spent: 415, total: 600, status: '69% Utilized', color: 'bg-primary' },
-          ].map((item, i) => (
+          {budgetItems.map((item, i) => (
             <div key={i} className="group">
               <div className="flex justify-between items-center mb-3">
                 <div className="flex items-center gap-4">
@@ -136,7 +183,7 @@ export const BudgetGoals: React.FC = () => {
               <div className="h-2 w-full bg-surface-container-high rounded-full overflow-hidden">
                 <div 
                   className={cn(item.color, "h-full transition-all duration-1000 ease-out")} 
-                  style={{ width: `${(item.spent / item.total) * 100}%` }}
+                  style={{ width: `${item.percent}%` }}
                 ></div>
               </div>
             </div>
@@ -147,18 +194,18 @@ export const BudgetGoals: React.FC = () => {
       {/* Trajectory Insight */}
       <div className="bg-inverse-surface rounded-2xl p-8 text-white flex flex-col md:flex-row items-center justify-between gap-8 h-full">
           <div className="max-w-2xl">
-            <h4 className="text-2xl font-bold mb-3">Financial Trajectory</h4>
+            <h4 className="text-2xl font-bold mb-3">{trajectoryTitle}</h4>
             <p className="opacity-80 text-sm leading-relaxed font-medium">
-              You are saving 18% more than last month. At this rate, your Emergency Fund will be fully funded 2 months ahead of schedule. Your investment portfolio is also showing a strong upward trend.
+              {trajectoryDesc}
             </p>
           </div>
           <div className="relative w-32 h-32 flex items-center justify-center flex-shrink-0">
             <svg className="w-full h-full transform -rotate-90">
               <circle className="text-white/10" cx="64" cy="64" fill="transparent" r="56" stroke="currentColor" strokeWidth="8"></circle>
-              <circle className="text-secondary" cx="64" cy="64" fill="transparent" r="56" stroke="currentColor" strokeDasharray="351.8" strokeDashoffset="88" strokeWidth="8" strokeLinecap="round"></circle>
+              <circle className="text-secondary" cx="64" cy="64" fill="transparent" r="56" stroke="currentColor" strokeDasharray="351.8" strokeDashoffset={strokeOffset} strokeWidth="8" strokeLinecap="round"></circle>
             </svg>
             <div className="absolute flex flex-col items-center">
-              <span className="text-3xl font-bold">75%</span>
+              <span className="text-3xl font-bold">{trajectoryGrowth}</span>
               <span className="text-[8px] font-bold opacity-60 uppercase tracking-widest">Growth</span>
             </div>
           </div>

@@ -64,7 +64,7 @@ export const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
               <div className="absolute right-0 top-full mt-2 w-72 bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/30 py-4 z-50 overflow-hidden animate-in fade-in zoom-in duration-200">
                 <div className="py-2">
                   <button 
-                    onClick={() => { setCurrentPage('settings'); setIsProfileOpen(false); }}
+                    onClick={() => { setCurrentPage('edit-profile'); setIsProfileOpen(false); }}
                     className="w-full flex items-center gap-3 px-6 py-3 hover:bg-surface-container-low text-sm font-bold text-on-surface-variant transition-colors"
                   >
                     <User className="w-4 h-4" />

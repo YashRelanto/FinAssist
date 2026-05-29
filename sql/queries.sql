@@ -1,3 +1,74 @@
+-- ============================================================
+-- DROP EXISTING TABLES (in dependency order)
+-- Run this before creating the new schema
+-- ============================================================
+
+drop table if exists public.transactions cascade;
+drop table if exists public.accounts cascade;
+drop table if exists public.categories cascade;
+drop table if exists public.user_profiles cascade;
+drop table if exists public.users cascade;
+
+-- Optional: remove extension only if you are sure nothing else uses it
+-- drop extension if exists pgcrypto;
+
+-- ============================================================
+-- PERSONAL FINANCE PLATFORM - CORE SCHEMA
+-- ============================================================
+
+create extension if not exists pgcrypto;
+
+-- ============================================================
+-- 1. USERS TABLE
+-- ============================================================
+create table public.users (
+    user_id uuid primary key default gen_random_uuid(),
+
+    full_name text not null,
+    email text not null unique,
+
+    created_at timestamptz not null default now(),
+    deleted_at timestamptz
+);
+
+-- ============================================================
+-- 1.5 USER PROFILES TABLE (Normalized Extensible Fields)
+-- ============================================================
+create table public.user_profiles (
+    user_id uuid primary key references public.users(user_id) on delete cascade,
+    onboarded boolean not null default false,
+    income numeric(14,2) not null default 0,
+    city_tier text not null default 'Metro',
+    fixed_rent numeric(14,2) not null default 0,
+    fixed_emi numeric(14,2) not null default 0,
+    biggest_category text not null default '',
+    primary_goal text not null default '',
+    created_at timestamptz not null default now()
+);
+
+-- ============================================================
+-- 2. CATEGORIES TABLE
+-- ============================================================
+create table public.categories (
+    category_id uuid primary key default gen_random_uuid(),
+
+    main_category text not null check (
+        main_category in (
+            'Food & Drinks',
+            'Shopping',
+            'Housing',
+            'Transportation',
+            'Vehicle',
+            'Life & Entertainment',
+            'Financial Expenses',
+            'Investments',
+            'Income'
+        )
+    ),
+
+    sub_category text not null,
+
+    unique (main_category, sub_category)
 -- WARNING: This schema is for context only and is not meant to be run.
 -- Table order and constraints may not be valid for execution.
 

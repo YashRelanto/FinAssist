@@ -29,7 +29,8 @@ export const Settings: React.FC = () => {
     addSubCategory, 
     deleteSubCategory,
     navigateToAddTransaction,
-    addTransactions
+    addTransactions,
+    setCurrentPage
   } = useAppContext();
 
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -201,100 +202,7 @@ export const Settings: React.FC = () => {
         </div>
       </section>
 
-      {/* Financial Profile Section */}
-      <section className="bg-surface-container-lowest p-8 rounded-2xl border border-outline-variant/30 soft-shadow">
-        <div className="flex justify-between items-center mb-8">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-primary-container/20 text-primary rounded-xl">
-              <User className="w-6 h-6" />
-            </div>
-            <div>
-              <h3 className="text-xl font-bold">Financial Profile</h3>
-              <p className="text-xs text-outline font-bold uppercase tracking-widest mt-0.5">Your foundational setup and preferences.</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-outline uppercase tracking-widest pl-1">Monthly Income</label>
-            <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-primary font-bold">{CURRENCY_SYMBOL}</span>
-              <input 
-                type="number"
-                value={user.income}
-                onChange={(e) => updateUser({ income: parseInt(e.target.value) || 0 })}
-                className="w-full pl-8 pr-4 py-3 bg-surface-container-low border border-outline-variant/50 rounded-xl font-bold text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-outline uppercase tracking-widest pl-1">City Tier</label>
-            <select 
-              value={user.cityTier}
-              onChange={(e) => updateUser({ cityTier: e.target.value as any })}
-              className="w-full px-4 py-3 bg-surface-container-low border border-outline-variant/50 rounded-xl font-bold text-sm focus:ring-2 focus:ring-primary outline-none transition-all appearance-none"
-            >
-              <option value="Metro">Metro (Highest)</option>
-              <option value="Tier 1">Tier 1 (Major)</option>
-              <option value="Tier 2">Tier 2 (Developing)</option>
-              <option value="Tier 3">Tier 3 (Small)</option>
-            </select>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-outline uppercase tracking-widest pl-1">Monthly Rent</label>
-            <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-outline font-bold">{CURRENCY_SYMBOL}</span>
-              <input 
-                type="number"
-                value={user.fixedRent}
-                onChange={(e) => updateUser({ fixedRent: parseInt(e.target.value) || 0 })}
-                className="w-full pl-8 pr-4 py-3 bg-surface-container-low border border-outline-variant/50 rounded-xl font-bold text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-outline uppercase tracking-widest pl-1">Monthly EMIs</label>
-            <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-outline font-bold">{CURRENCY_SYMBOL}</span>
-              <input 
-                type="number"
-                value={user.fixedEMI}
-                onChange={(e) => updateUser({ fixedEMI: parseInt(e.target.value) || 0 })}
-                className="w-full pl-8 pr-4 py-3 bg-surface-container-low border border-outline-variant/50 rounded-xl font-bold text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-outline uppercase tracking-widest pl-1">Primary Goal</label>
-            <select 
-              value={user.primaryGoal}
-              onChange={(e) => updateUser({ primaryGoal: e.target.value })}
-              className="w-full px-4 py-3 bg-surface-container-low border border-outline-variant/50 rounded-xl font-bold text-sm focus:ring-2 focus:ring-primary outline-none transition-all appearance-none"
-            >
-              <option value="Save More Money">Save More Money</option>
-              <option value="Track Detailed Spending">Track Detailed Spending</option>
-              <option value="Reach a Specific Goal">Reach a Specific Goal</option>
-              <option value="Optimize Investments">Optimize Investments</option>
-            </select>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-[10px] font-black text-outline uppercase tracking-widest pl-1">Spending Focus</label>
-            <input 
-              type="text"
-              value={user.biggestCategory}
-              onChange={(e) => updateUser({ biggestCategory: e.target.value })}
-              className="w-full px-4 py-3 bg-surface-container-low border border-outline-variant/50 rounded-xl font-bold text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
-              placeholder="e.g. Travel, Food"
-            />
-          </div>
-        </div>
-      </section>
+       
 
       {/* Bank Statement Upload Section */}
       <section className="bg-surface-container-lowest p-8 rounded-2xl border border-outline-variant/30 soft-shadow">
@@ -365,7 +273,15 @@ export const Settings: React.FC = () => {
           { icon: Fingerprint, label: 'Fingerprint Lock', desc: 'Biometric security layer.' },
           { icon: CreditCard, label: 'Linked Accounts', desc: 'Plaid & Bank connections.' },
         ].map((item, i) => (
-          <button key={i} className="flex items-center justify-between p-6 bg-surface-container-lowest border border-outline-variant/30 rounded-2xl soft-shadow hover:bg-surface-container-low transition-all group text-left">
+          <button 
+            key={i} 
+            onClick={() => {
+              if (item.label === 'Linked Accounts') {
+                setCurrentPage('linked-accounts');
+              }
+            }}
+            className="flex items-center justify-between p-6 bg-surface-container-lowest border border-outline-variant/30 rounded-2xl soft-shadow hover:bg-surface-container-low transition-all group text-left"
+          >
             <div className="flex items-center gap-5">
               <div className="w-10 h-10 rounded-xl bg-surface-container-high flex items-center justify-center text-primary group-hover:bg-white transition-colors">
                 <item.icon className="w-5 h-5" />

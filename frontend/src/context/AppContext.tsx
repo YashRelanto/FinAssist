@@ -189,23 +189,113 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     { id: '1', title: 'Monthly Summary', date: 'Sept 2023', size: '2.4 MB', type: 'PDF' },
   ]);
 
-  const updateUser = (u: Partial<UserProfile>) => setUser(prev => ({ ...prev, ...u }));
+  const updateUser = (u: Partial<UserProfile>) => {
+    setUser(prev => {
+      const newUser = { ...prev, ...u };
+      
+      // If user is logged in, sync changes to the database
+      if (newUser.isAuthenticated && newUser.userId) {
+        fetch(`http://localhost:8000/api/users/${newUser.userId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            full_name: newUser.name,
+            email: newUser.email,
+            onboarded: newUser.onboarded,
+            income: newUser.income,
+            city_tier: newUser.cityTier,
+            fixed_rent: newUser.fixedRent,
+            fixed_emi: newUser.fixedEMI,
+            biggest_category: newUser.biggestCategory,
+            primary_goal: newUser.primaryGoal
+          })
+        }).catch(err => console.error("Failed to sync profile changes:", err));
+      }
+      
+      return newUser;
+    });
+  };
+
+  // Check for Supabase OAuth redirect parameters in URL hash
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash && hash.includes("access_token=")) {
+      const params = new URLSearchParams(hash.substring(1)); // Remove the leading '#'
+      const accessToken = params.get("access_token");
+      if (accessToken) {
+        try {
+          const base64Url = accessToken.split('.')[1];
+          const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+          const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+              return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+          }).join(''));
+          const decoded = JSON.parse(jsonPayload);
+          
+          if (decoded && decoded.sub && decoded.email) {
+            const user_id = decoded.sub;
+            const email = decoded.email;
+            const full_name = decoded.user_metadata?.full_name || decoded.email.split('@')[0];
+            
+            fetch('http://localhost:8000/api/oauth-login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ user_id, email, full_name })
+            })
+            .then(res => res.json())
+            .then(data => {
+              if (data.success) {
+                // Clear the hash from the URL so it looks clean
+                window.history.replaceState(null, "", window.location.pathname);
+                
+                setUser({
+                  isAuthenticated: true,
+                  userId: user_id,
+                  name: full_name,
+                  email: email,
+                  onboarded: data.user.onboarded || false,
+                  income: data.user.income || 0,
+                  cityTier: data.user.city_tier || 'Metro',
+                  fixedRent: data.user.fixed_rent || 0,
+                  fixedEMI: data.user.fixed_emi || 0,
+                  biggestCategory: data.user.biggest_category || '',
+                  primaryGoal: data.user.primary_goal || '',
+                  statementUploaded: false
+                });
+              }
+            })
+            .catch(err => {
+              console.error("Backend OAuth login failed:", err);
+            });
+          }
+        } catch (e) {
+          console.error("Failed to parse JWT from hash:", e);
+        }
+      }
+    }
+  }, []);
 
   const loadTransactions = () => {
     if (user.isAuthenticated && user.userId) {
+      // Clear mock data for signed-in user
+      setTransactions([]);
+      setGoals([]);
+      setReports([]);
+
       fetch(`http://localhost:8000/api/transactions?user_id=${user.userId}`)
         .then(res => {
           if (!res.ok) throw new Error("Could not load transactions from database");
           return res.json();
         })
         .then(data => {
-          if (Array.isArray(data)) {
-            // Only overwrite if we actually got data, otherwise keep defaults
-            if (data.length > 0) setTransactions(data);
+          if (Array.isArray(data) && data.length > 0) {
+            setTransactions(data);
+          } else {
+            setTransactions([]);
           }
         })
         .catch(err => {
-          console.warn("Using simulated transactions (FastAPI backend offline or database empty):", err);
+          console.warn("FastAPI backend offline or database empty, using empty transactions for real user:", err);
+          setTransactions([]);
         });
     }
   };
@@ -308,6 +398,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const signOut = () => {
     setUser(initialUser);
+    setTransactions(initialTransactions);
+    setGoals(initialGoals);
+    setReports([
+      { id: '1', title: 'Monthly Summary', date: 'Sept 2023', size: '2.4 MB', type: 'PDF' },
+    ]);
     setCurrentPage('dashboard');
   };
 

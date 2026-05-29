@@ -1,4 +1,5 @@
 import React from 'react';
+import { useAppContext } from '../context/AppContext';
 import { TrendingUp, Verified, History, Download, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import { AreaChart, Area, XAxis, ResponsiveContainer, Tooltip, PieChart, Pie, Cell } from 'recharts';
 import { cn, formatCurrency } from '../lib/utils';
@@ -29,6 +30,19 @@ const holdings = [
 ];
 
 export const Investments: React.FC = () => {
+  const { user } = useAppContext();
+  const isAuth = user.isAuthenticated;
+
+  // Filter or clear mock listings if logged in
+  const displayChartData = isAuth ? [] : chartData;
+  const displayAllocation = isAuth ? [] : allocationData;
+  const displayHoldings = isAuth ? [] : holdings;
+
+  const totalInvested = isAuth ? 0 : 125000;
+  const currentValue = isAuth ? 0 : 142350;
+  const totalGain = isAuth ? 0 : 17350;
+  const portfolioCagr = isAuth ? '0.0%' : '8.2%';
+
   return (
     <div className="space-y-8">
       <header>
@@ -38,10 +52,10 @@ export const Investments: React.FC = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {[
-          { label: 'Total Invested', val: formatCurrency(125000), icon: History, sub: 'Lifetime contributions', trend: null },
-          { label: 'Current Value', val: formatCurrency(142350), icon: TrendingUp, sub: '+2.4% this month', trend: 'up' },
-          { label: 'Total Gain', val: `+${formatCurrency(17350)}`, sub: '13.8% Overall', trend: 'up', secondary: true },
-          { label: 'Portfolio CAGR', val: '8.2%', icon: Verified, sub: 'Annualized benchmark', trend: 'up' },
+          { label: 'Total Invested', val: formatCurrency(totalInvested), icon: History, sub: 'Lifetime contributions', trend: null },
+          { label: 'Current Value', val: formatCurrency(currentValue), icon: TrendingUp, sub: isAuth ? 'Awaiting portfolio data' : '+2.4% this month', trend: isAuth ? null : 'up' },
+          { label: 'Total Gain', val: totalGain >= 0 ? `+${formatCurrency(totalGain)}` : `-${formatCurrency(Math.abs(totalGain))}`, sub: isAuth ? '0% gain tracked' : '13.8% Overall', trend: isAuth ? null : 'up', secondary: !isAuth },
+          { label: 'Portfolio CAGR', val: portfolioCagr, icon: Verified, sub: 'Annualized benchmark', trend: isAuth ? null : 'up' },
         ].map((card, i) => (
           <div key={i} className="bg-surface-container-lowest p-6 rounded-2xl soft-shadow border border-outline-variant/30 hover-lift">
             <p className="text-[10px] font-bold text-outline uppercase tracking-[0.2em] mb-2">{card.label}</p>
@@ -65,51 +79,65 @@ export const Investments: React.FC = () => {
             </div>
           </div>
           <div className="h-[320px]">
-            <ResponsiveContainer width="100%" height="100%">
-               <AreaChart data={chartData}>
-                  <defs>
-                    <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#004ac6" stopOpacity={0.1}/>
-                      <stop offset="95%" stopColor="#004ac6" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>
-                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748B', fontWeight: 600 }} dy={10} />
-                  <Tooltip 
-                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                  />
-                  <Area type="monotone" dataKey="val" stroke="#004ac6" strokeWidth={3} fillOpacity={1} fill="url(#colorVal)" />
-               </AreaChart>
-            </ResponsiveContainer>
+            {displayChartData.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-outline text-sm font-medium">
+                 No investment activity logged. Sync your broker to populate charts.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                 <AreaChart data={displayChartData}>
+                    <defs>
+                      <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#004ac6" stopOpacity={0.1}/>
+                        <stop offset="95%" stopColor="#004ac6" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#64748B', fontWeight: 600 }} dy={10} />
+                    <Tooltip 
+                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                    />
+                    <Area type="monotone" dataKey="val" stroke="#004ac6" strokeWidth={3} fillOpacity={1} fill="url(#colorVal)" />
+                 </AreaChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
 
         <div className="lg:col-span-4 bg-surface-container-lowest p-8 rounded-2xl soft-shadow border border-outline-variant/30 flex flex-col">
           <h4 className="text-xl font-bold mb-8">Asset Allocation</h4>
           <div className="relative flex-1 flex flex-col items-center justify-center min-h-[250px]">
-             <ResponsiveContainer width="100%" height={240}>
-                <PieChart>
-                  <Pie
-                    data={allocationData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={70}
-                    outerRadius={90}
-                    paddingAngle={8}
-                    dataKey="value"
-                  >
-                    {allocationData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                </PieChart>
-             </ResponsiveContainer>
-             <div className="absolute flex flex-col items-center">
-                <span className="text-3xl font-bold">100%</span>
-                <span className="text-[10px] text-outline font-bold uppercase tracking-widest">Diversified</span>
-             </div>
+             {displayAllocation.length === 0 ? (
+               <div className="text-outline text-xs text-center font-medium">
+                  No assets to allocate
+               </div>
+             ) : (
+               <>
+                 <ResponsiveContainer width="100%" height={240}>
+                    <PieChart>
+                      <Pie
+                        data={displayAllocation}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={70}
+                        outerRadius={90}
+                        paddingAngle={8}
+                        dataKey="value"
+                      >
+                        {displayAllocation.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                    </PieChart>
+                 </ResponsiveContainer>
+                 <div className="absolute flex flex-col items-center">
+                    <span className="text-3xl font-bold">100%</span>
+                    <span className="text-[10px] text-outline font-bold uppercase tracking-widest">Diversified</span>
+                 </div>
+               </>
+             )}
           </div>
           <div className="grid grid-cols-2 gap-4 mt-8">
-            {allocationData.map((item, i) => (
+            {displayAllocation.map((item, i) => (
               <div key={i} className="flex flex-col gap-1">
                 <div className="flex items-center gap-2">
                   <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }}></div>
@@ -143,22 +171,30 @@ export const Investments: React.FC = () => {
                </tr>
             </thead>
             <tbody className="divide-y divide-outline-variant/20">
-              {holdings.map((stock, i) => (
-                <tr key={i} className="hover:bg-surface-container-low transition-colors duration-200">
-                  <td className="px-6 py-5 font-bold text-primary text-sm">{stock.ticker}</td>
-                  <td className="px-6 py-5 text-sm font-medium text-on-surface">{stock.name}</td>
-                  <td className="px-6 py-5 text-sm text-right font-medium">{stock.qty.toFixed(2)}</td>
-                  <td className="px-6 py-5 text-sm text-right text-outline font-medium">{formatCurrency(stock.avg)}</td>
-                  <td className="px-6 py-5 text-sm text-right font-bold text-on-surface">{formatCurrency(stock.price)}</td>
-                  <td className={cn("px-6 py-5 text-sm text-right font-bold flex items-center justify-end gap-1", stock.return > 0 ? "text-secondary" : "text-error")}>
-                    {stock.return > 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-                    {Math.abs(stock.return).toFixed(2)}%
-                  </td>
-                  <td className={cn("px-6 py-5 text-sm text-right font-bold", stock.gain > 0 ? "text-secondary" : "text-error")}>
-                    {stock.gain > 0 ? `+${formatCurrency(stock.gain)}` : `-${formatCurrency(Math.abs(stock.gain))}`}
+              {displayHoldings.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-6 py-12 text-center text-outline text-sm font-medium">
+                    No holdings found in active portfolio. Sync your statements under Settings to import transactions.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                displayHoldings.map((stock, i) => (
+                  <tr key={i} className="hover:bg-surface-container-low transition-colors duration-200">
+                    <td className="px-6 py-5 font-bold text-primary text-sm">{stock.ticker}</td>
+                    <td className="px-6 py-5 text-sm font-medium text-on-surface">{stock.name}</td>
+                    <td className="px-6 py-5 text-sm text-right font-medium">{stock.qty.toFixed(2)}</td>
+                    <td className="px-6 py-5 text-sm text-right text-outline font-medium">{formatCurrency(stock.avg)}</td>
+                    <td className="px-6 py-5 text-sm text-right font-bold text-on-surface">{formatCurrency(stock.price)}</td>
+                    <td className={cn("px-6 py-5 text-sm text-right font-bold flex items-center justify-end gap-1", stock.return > 0 ? "text-secondary" : "text-error")}>
+                      {stock.return > 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                      {Math.abs(stock.return).toFixed(2)}%
+                    </td>
+                    <td className={cn("px-6 py-5 text-sm text-right font-bold", stock.gain > 0 ? "text-secondary" : "text-error")}>
+                      {stock.gain > 0 ? `+${formatCurrency(stock.gain)}` : `-${formatCurrency(Math.abs(stock.gain))}`}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

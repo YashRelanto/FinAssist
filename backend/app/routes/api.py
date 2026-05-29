@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 from app.utils.supabase_client import supabase
 from datetime import datetime
 from collections import defaultdict
@@ -15,32 +16,199 @@ class RegisterRequest(BaseModel):
     email: str
     password: str
 
+async def get_user_with_profile(user_id: str, email: str, full_name: str) -> dict:
+    # 1. Fetch from public.users table
+    u_res = supabase.table("users").select("*").eq("user_id", user_id).execute()
+    if not u_res.data:
+        # User row missing, sync insert it!
+        u_res = supabase.table("users").insert({
+            "user_id": user_id,
+            "full_name": full_name,
+            "email": email
+        }).execute()
+        
+    user = u_res.data[0]
+    
+    # 2. Fetch from public.user_profiles table
+    p_res = supabase.table("user_profiles").select("*").eq("user_id", user_id).execute()
+    if not p_res.data:
+        # Profile row missing, sync insert a default one!
+        p_res = supabase.table("user_profiles").insert({
+            "user_id": user_id,
+            "onboarded": False,
+            "income": 0,
+            "city_tier": "Metro",
+            "fixed_rent": 0,
+            "fixed_emi": 0,
+            "biggest_category": "",
+            "primary_goal": ""
+        }).execute()
+        
+    profile = p_res.data[0]
+    
+    # 3. Merge and return unified dictionary
+    return {
+        "user_id": user["user_id"],
+        "full_name": user["full_name"],
+        "email": user["email"],
+        "onboarded": profile["onboarded"],
+        "income": float(profile["income"]),
+        "city_tier": profile["city_tier"],
+        "fixed_rent": float(profile["fixed_rent"]),
+        "fixed_emi": float(profile["fixed_emi"]),
+        "biggest_category": profile["biggest_category"],
+        "primary_goal": profile["primary_goal"]
+    }
+
 @router.post("/login")
 async def api_login(req: LoginRequest):
-    response = supabase.table("users").select("*").eq("email", req.email).eq("password", req.password).execute()
-    if not response.data:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    user = response.data[0]
-    return {"success": True, "message": "Login successful!", "user": user}
+    try:
+        # 1. Sign in with Supabase Auth
+        auth_res = supabase.auth.sign_in_with_password({
+            "email": req.email,
+            "password": req.password
+        })
+        
+        if not auth_res.user:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+            
+        # 2. Retrieve user record with profile from database
+        user = await get_user_with_profile(
+            auth_res.user.id, 
+            req.email, 
+            auth_res.user.user_metadata.get("full_name", req.email.split('@')[0]) if auth_res.user.user_metadata else req.email.split('@')[0]
+        )
+        user["email_confirmed"] = True
+            
+        return {"success": True, "message": "Login successful!", "user": user}
+    except Exception as e:
+        print(f"Error in api_login: {e}")
+        err_msg = str(e)
+        if "email not confirmed" in err_msg.lower() or "email_not_confirmed" in err_msg.lower() or "confirm" in err_msg.lower():
+            raise HTTPException(status_code=400, detail="email_not_confirmed")
+            
+        detail_msg = "Invalid credentials"
+        if "Invalid login credentials" in str(e) or "invalid" in str(e).lower():
+            detail_msg = "Invalid email or password"
+        elif hasattr(e, 'message'):
+            detail_msg = e.message
+        raise HTTPException(status_code=401, detail=detail_msg)
 
 @router.post("/register")
 async def api_register(req: RegisterRequest):
-    # Check if exists
-    check = supabase.table("users").select("*").eq("email", req.email).execute()
-    if check.data:
-        raise HTTPException(status_code=400, detail="User already exists")
-    
-    response = supabase.table("users").insert({
-        "full_name": req.full_name,
-        "email": req.email,
-        "password": req.password
-    }).execute()
-    
-    if not response.data:
-        raise HTTPException(status_code=500, detail="Registration failed")
+    try:
+        # Check if already exists in public table
+        check = supabase.table("users").select("*").eq("email", req.email).execute()
+        if check.data:
+            raise HTTPException(status_code=400, detail="User already exists")
         
-    return {"success": True, "message": "Registration successful!", "user": response.data[0]}
+        # 1. Sign up with Supabase Auth
+        auth_res = supabase.auth.sign_up({
+            "email": req.email,
+            "password": req.password,
+            "options": {
+                "data": {
+                    "full_name": req.full_name
+                }
+            }
+        })
+        
+        if not auth_res.user:
+            raise HTTPException(status_code=500, detail="Failed to create auth user")
+            
+        # Check if email confirmation is required/pending
+        email_confirmed = False
+        if auth_res.session is not None:
+            email_confirmed = True
+        elif auth_res.user and auth_res.user.email_confirmed_at:
+            email_confirmed = True
+
+        # 2. Retrieve user record with profile (auto-registers them in users & profiles tables)
+        user = await get_user_with_profile(auth_res.user.id, req.email, req.full_name)
+        user["email_confirmed"] = email_confirmed
+            
+        return {"success": True, "message": "Registration successful!", "user": user}
+    except Exception as e:
+        print(f"Error in api_register: {e}")
+        if hasattr(e, 'message'):
+            raise HTTPException(status_code=400, detail=e.message)
+        raise HTTPException(status_code=500, detail=str(e))
+
+class UserUpdateRequest(BaseModel):
+    full_name: str
+    email: str
+    onboarded: Optional[bool] = None
+    income: Optional[float] = None
+    city_tier: Optional[str] = None
+    fixed_rent: Optional[float] = None
+    fixed_emi: Optional[float] = None
+    biggest_category: Optional[str] = None
+    primary_goal: Optional[str] = None
+
+@router.put("/users/{user_id}")
+async def update_user_profile(user_id: str, req: UserUpdateRequest):
+    try:
+        # 1. Update basic user info in public.users table
+        response = supabase.table("users").update({
+            "full_name": req.full_name,
+            "email": req.email
+        }).eq("user_id", user_id).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=404, detail="User not found or update failed")
+            
+        # 2. Update/Upsert onboarding metrics in public.user_profiles table
+        profile_data = {}
+        if req.onboarded is not None: profile_data["onboarded"] = req.onboarded
+        if req.income is not None: profile_data["income"] = req.income
+        if req.city_tier is not None: profile_data["city_tier"] = req.city_tier
+        if req.fixed_rent is not None: profile_data["fixed_rent"] = req.fixed_rent
+        if req.fixed_emi is not None: profile_data["fixed_emi"] = req.fixed_emi
+        if req.biggest_category is not None: profile_data["biggest_category"] = req.biggest_category
+        if req.primary_goal is not None: profile_data["primary_goal"] = req.primary_goal
+        
+        if profile_data:
+            prof_check = supabase.table("user_profiles").select("*").eq("user_id", user_id).execute()
+            if prof_check.data:
+                supabase.table("user_profiles").update(profile_data).eq("user_id", user_id).execute()
+            else:
+                profile_data["user_id"] = user_id
+                supabase.table("user_profiles").insert(profile_data).execute()
+            
+        return {"success": True, "message": "Profile updated successfully", "user": response.data[0]}
+    except Exception as e:
+        print(f"Error updating user profile: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class OAuthLoginRequest(BaseModel):
+    user_id: str
+    email: str
+    full_name: str
+
+@router.post("/oauth-login")
+async def api_oauth_login(req: OAuthLoginRequest):
+    try:
+        # Check if user already exists
+        check = supabase.table("users").select("*").eq("email", req.email).execute()
+        if check.data:
+            user = check.data[0]
+            # Self-healing mismatch correction: update old user_id to match Supabase Auth UUID
+            if user["user_id"] != req.user_id:
+                try:
+                    supabase.table("users").update({"user_id": req.user_id}).eq("email", req.email).execute()
+                except Exception as sync_err:
+                    print(f"Foreign key prevented direct update, deleting obsolete mismatch row: {sync_err}")
+                    supabase.table("users").delete().eq("email", req.email).execute()
+            
+            user_profile = await get_user_with_profile(req.user_id, req.email, req.full_name)
+            return {"success": True, "message": "OAuth login successful", "user": user_profile}
+        
+        # User does not exist, sync insert both user and user profile
+        user_profile = await get_user_with_profile(req.user_id, req.email, req.full_name)
+        return {"success": True, "message": "OAuth registration successful", "user": user_profile}
+    except Exception as e:
+        print(f"Error in oauth-login: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/dashboard-summary")
 async def get_dashboard_summary(user_id: str):
@@ -283,10 +451,43 @@ async def delete_transaction(trans_id: str):
         print(f"Error deleting transaction: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+class AccountCreate(BaseModel):
+    user_id: str
+    account_name: str
+    account_type: str
+    current_balance: float = 0.0
+
+@router.post("/accounts")
+async def create_account(req: AccountCreate):
+    try:
+        response = supabase.table("accounts").insert({
+            "user_id": req.user_id,
+            "account_name": req.account_name,
+            "account_type": req.account_type,
+            "current_balance": req.current_balance
+        }).execute()
+        
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Failed to create account")
+            
+        return {"success": True, "message": "Account created successfully", "data": response.data[0]}
+    except Exception as e:
+        print(f"Error creating account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/accounts")
 async def get_accounts(user_id: str):
     res = supabase.table("accounts").select("*").eq("user_id", user_id).execute()
     return {"success": True, "data": res.data}
+
+@router.delete("/accounts/{account_id}")
+async def delete_account(account_id: str):
+    try:
+        supabase.table("accounts").delete().eq("account_id", account_id).execute()
+        return {"success": True, "message": "Account deleted successfully"}
+    except Exception as e:
+        print(f"Error deleting account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/reports")
 async def get_reports():

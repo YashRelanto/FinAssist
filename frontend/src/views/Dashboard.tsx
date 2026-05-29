@@ -1,5 +1,7 @@
 import React from 'react';
+
 import { useAppContext } from '../context/AppContext';
+
 import { SummaryCards } from '../components/Dashboard/SummaryCards';
 import { FinancialPerformanceChart } from '../components/Dashboard/FinancialPerformanceChart';
 import { LinkedAccounts } from '../components/Dashboard/LinkedAccounts';
@@ -10,30 +12,48 @@ import { RecentTransactions } from '../components/Dashboard/RecentTransactions';
 import { QuickAddForm } from '../components/Dashboard/QuickAddForm';
 import { AIInsights } from '../components/Dashboard/AIInsights';
 
+import { AccountModal } from '../components/AccountModal';
+
 export const Dashboard: React.FC = () => {
   const { user } = useAppContext();
+
   const [dashboardData, setDashboardData] = React.useState<any>(null);
   const [loading, setLoading] = React.useState(true);
-  
+  const [isAccountModalOpen, setIsAccountModalOpen] = React.useState(false);
+
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`http://localhost:8000/api/dashboard-summary?user_id=${user?.id}`);
+
+      const response = await fetch(
+        `http://localhost:8000/api/dashboard-summary?user_id=${user?.id}`
+      );
+
       const data = await response.json();
+
       if (data.success) {
         setDashboardData(data);
       }
     } catch (error) {
-      console.error("Failed to connect to backend dashboard API", error);
+      console.error(
+        'Failed to connect to backend dashboard API',
+        error
+      );
     } finally {
       setLoading(false);
     }
   };
 
+  const fetchAccounts = async () => {
+    await fetchDashboardData();
+  };
+
   React.useEffect(() => {
-    if (user?.isAuthenticated) fetchDashboardData();
+    if (user?.isAuthenticated) {
+      fetchDashboardData();
+    }
   }, [user]);
-  
+
   if (loading && !dashboardData) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -44,52 +64,78 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="space-y-8 pb-10">
-      {/* Summary Cards - Live */}
+      
+      {/* Summary Cards */}
       <SummaryCards data={dashboardData?.summary} />
 
-      {/* Linked Accounts & Quick Actions - Placeholders */}
+      {/* Linked Accounts + Quick Actions */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
         <div className="lg:col-span-12">
           <div className="flex items-center justify-between mb-4">
-             <h3 className="text-sm font-black text-outline uppercase tracking-[0.2em] px-2">Your Financial Hub</h3>
-             <button className="text-[10px] font-black text-primary uppercase tracking-widest hover:underline">Manage Accounts</button>
+            <h3 className="text-sm font-black text-outline uppercase tracking-[0.2em] px-2">
+              Your Financial Hub
+            </h3>
+
+            <button
+              onClick={() => setIsAccountModalOpen(true)}
+              className="text-[10px] font-black text-primary uppercase tracking-widest hover:underline"
+            >
+              Manage Accounts
+            </button>
           </div>
         </div>
 
-        {/* Linked Accounts Card */}
+        {/* Linked Accounts */}
         <LinkedAccounts accounts={dashboardData?.accounts} />
 
-        {/* Quick Add Action Card */}
+        {/* Quick Actions */}
         <QuickActionCard />
       </div>
 
-      {/* Main Charts area */}
+      {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Financial Performance - Live */}
-        <FinancialPerformanceChart data={dashboardData?.chart_data} />
+        
+        {/* Financial Performance */}
+        <FinancialPerformanceChart
+          data={dashboardData?.chart_data}
+        />
 
-        {/* Expense Breakdown - Placeholder */}
+        {/* Expense Breakdown */}
         <ExpenseBreakdown />
       </div>
 
+      {/* Budget + Recent Transactions */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Budget Utilization - Placeholder */}
+        
+        {/* Budget Utilization */}
         <BudgetUtilization />
 
-        {/* Recent Transactions - Live */}
-        <RecentTransactions transactions={dashboardData?.recent_transactions} />
+        {/* Recent Transactions */}
+        <RecentTransactions
+          transactions={dashboardData?.recent_transactions}
+        />
       </div>
 
+      {/* Quick Add + AI Insights */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-         {/* Quick Add Form - Live */}
-         <QuickAddForm 
-            onSuccess={fetchDashboardData} 
-            accounts={dashboardData?.accounts}
-         />
+        
+        {/* Quick Add Form */}
+        <QuickAddForm
+          onSuccess={fetchDashboardData}
+          accounts={dashboardData?.accounts}
+        />
 
-        {/* AI Insights Card - Placeholder */}
+        {/* AI Insights */}
         <AIInsights />
       </div>
+
+      {/* Account Modal */}
+      <AccountModal
+        isOpen={isAccountModalOpen}
+        onClose={() => setIsAccountModalOpen(false)}
+        onSuccess={fetchAccounts}
+      />
     </div>
   );
 };
