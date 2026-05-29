@@ -87,7 +87,10 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Linked Accounts */}
-        <LinkedAccounts accounts={dashboardData?.accounts} />
+        <LinkedAccounts 
+          accounts={dashboardData?.accounts} 
+          onAddAccount={() => setIsAccountModalOpen(true)}
+        />
 
         {/* Quick Actions */}
         <QuickActionCard />

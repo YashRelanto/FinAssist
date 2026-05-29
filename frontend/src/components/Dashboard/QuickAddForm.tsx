@@ -35,24 +35,27 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts 
 
     setLoading(true);
     try {
+      const activeUserId = user.id || user.userId || "";
       const response = await fetch('http://localhost:8000/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: user.id,
+          user_id: activeUserId,
           account_id: formData.accountId,
           amount: Math.abs(parseFloat(formData.amount)),
           transaction_type: formData.type,
           merchant_name: formData.description || 'Quick Add',
           description: formData.description || 'Quick Add',
           main_category: formData.mainCategory,
+          category_name: formData.mainCategory,
           sub_category: formData.subCategory || 'General',
+          sub_category_name: formData.subCategory || 'General',
           transaction_date: formData.date
         })
       });
 
       const data = await response.json();
-      if (data.success) {
+      if (response.ok || data.success) {
         setSuccess(true);
         setFormData({
           description: '',
@@ -66,11 +69,14 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts 
         if (onSuccess) onSuccess();
         setTimeout(() => setSuccess(false), 3000);
       } else {
-        alert(data.detail || "Failed to add transaction");
+        const errorDetail = data.detail 
+          ? (typeof data.detail === 'object' ? JSON.stringify(data.detail) : data.detail) 
+          : "Failed to add transaction";
+        alert(errorDetail);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Failed to add transaction", error);
-      alert("Error connecting to backend");
+      alert(error.message || "Error connecting to backend");
     } finally {
       setLoading(false);
     }

@@ -194,11 +194,29 @@ async def api_oauth_login(req: OAuthLoginRequest):
             user = check.data[0]
             # Self-healing mismatch correction: update old user_id to match Supabase Auth UUID
             if user["user_id"] != req.user_id:
+                old_user_id = user["user_id"]
                 try:
-                    supabase.table("users").update({"user_id": req.user_id}).eq("email", req.email).execute()
+                    # 1. Update the email of the old user row to free up the unique constraint
+                    temp_email = f"obsolete_{old_user_id}@{req.email}"
+                    supabase.table("users").update({"email": temp_email}).eq("user_id", old_user_id).execute()
+                    
+                    # 2. Insert the new user row with the correct user_id and email
+                    supabase.table("users").insert({
+                        "user_id": req.user_id,
+                        "full_name": req.full_name,
+                        "email": req.email,
+                        "password": "OAUTH_GOOGLE"
+                    }).execute()
+                    
+                    # 3. Update referencing tables
+                    supabase.table("user_profiles").update({"user_id": req.user_id}).eq("user_id", old_user_id).execute()
+                    supabase.table("accounts").update({"user_id": req.user_id}).eq("user_id", old_user_id).execute()
+                    supabase.table("transactions").update({"user_id": req.user_id}).eq("user_id", old_user_id).execute()
+                    
+                    # 4. Safely delete obsolete mismatch row
+                    supabase.table("users").delete().eq("user_id", old_user_id).execute()
                 except Exception as sync_err:
-                    print(f"Foreign key prevented direct update, deleting obsolete mismatch row: {sync_err}")
-                    supabase.table("users").delete().eq("email", req.email).execute()
+                    print(f"Failed self-healing user_id update: {sync_err}")
             
             user_profile = await get_user_with_profile(req.user_id, req.email, req.full_name)
             return {"success": True, "message": "OAuth login successful", "user": user_profile}
@@ -308,26 +326,65 @@ class TransactionCreate(BaseModel):
 @router.post("/transactions")
 async def create_transaction(req: TransactionCreate):
     try:
-        # 1. Map Category
+        # 1. Map Category Case-Insensitively
         cat_res = supabase.table("categories")\
             .select("category_id")\
-            .eq("main_category", req.main_category)\
-            .eq("sub_category", req.sub_category)\
+            .ilike("main_category", req.main_category)\
+            .ilike("sub_category", req.sub_category)\
             .execute()
         
         if not cat_res.data:
             cat_res = supabase.table("categories")\
                 .select("category_id")\
-                .eq("main_category", req.main_category)\
-                .eq("sub_category", "General")\
+                .ilike("main_category", req.main_category)\
+                .ilike("sub_category", "General")\
                 .execute()
         
         category_id = cat_res.data[0]["category_id"] if cat_res.data else None
         
-        # 2. Get Account Balance & Calculate New Balance
-        acc_res = supabase.table("accounts").select("current_balance").eq("account_id", req.account_id).execute()
-        if not acc_res.data:
-            raise HTTPException(status_code=404, detail="Account not found")
+        if not category_id:
+            # Fall back to "Others", "General" if category mapping failed to prevent NOT NULL database violation
+            fallback_res = supabase.table("categories")\
+                .select("category_id")\
+                .ilike("main_category", "Others")\
+                .ilike("sub_category", "General")\
+                .execute()
+            category_id = fallback_res.data[0]["category_id"] if fallback_res.data else None
+        
+        # 2. Resolve Account ID dynamically (supporting UUID or account name, with auto-create fallback)
+        account_id = req.account_id
+        import uuid
+        is_uuid = False
+        try:
+            uuid.UUID(account_id)
+            is_uuid = True
+        except ValueError:
+            pass
+            
+        acc_res = None
+        if is_uuid:
+            acc_res = supabase.table("accounts").select("*").eq("account_id", account_id).execute()
+            
+        if not acc_res or not acc_res.data:
+            # Query by name
+            acc_name = req.account_id if not is_uuid else "Primary Checking"
+            acc_check = supabase.table("accounts").select("*").eq("user_id", req.user_id).eq("account_name", acc_name).execute()
+            if acc_check.data:
+                acc_res = acc_check
+                account_id = acc_check.data[0]["account_id"]
+            else:
+                # Create the account on the fly!
+                new_acc = supabase.table("accounts").insert({
+                    "user_id": req.user_id,
+                    "account_name": acc_name,
+                    "account_type": "checking",
+                    "current_balance": 0.0
+                }).execute()
+                if new_acc.data:
+                    acc_res = new_acc
+                    account_id = new_acc.data[0]["account_id"]
+                else:
+                    raise HTTPException(status_code=500, detail="Failed to auto-create account")
         
         curr_bal = float(acc_res.data[0]["current_balance"])
         # In this DB schema, amount is stored as absolute, type handles sign
@@ -336,7 +393,7 @@ async def create_transaction(req: TransactionCreate):
         # 3. Insert Transaction
         trans_data = {
             "user_id": req.user_id,
-            "account_id": req.account_id,
+            "account_id": account_id,
             "category_id": category_id,
             "amount": req.amount,
             "transaction_type": req.transaction_type,
@@ -349,7 +406,7 @@ async def create_transaction(req: TransactionCreate):
         supabase.table("transactions").insert(trans_data).execute()
         
         # 4. Update Account Balance
-        supabase.table("accounts").update({"current_balance": new_bal}).eq("account_id", req.account_id).execute()
+        supabase.table("accounts").update({"current_balance": new_bal}).eq("account_id", account_id).execute()
         
         return {"success": True, "message": "Transaction added successfully", "new_balance": new_bal}
         
@@ -489,6 +546,211 @@ async def delete_account(account_id: str):
         print(f"Error deleting account: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+class BudgetCreate(BaseModel):
+    user_id: str
+    category_name: str
+    budget_name: str
+    amount: float
+    period: str = "monthly"
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    alert_threshold: float = 80.0
+
+class GoalCreate(BaseModel):
+    user_id: str
+    goal_name: str
+    description: Optional[str] = ""
+    target_amount: float
+    current_amount: float = 0.0
+    target_date: str
+    status: str = "active"
+
+@router.get("/budgets")
+async def get_budgets(user_id: str):
+    try:
+        res = supabase.table("budgets").select("*, categories(main_category, sub_category)").eq("user_id", user_id).execute()
+        formatted = []
+        for b in res.data:
+            cat = b.get("categories", {}) or {}
+            formatted.append({
+                "id": b["budget_id"],
+                "userId": b["user_id"],
+                "categoryId": b["category_id"],
+                "categoryName": cat.get("main_category", "Others"),
+                "budgetName": b["budget_name"],
+                "amount": float(b["amount"]) if b["amount"] is not None else 0.0,
+                "period": b["period"],
+                "startDate": b["start_date"],
+                "endDate": b["end_date"],
+                "alertThreshold": float(b["alert_threshold"]) if b["alert_threshold"] is not None else 80.0
+            })
+        return {"success": True, "data": formatted}
+    except Exception as e:
+        print(f"Error fetching budgets: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/budgets")
+async def create_budget(req: BudgetCreate):
+    try:
+        cat_res = supabase.table("categories")\
+            .select("category_id")\
+            .ilike("main_category", req.category_name)\
+            .ilike("sub_category", "General")\
+            .execute()
+        
+        if not cat_res.data:
+            cat_res = supabase.table("categories")\
+                .select("category_id")\
+                .ilike("main_category", "Others")\
+                .ilike("sub_category", "General")\
+                .execute()
+                
+        category_id = cat_res.data[0]["category_id"] if cat_res.data else None
+        
+        start_date = req.start_date
+        if not start_date:
+            start_date = datetime.now().strftime("%Y-%m-%d")
+            
+        end_date = req.end_date
+        if not end_date:
+            from datetime import timedelta
+            end_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+            
+        insert_data = {
+            "user_id": req.user_id,
+            "category_id": category_id,
+            "budget_name": req.budget_name,
+            "amount": req.amount,
+            "period": req.period,
+            "start_date": start_date,
+            "end_date": end_date,
+            "alert_threshold": req.alert_threshold
+        }
+        
+        res = supabase.table("budgets").insert(insert_data).execute()
+        if not res.data:
+            raise HTTPException(status_code=500, detail="Failed to create budget")
+        return {"success": True, "data": res.data[0]}
+    except Exception as e:
+        print(f"Error creating budget: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/budgets/{budget_id}")
+async def update_budget(budget_id: str, req: BudgetCreate):
+    try:
+        cat_res = supabase.table("categories")\
+            .select("category_id")\
+            .ilike("main_category", req.category_name)\
+            .ilike("sub_category", "General")\
+            .execute()
+            
+        category_id = cat_res.data[0]["category_id"] if cat_res.data else None
+        
+        start_date = req.start_date
+        if not start_date:
+            start_date = datetime.now().strftime("%Y-%m-%d")
+            
+        end_date = req.end_date
+        if not end_date:
+            from datetime import timedelta
+            end_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+            
+        update_data = {
+            "budget_name": req.budget_name,
+            "amount": req.amount,
+            "period": req.period,
+            "start_date": start_date,
+            "end_date": end_date,
+            "alert_threshold": req.alert_threshold
+        }
+        if category_id:
+            update_data["category_id"] = category_id
+            
+        res = supabase.table("budgets").update(update_data).eq("budget_id", budget_id).execute()
+        return {"success": True, "data": res.data[0] if res.data else None}
+    except Exception as e:
+        print(f"Error updating budget: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/budgets/{budget_id}")
+async def delete_budget(budget_id: str):
+    try:
+        supabase.table("budgets").delete().eq("budget_id", budget_id).execute()
+        return {"success": True, "message": "Budget deleted successfully"}
+    except Exception as e:
+        print(f"Error deleting budget: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/goals")
+async def get_goals(user_id: str):
+    try:
+        res = supabase.table("goals").select("*").eq("user_id", user_id).execute()
+        formatted = []
+        for g in res.data:
+            formatted.append({
+                "id": g["goal_id"],
+                "userId": g["user_id"],
+                "label": g["goal_name"],
+                "sub": g["description"] or "",
+                "target": float(g["target_amount"]) if g["target_amount"] is not None else 0.0,
+                "current": float(g["current_amount"]) if g["current_amount"] is not None else 0.0,
+                "date": g["target_date"],
+                "status": g["status"],
+                "icon": "Target",
+                "color": "bg-primary"
+            })
+        return {"success": True, "data": formatted}
+    except Exception as e:
+        print(f"Error fetching goals: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/goals")
+async def create_goal(req: GoalCreate):
+    try:
+        insert_data = {
+            "user_id": req.user_id,
+            "goal_name": req.goal_name,
+            "description": req.description,
+            "target_amount": req.target_amount,
+            "current_amount": req.current_amount,
+            "target_date": req.target_date,
+            "status": req.status
+        }
+        res = supabase.table("goals").insert(insert_data).execute()
+        if not res.data:
+            raise HTTPException(status_code=500, detail="Failed to create goal")
+        return {"success": True, "data": res.data[0]}
+    except Exception as e:
+        print(f"Error creating goal: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/goals/{goal_id}")
+async def update_goal(goal_id: str, req: GoalCreate):
+    try:
+        update_data = {
+            "goal_name": req.goal_name,
+            "description": req.description,
+            "target_amount": req.target_amount,
+            "current_amount": req.current_amount,
+            "target_date": req.target_date,
+            "status": req.status
+        }
+        res = supabase.table("goals").update(update_data).eq("goal_id", goal_id).execute()
+        return {"success": True, "data": res.data[0] if res.data else None}
+    except Exception as e:
+        print(f"Error updating goal: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/goals/{goal_id}")
+async def delete_goal(goal_id: str):
+    try:
+        supabase.table("goals").delete().eq("goal_id", goal_id).execute()
+        return {"success": True, "message": "Goal deleted successfully"}
+    except Exception as e:
+        print(f"Error deleting goal: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/reports")
 async def get_reports():
     return {"success": True, "message": "Reports endpoint ready"}
+

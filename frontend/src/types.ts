@@ -1,5 +1,6 @@
 
 export interface UserProfile {
+  id?: string;
   userId?: string;
   name: string;
   email: string;
@@ -61,3 +62,17 @@ export interface HeatmapData {
   date: string;
   count: number; // number of transactions/actions on that day
 }
+
+export interface Budget {
+  id: string;
+  userId: string;
+  categoryId: string;
+  categoryName: string;
+  budgetName: string;
+  amount: number;
+  period: string;
+  startDate: string;
+  endDate: string;
+  alertThreshold: number;
+}
+

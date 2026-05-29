@@ -1,6 +1,6 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Transaction, Goal, Category, Report, HeatmapData, UserProfile } from '../types';
+import { Transaction, Goal, Category, Report, HeatmapData, UserProfile, Budget } from '../types';
 import { format, subDays, eachDayOfInterval, startOfYear, endOfYear } from 'date-fns';
 
 interface AppContextType {
@@ -13,6 +13,13 @@ interface AppContextType {
   updateTransaction: (id: string, t: Partial<Transaction>) => void;
   deleteTransaction: (id: string) => void;
   
+  budgets: Budget[];
+  addBudget: (b: Omit<Budget, 'id'>) => void;
+  updateBudget: (id: string, b: Partial<Budget>) => void;
+  deleteBudget: (id: string) => void;
+  loadBudgets: () => void;
+  loadGoals: () => void;
+
   goals: Goal[];
   addGoal: (g: Omit<Goal, 'id'>) => void;
   updateGoal: (id: string, g: Partial<Goal>) => void;
@@ -43,6 +50,7 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const initialUser: UserProfile = {
+  id: '',
   name: 'Guest User',
   email: '',
   isAuthenticated: false,
@@ -182,6 +190,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [user, setUser] = useState<UserProfile>(initialUser);
   const [transactions, setTransactions] = useState<Transaction[]>(initialTransactions);
   const [goals, setGoals] = useState<Goal[]>(initialGoals);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
   const [categories, setCategories] = useState<Category[]>(initialCategories);
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [pendingDate, setPendingDate] = useState<string | null>(null);
@@ -218,60 +227,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Check for Supabase OAuth redirect parameters in URL hash
   useEffect(() => {
-    const hash = window.location.hash;
-    if (hash && hash.includes("access_token=")) {
-      const params = new URLSearchParams(hash.substring(1)); // Remove the leading '#'
-      const accessToken = params.get("access_token");
-      if (accessToken) {
-        try {
-          const base64Url = accessToken.split('.')[1];
-          const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-          const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
-              return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-          }).join(''));
-          const decoded = JSON.parse(jsonPayload);
-          
-          if (decoded && decoded.sub && decoded.email) {
-            const user_id = decoded.sub;
-            const email = decoded.email;
-            const full_name = decoded.user_metadata?.full_name || decoded.email.split('@')[0];
+    const handleHashAuth = () => {
+      const hash = window.location.hash;
+      if (hash && hash.includes("access_token=")) {
+        const params = new URLSearchParams(hash.substring(1)); // Remove the leading '#'
+        const accessToken = params.get("access_token");
+        if (accessToken) {
+          try {
+            const base64Url = accessToken.split('.')[1];
+            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+            }).join(''));
+            const decoded = JSON.parse(jsonPayload);
             
-            fetch('http://localhost:8000/api/oauth-login', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ user_id, email, full_name })
-            })
-            .then(res => res.json())
-            .then(data => {
-              if (data.success) {
-                // Clear the hash from the URL so it looks clean
-                window.history.replaceState(null, "", window.location.pathname);
-                
-                setUser({
-                  isAuthenticated: true,
-                  userId: user_id,
-                  name: full_name,
-                  email: email,
-                  onboarded: data.user.onboarded || false,
-                  income: data.user.income || 0,
-                  cityTier: data.user.city_tier || 'Metro',
-                  fixedRent: data.user.fixed_rent || 0,
-                  fixedEMI: data.user.fixed_emi || 0,
-                  biggestCategory: data.user.biggest_category || '',
-                  primaryGoal: data.user.primary_goal || '',
-                  statementUploaded: false
-                });
-              }
-            })
-            .catch(err => {
-              console.error("Backend OAuth login failed:", err);
-            });
+            if (decoded && decoded.sub && decoded.email) {
+              const user_id = decoded.sub;
+              const email = decoded.email;
+              const full_name = decoded.user_metadata?.full_name || decoded.email.split('@')[0];
+              
+              fetch('http://localhost:8000/api/oauth-login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id, email, full_name })
+              })
+              .then(res => res.json())
+              .then(data => {
+                if (data.success) {
+                  // Clear the hash from the URL so it looks clean
+                  window.history.replaceState(null, "", window.location.pathname);
+                  
+                  setUser({
+                    id: user_id,
+                    isAuthenticated: true,
+                    userId: user_id,
+                    name: full_name,
+                    email: email,
+                    onboarded: data.user.onboarded || false,
+                    income: data.user.income || 0,
+                    cityTier: data.user.city_tier || 'Metro',
+                    fixedRent: data.user.fixed_rent || 0,
+                    fixedEMI: data.user.fixed_emi || 0,
+                    biggestCategory: data.user.biggest_category || '',
+                    primaryGoal: data.user.primary_goal || '',
+                    statementUploaded: false
+                  });
+                }
+              })
+              .catch(err => {
+                console.error("Backend OAuth login failed:", err);
+              });
+            }
+          } catch (e) {
+            console.error("Failed to parse JWT from hash:", e);
           }
-        } catch (e) {
-          console.error("Failed to parse JWT from hash:", e);
         }
       }
-    }
+    };
+
+    handleHashAuth();
+    window.addEventListener("hashchange", handleHashAuth);
+    return () => window.removeEventListener("hashchange", handleHashAuth);
   }, []);
 
   const loadTransactions = () => {
@@ -300,30 +316,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Load real-time transactions from Supabase on Login / Sign-up
+  // Load real-time transactions, budgets, and goals from Supabase on Login / Sign-up
   useEffect(() => {
     loadTransactions();
+    loadBudgets();
+    loadGoals();
   }, [user.isAuthenticated, user.userId]);
 
   const addTransaction = (t: Omit<Transaction, 'id'>) => {
-    if (user.userId) {
+    const activeUserId = user.userId || user.id;
+    if (activeUserId) {
       fetch('http://localhost:8000/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: user.userId,
-          transaction_date: t.date,
-          amount: t.amount,
+          user_id: activeUserId,
+          account_id: t.account || "Primary Checking",
+          amount: Math.abs(t.amount),
           transaction_type: t.type,
           merchant_name: t.merchant,
           description: t.notes || "",
+          main_category: t.category,
           category_name: t.category,
-          sub_category_name: t.subCategory
+          sub_category: t.subCategory || "General",
+          sub_category_name: t.subCategory || "General",
+          transaction_date: t.date
         })
       })
       .then(res => res.json())
       .then(saved => {
-        setTransactions(prev => [{ ...t, id: saved.id }, ...prev]);
+        loadTransactions();
       })
       .catch(err => {
         console.error("Database save failed, using local transaction fallback:", err);
@@ -347,16 +369,155 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTransactions(prev => prev.filter(item => item.id !== id));
   };
 
+  const loadBudgets = () => {
+    if (user.isAuthenticated && user.userId) {
+      fetch(`http://localhost:8000/api/budgets?user_id=${user.userId}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success && Array.isArray(data.data)) {
+            setBudgets(data.data);
+          }
+        })
+        .catch(err => console.error("Failed to load budgets:", err));
+    } else {
+      setBudgets([]);
+    }
+  };
+
+  const addBudget = (b: Omit<Budget, 'id'>) => {
+    const activeUserId = user.userId || user.id;
+    if (activeUserId) {
+      fetch('http://localhost:8000/api/budgets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: activeUserId,
+          category_name: b.categoryName,
+          budget_name: b.budgetName,
+          amount: b.amount,
+          period: b.period || 'monthly',
+          start_date: b.startDate || null,
+          end_date: b.endDate || null,
+          alert_threshold: b.alertThreshold || 80.0
+        })
+      })
+      .then(res => res.json())
+      .then(saved => {
+        loadBudgets();
+      })
+      .catch(err => console.error("Failed to add budget:", err));
+    }
+  };
+
+  const updateBudget = (id: string, b: Partial<Budget>) => {
+    fetch(`http://localhost:8000/api/budgets/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: user.userId || user.id,
+        category_name: b.categoryName || 'Others',
+        budget_name: b.budgetName || '',
+        amount: b.amount || 0,
+        period: b.period || 'monthly',
+        start_date: b.startDate || null,
+        end_date: b.endDate || null,
+        alert_threshold: b.alertThreshold || 80.0
+      })
+    })
+    .then(res => res.json())
+    .then(saved => {
+      loadBudgets();
+    })
+    .catch(err => console.error("Failed to update budget:", err));
+  };
+
+  const deleteBudget = (id: string) => {
+    fetch(`http://localhost:8000/api/budgets/${id}`, {
+      method: 'DELETE'
+    })
+    .then(res => res.json())
+    .then(saved => {
+      loadBudgets();
+    })
+    .catch(err => console.error("Failed to delete budget:", err));
+  };
+
+  const loadGoals = () => {
+    if (user.isAuthenticated && user.userId) {
+      fetch(`http://localhost:8000/api/goals?user_id=${user.userId}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success && Array.isArray(data.data)) {
+            const icons = ['Target', 'ShieldCheck', 'PlaneTakeoff', 'Laptop'];
+            const colors = ['bg-primary', 'bg-secondary', 'bg-tertiary', 'bg-outline'];
+            const mapped = data.data.map((g: any, index: number) => ({
+              ...g,
+              icon: icons[index % icons.length],
+              color: colors[index % colors.length]
+            }));
+            setGoals(mapped);
+          }
+        })
+        .catch(err => console.error("Failed to load goals:", err));
+    } else {
+      setGoals(initialGoals);
+    }
+  };
+
   const addGoal = (g: Omit<Goal, 'id'>) => {
-    setGoals(prev => [{ ...g, id: Math.random().toString(36).substr(2, 9) }, ...prev]);
+    const activeUserId = user.userId || user.id;
+    if (activeUserId) {
+      fetch('http://localhost:8000/api/goals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: activeUserId,
+          goal_name: g.label,
+          description: g.sub,
+          target_amount: g.target,
+          current_amount: g.current,
+          target_date: g.date,
+          status: 'active'
+        })
+      })
+      .then(res => res.json())
+      .then(saved => {
+        loadGoals();
+      })
+      .catch(err => console.error("Failed to add goal:", err));
+    }
   };
 
   const updateGoal = (id: string, g: Partial<Goal>) => {
-    setGoals(prev => prev.map(item => item.id === id ? { ...item, ...g } : item));
+    fetch(`http://localhost:8000/api/goals/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: user.userId || user.id,
+        goal_name: g.label || '',
+        description: g.sub || '',
+        target_amount: g.target || 0,
+        current_amount: g.current || 0,
+        target_date: g.date || '',
+        status: 'active'
+      })
+    })
+    .then(res => res.json())
+    .then(saved => {
+      loadGoals();
+    })
+    .catch(err => console.error("Failed to update goal:", err));
   };
 
   const deleteGoal = (id: string) => {
-    setGoals(prev => prev.filter(item => item.id !== id));
+    fetch(`http://localhost:8000/api/goals/${id}`, {
+      method: 'DELETE'
+    })
+    .then(res => res.json())
+    .then(saved => {
+      loadGoals();
+    })
+    .catch(err => console.error("Failed to delete goal:", err));
   };
 
   const addCategory = (name: string, icon: string, initialSubCategories: string[] = []) => {
@@ -400,6 +561,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUser(initialUser);
     setTransactions(initialTransactions);
     setGoals(initialGoals);
+    setBudgets([]);
     setReports([
       { id: '1', title: 'Monthly Summary', date: 'Sept 2023', size: '2.4 MB', type: 'PDF' },
     ]);
@@ -455,6 +617,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <AppContext.Provider value={{
       user, updateUser,
       transactions, addTransaction, addTransactions, updateTransaction, deleteTransaction,
+      budgets, addBudget, updateBudget, deleteBudget, loadBudgets, loadGoals,
       goals, addGoal, updateGoal, deleteGoal,
       categories, addCategory, updateCategory, deleteCategory, addSubCategory, deleteSubCategory,
       reports, addReport, uploadReport,

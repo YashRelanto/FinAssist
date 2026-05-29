@@ -90,6 +90,7 @@ export const Login: React.FC = () => {
       const resolvedStatement = data.statement_uploaded !== undefined ? data.statement_uploaded : (data.user?.statement_uploaded || false);
 
       updateUser({
+        id: resolvedUserId,
         isAuthenticated: true,
         userId: resolvedUserId,
         name: resolvedName,
@@ -224,7 +225,8 @@ export const Login: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    window.location.href = "https://wequiafwuvugkzgqzety.supabase.co/auth/v1/authorize?provider=google&redirect_to=http://localhost:3000";
+                    const redirectUrl = window.location.origin;
+                    window.location.href = `https://wequiafwuvugkzgqzety.supabase.co/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectUrl)}`;
                   }}
                   className="w-full flex items-center justify-center gap-3 py-3.5 bg-white border border-outline-variant hover:bg-surface-container-low transition-all rounded-xl font-bold text-sm text-on-surface shadow-sm active:scale-[0.98]"
                 >
