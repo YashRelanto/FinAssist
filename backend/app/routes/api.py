@@ -267,11 +267,22 @@ async def get_dashboard_summary(user_id: str):
             .execute()
         )
 
+        prof_res = (
+            supabase.table("user_profiles")
+            .select("income")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        profile_income = 0.0
+        if prof_res.data:
+            profile_income = float(prof_res.data[0].get("income") or 0.0)
+
         return build_dashboard_payload(
             accounts=accounts,
             transactions=transactions,
             recent_rows=recent_res.data or [],
             budgets=budget_res.data or [],
+            profile_income=profile_income,
         )
     except HTTPException:
         raise
@@ -686,7 +697,19 @@ async def delete_goal(goal_id: str):
         print(f"Error deleting goal: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/categories")
+async def get_categories():
+    try:
+        res = supabase.table("categories").select("main_category").execute()
+        # Extract unique main categories, normalize, and sort
+        unique_cats = sorted(list(set(normalize_category_name(c["main_category"]) for c in res.data if c.get("main_category"))))
+        return {"success": True, "data": unique_cats}
+    except Exception as e:
+        print(f"Error fetching categories: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/reports")
 async def get_reports():
     return {"success": True, "message": "Reports endpoint ready"}
+
 

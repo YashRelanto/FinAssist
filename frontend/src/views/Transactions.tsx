@@ -10,10 +10,15 @@ import { activeUserId } from '../lib/activeUserId';
 export const Transactions: React.FC = () => {
   const { user, authReady, updateTransaction, deleteTransaction, categories, pendingDate, loadTransactions } = useAppContext();
   const [realTransactions, setRealTransactions] = useState<Transaction[]>([]);
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [dbCategories, setDbCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | undefined>(undefined);
   const [search, setSearch] = useState('');
+  const [selectedAccount, setSelectedAccount] = useState('All Accounts');
+  const [selectedCategory, setSelectedCategory] = useState('All Categories');
+  const [selectedType, setSelectedType] = useState('All Types');
 
   const fetchTransactions = async () => {
     const uid = activeUserId(user);
@@ -35,9 +40,37 @@ export const Transactions: React.FC = () => {
     }
   };
 
+  const fetchAccounts = async () => {
+    const uid = activeUserId(user);
+    if (!uid) return;
+    try {
+      const response = await apiFetch(`/api/accounts?user_id=${encodeURIComponent(uid)}`);
+      const data = await response.json();
+      if (data.success && Array.isArray(data.data)) {
+        setAccounts(data.data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch accounts', error);
+    }
+  };
+
+  const fetchCategories = async () => {
+    try {
+      const response = await apiFetch('/api/categories');
+      const data = await response.json();
+      if (data.success && Array.isArray(data.data)) {
+        setDbCategories(data.data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch categories', error);
+    }
+  };
+
   React.useEffect(() => {
     if (authReady && user?.isAuthenticated && activeUserId(user)) {
       fetchTransactions();
+      fetchAccounts();
+      fetchCategories();
     }
   }, [authReady, user?.isAuthenticated, user?.userId, user?.id]);
 
@@ -100,11 +133,26 @@ export const Transactions: React.FC = () => {
     }
   };
 
-  const filtered = realTransactions.filter(t => 
-    t.merchant.toLowerCase().includes(search.toLowerCase()) ||
-    t.category.toLowerCase().includes(search.toLowerCase()) ||
-    t.notes?.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = realTransactions.filter(t => {
+    const matchesSearch = 
+      t.merchant.toLowerCase().includes(search.toLowerCase()) ||
+      t.category.toLowerCase().includes(search.toLowerCase()) ||
+      (t.notes && t.notes.toLowerCase().includes(search.toLowerCase()));
+
+    const matchesAccount = 
+      selectedAccount === 'All Accounts' || 
+      t.account.toLowerCase() === selectedAccount.toLowerCase();
+
+    const matchesCategory = 
+      selectedCategory === 'All Categories' || 
+      t.category.toLowerCase() === selectedCategory.toLowerCase();
+
+    const matchesType = 
+      selectedType === 'All Types' || 
+      t.type.toLowerCase() === selectedType.toLowerCase();
+
+    return matchesSearch && matchesAccount && matchesCategory && matchesType;
+  });
 
   if (loading && realTransactions.length === 0) {
     return (
@@ -153,18 +201,47 @@ export const Transactions: React.FC = () => {
               />
             </div>
           </div>
-          {[
-            { label: 'Account', options: ['All Accounts', 'Chase Checking', 'Apple Card'] },
-            { label: 'Category', options: ['All Categories', 'Food & Dining', 'Electronics', 'Shopping'] },
-            { label: 'Type', options: ['All Types', 'Expense', 'Income'] },
-          ].map((filter, i) => (
-            <div key={i} className="space-y-2">
-              <label className="text-[10px] font-bold text-outline ml-1 uppercase tracking-widest">{filter.label}</label>
-              <select className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary transition-all outline-none appearance-none font-bold">
-                {filter.options.map((opt, j) => <option key={j}>{opt}</option>)}
-              </select>
-            </div>
-          ))}
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-bold text-outline ml-1 uppercase tracking-widest">Account</label>
+            <select 
+              value={selectedAccount}
+              onChange={(e) => setSelectedAccount(e.target.value)}
+              className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary transition-all outline-none appearance-none font-bold"
+            >
+              <option value="All Accounts">All Accounts</option>
+              {accounts.map((acc, idx) => (
+                <option key={idx} value={acc.account_name}>{acc.account_name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-bold text-outline ml-1 uppercase tracking-widest">Category</label>
+            <select 
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary transition-all outline-none appearance-none font-bold"
+            >
+              <option value="All Categories">All Categories</option>
+              {(dbCategories.length > 0 ? dbCategories : categories.map(c => c.name)).map((cat, idx) => (
+                <option key={idx} value={cat}>{cat}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-bold text-outline ml-1 uppercase tracking-widest">Type</label>
+            <select 
+              value={selectedType}
+              onChange={(e) => setSelectedType(e.target.value)}
+              className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary transition-all outline-none appearance-none font-bold"
+            >
+              <option value="All Types">All Types</option>
+              <option value="expense">Expense</option>
+              <option value="income">Income</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -282,8 +359,12 @@ export const Transactions: React.FC = () => {
 
       <TransactionModal 
         isOpen={modalOpen} 
-        onClose={() => setModalOpen(false)} 
+        onClose={() => {
+          setModalOpen(false);
+          fetchTransactions();
+        }} 
         editingTransaction={editingTransaction}
+        accounts={accounts}
       />
     </div>
   );

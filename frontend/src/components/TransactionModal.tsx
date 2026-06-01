@@ -9,17 +9,21 @@ interface TransactionModalProps {
   isOpen: boolean;
   onClose: () => void;
   editingTransaction?: Transaction;
+  accounts?: any[];
 }
 
-export const TransactionModal: React.FC<TransactionModalProps> = ({ isOpen, onClose, editingTransaction }) => {
+export const TransactionModal: React.FC<TransactionModalProps> = ({ isOpen, onClose, editingTransaction, accounts = [] }) => {
   const { addTransaction, updateTransaction, categories, pendingDate, resetPendingDate } = useAppContext();
+  
+  const defaultAccount = accounts.length > 0 ? accounts[0].account_id : 'HDFC Bank';
+
   const [formData, setFormData] = useState<Omit<Transaction, 'id'>>({
     date: new Date().toISOString().split('T')[0],
     merchant: '',
     category: 'Housing',
     subCategory: '',
     amount: 0,
-    account: 'Chase Checking',
+    account: defaultAccount,
     type: 'expense',
     notes: ''
   });
@@ -28,7 +32,10 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ isOpen, onCl
     if (isOpen) {
       if (editingTransaction) {
         const { id, ...rest } = editingTransaction;
-        setFormData(rest);
+        setFormData({
+          ...rest,
+          account: editingTransaction.account_id || editingTransaction.account || defaultAccount
+        });
       } else if (pendingDate) {
         setFormData({
           date: pendingDate,
@@ -36,7 +43,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ isOpen, onCl
           category: 'Housing',
           subCategory: '',
           amount: 0,
-          account: 'Chase Checking',
+          account: defaultAccount,
           type: 'expense',
           notes: ''
         });
@@ -48,13 +55,13 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ isOpen, onCl
           category: 'Housing',
           subCategory: '',
           amount: 0,
-          account: 'Chase Checking',
+          account: defaultAccount,
           type: 'expense',
           notes: ''
         });
       }
     }
-  }, [editingTransaction, isOpen, pendingDate]);
+  }, [editingTransaction, isOpen, pendingDate, accounts]);
 
   if (!isOpen) return null;
 
@@ -138,10 +145,18 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ isOpen, onCl
                   onChange={(e) => setFormData({...formData, account: e.target.value})}
                   className="w-full px-4 py-3 bg-surface-container-low rounded-lg border border-outline-variant focus:ring-2 focus:ring-primary transition-all text-sm outline-none"
                 >
-                  <option>HDFC Bank</option>
-                  <option>ICICI Bank</option>
-                  <option>Amex Card</option>
-                  <option>Stripe</option>
+                  {accounts.length > 0 ? (
+                    accounts.map(acc => (
+                      <option key={acc.account_id} value={acc.account_id}>{acc.account_name}</option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="HDFC Bank">HDFC Bank</option>
+                      <option value="ICICI Bank">ICICI Bank</option>
+                      <option value="Amex Card">Amex Card</option>
+                      <option value="Stripe">Stripe</option>
+                    </>
+                  )}
                 </select>
               </div>
             </div>
