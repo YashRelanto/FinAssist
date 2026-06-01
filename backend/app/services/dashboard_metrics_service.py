@@ -70,11 +70,12 @@ def compute_summary(
     monthly_stats: dict[str, dict[str, float]],
     *,
     reference: datetime | None = None,
+    profile_income: float = 0.0,
 ) -> dict[str, float]:
     ref = reference or datetime.now()
     current_month = ref.strftime("%Y-%m")
     curr = monthly_stats.get(current_month, {"income": 0.0, "expense": 0.0})
-    income = curr["income"]
+    income = profile_income if profile_income > 0.0 else curr["income"]
     expense = curr["expense"]
     net = income - expense
     savings_rate = round((net / income) * 100, 1) if income > 0 else 0.0
@@ -86,6 +87,7 @@ def compute_summary(
         "net_savings": net,
         "savings_rate": savings_rate,
     }
+
 
 
 def build_chart_data(
@@ -339,6 +341,7 @@ def build_dashboard_payload(
     recent_rows: list[dict[str, Any]],
     budgets: list[dict[str, Any]],
     reference: datetime | None = None,
+    profile_income: float = 0.0,
 ) -> dict[str, Any]:
     ref = reference or datetime.now()
     monthly_stats = aggregate_monthly_stats(transactions)
@@ -348,7 +351,7 @@ def build_dashboard_payload(
 
     return {
         "success": True,
-        "summary": compute_summary(accounts, monthly_stats, reference=ref),
+        "summary": compute_summary(accounts, monthly_stats, reference=ref, profile_income=profile_income),
         "chart_data": build_chart_data(monthly_stats, reference=ref),
         "accounts": accounts,
         "recent_transactions": format_recent_transactions(recent_rows),
@@ -361,3 +364,4 @@ def build_dashboard_payload(
             budgets, transactions, reference=ref
         ),
     }
+

@@ -267,11 +267,22 @@ async def get_dashboard_summary(user_id: str):
             .execute()
         )
 
+        prof_res = (
+            supabase.table("user_profiles")
+            .select("income")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        profile_income = 0.0
+        if prof_res.data:
+            profile_income = float(prof_res.data[0].get("income") or 0.0)
+
         return build_dashboard_payload(
             accounts=accounts,
             transactions=transactions,
             recent_rows=recent_res.data or [],
             budgets=budget_res.data or [],
+            profile_income=profile_income,
         )
     except HTTPException:
         raise
@@ -686,7 +697,367 @@ async def delete_goal(goal_id: str):
         print(f"Error deleting goal: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/categories")
+async def get_categories():
+    try:
+        res = supabase.table("categories").select("main_category").execute()
+        # Extract unique main categories, normalize, and sort
+        unique_cats = sorted(list(set(normalize_category_name(c["main_category"]) for c in res.data if c.get("main_category"))))
+        return {"success": True, "data": unique_cats}
+    except Exception as e:
+        print(f"Error fetching categories: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/reports")
 async def get_reports():
     return {"success": True, "message": "Reports endpoint ready"}
+
+# ============================================================
+# MUTUAL FUND / INVESTMENT TRACKER ENDPOINTS
+# ============================================================
+
+from pydantic import BaseModel
+
+class InvestmentCreate(BaseModel):
+    user_id: str
+    scheme_code: str
+    scheme_name: str
+    transaction_date: str  # YYYY-MM-DD
+    quantity: float
+    purchase_nav: float
+
+@router.get("/investments/search")
+async def search_mutual_funds(q: str):
+    import urllib.request
+    import urllib.parse
+    import json
+    try:
+        encoded_q = urllib.parse.quote(q)
+        url = f"https://api.mfapi.in/mf/search?q={encoded_q}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read().decode())
+        
+        # Smart ranking logic: Prioritize words starting with q (e.g. Bandhan for 'band')
+        q_lower = q.lower().strip()
+        def get_rank(item):
+            name = item.get("schemeName", "").lower()
+            if name.startswith(q_lower):
+                return 0
+            words = name.split()
+            if any(w.startswith(q_lower) for w in words):
+                return 1
+            if q_lower in name:
+                return 2
+            return 3
+
+        sorted_data = sorted(data, key=get_rank)
+        
+        results = []
+        for item in sorted_data[:15]:  # Limit to top 15 best-matched results
+            results.append({
+                "schemeCode": str(item.get("schemeCode")),
+                "schemeName": item.get("schemeName")
+            })
+        return {"success": True, "data": results}
+    except Exception as e:
+        print(f"Error searching mutual funds: {e}")
+        return {"success": False, "detail": str(e)}
+
+@router.get("/investments/nav")
+async def get_historical_nav(scheme_code: str, date: str):
+    import urllib.request
+    import json
+    from datetime import datetime, timedelta
+    try:
+        url = f"https://api.mfapi.in/mf/{scheme_code}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req) as response:
+            res_data = json.loads(response.read().decode())
+        
+        nav_entries = res_data.get("data", [])
+        if not nav_entries:
+            return {"success": False, "detail": "No NAV data found"}
+            
+        target_date = datetime.strptime(date, "%Y-%m-%d")
+        
+        # Build date-to-nav map
+        date_to_nav = {}
+        for entry in nav_entries:
+            try:
+                date_str = entry["date"]
+                parts = date_str.split("-")
+                year_part = parts[2]
+                fmt = "%d-%m-%y" if len(year_part) == 2 else "%d-%m-%Y"
+                d = datetime.strptime(date_str, fmt)
+                date_to_nav[d.date()] = float(entry["nav"])
+            except Exception:
+                continue
+                
+        # Find exact or closest preceding date
+        found_nav = None
+        for i in range(10):
+            check_date = (target_date - timedelta(days=i)).date()
+            if check_date in date_to_nav:
+                found_nav = date_to_nav[check_date]
+                break
+                
+        if found_nav is None:
+            # Fallback to the oldest available NAV or latest
+            found_nav = float(nav_entries[0]["nav"])
+            
+        return {"success": True, "nav": found_nav}
+    except Exception as e:
+        print(f"Error fetching historical NAV: {e}")
+        return {"success": False, "detail": str(e)}
+
+@router.post("/investments")
+async def create_investment(req: InvestmentCreate):
+    try:
+        insert_data = {
+            "user_id": req.user_id,
+            "scheme_code": req.scheme_code,
+            "scheme_name": req.scheme_name,
+            "transaction_date": req.transaction_date,
+            "quantity": req.quantity,
+            "purchase_nav": req.purchase_nav
+        }
+        res = supabase.table("investments").insert(insert_data).execute()
+        if not res.data:
+            raise HTTPException(status_code=500, detail="Failed to log investment")
+        return {"success": True, "data": res.data[0]}
+    except Exception as e:
+        print(f"Error creating investment: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/investments/{investment_id}")
+async def delete_investment(investment_id: str):
+    try:
+        supabase.table("investments").delete().eq("investment_id", investment_id).execute()
+        return {"success": True, "message": "Holding transaction deleted successfully"}
+    except Exception as e:
+        print(f"Error deleting investment: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/investments")
+async def get_user_investments(user_id: str):
+    import urllib.request
+    import json
+    from datetime import datetime, timedelta
+    try:
+        # 1. Fetch user logged investments
+        res = supabase.table("investments").select("*").eq("user_id", user_id).execute()
+        db_investments = res.data or []
+        
+        if not db_investments:
+            return {
+                "success": True,
+                "holdings": [],
+                "summary": {
+                    "total_invested": 0.0,
+                    "current_value": 0.0,
+                    "total_gain": 0.0,
+                    "total_gain_percentage": 0.0,
+                    "portfolio_cagr": "0.0%"
+                },
+                "chart_data": [],
+                "raw_transactions": []
+            }
+            
+        # 2. Get unique scheme codes to batch fetch live/historical NAV
+        unique_schemes = list(set(inv["scheme_code"] for inv in db_investments))
+        scheme_data_cache = {}
+        
+        for code in unique_schemes:
+            try:
+                url = f"https://api.mfapi.in/mf/{code}"
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req) as response:
+                    parsed = json.loads(response.read().decode())
+                    scheme_data_cache[code] = parsed
+            except Exception as e:
+                print(f"Error fetching cache for {code}: {e}")
+                
+        # 3. Aggregate holdings
+        holdings_map = {}
+        total_invested_val = 0.0
+        total_current_val = 0.0
+        
+        for inv in db_investments:
+            code = inv["scheme_code"]
+            qty = float(inv["quantity"])
+            purch_nav = float(inv["purchase_nav"])
+            name = inv["scheme_name"]
+            
+            # Fetch current live NAV
+            current_nav = 0.0
+            day_change = 0.0
+            if code in scheme_data_cache:
+                nav_list = scheme_data_cache[code].get("data", [])
+                if nav_list:
+                    current_nav = float(nav_list[0]["nav"])
+                    if len(nav_list) > 1:
+                        prev_nav = float(nav_list[1]["nav"])
+                        day_change = current_nav - prev_nav
+            
+            if code not in holdings_map:
+                holdings_map[code] = {
+                    "ticker": code,
+                    "name": name,
+                    "qty": 0.0,
+                    "invested": 0.0,
+                    "avg_nav": 0.0,
+                    "current_nav": current_nav,
+                    "current_value": 0.0,
+                    "gain": 0.0,
+                    "gain_percent": 0.0,
+                    "day_pnl": 0.0
+                }
+                
+            h = holdings_map[code]
+            h["qty"] += qty
+            h["invested"] += (qty * purch_nav)
+            h["day_pnl"] += (qty * day_change)
+            
+        # Complete holding metrics calculations
+        holdings = []
+        for code, h in holdings_map.items():
+            if h["qty"] > 0:
+                h["avg_nav"] = h["invested"] / h["qty"]
+                h["current_value"] = h["qty"] * h["current_nav"]
+                h["gain"] = h["current_value"] - h["invested"]
+                h["gain_percent"] = (h["gain"] / h["invested"] * 100) if h["invested"] > 0 else 0
+                
+                total_invested_val += h["invested"]
+                total_current_val += h["current_value"]
+                holdings.append(h)
+                
+        # Calculate portfolio shares
+        for h in holdings:
+            h["portfolio_share"] = (h["current_value"] / total_current_val * 100) if total_current_val > 0 else 0
+            
+        total_gain = total_current_val - total_invested_val
+        total_gain_percentage = (total_gain / total_invested_val * 100) if total_invested_val > 0 else 0
+        
+        # 4. Generate high-fidelity historical data for line chart
+        # Find earliest investment date
+        earliest_date = datetime.now().date()
+        for inv in db_investments:
+            d_obj = datetime.strptime(inv["transaction_date"], "%Y-%m-%d").date()
+            if d_obj < earliest_date:
+                earliest_date = d_obj
+                
+        # Prep date-to-nav maps for all cached schemes
+        scheme_history_maps = {}
+        for code, s_data in scheme_data_cache.items():
+            h_map = {}
+            for entry in s_data.get("data", []):
+                try:
+                    parts = entry["date"].split("-")
+                    fmt = "%d-%m-%y" if len(parts[2]) == 2 else "%d-%m-%Y"
+                    d = datetime.strptime(entry["date"], fmt).date()
+                    h_map[d] = float(entry["nav"])
+                except Exception:
+                    continue
+            scheme_history_maps[code] = h_map
+            
+        # Build timeline from earliest_date to today
+        timeline = []
+        curr_ptr = earliest_date
+        today = datetime.now().date()
+        
+        # Decide step size dynamically (e.g. daily if short time, weekly if > 6 months)
+        total_days = (today - earliest_date).days
+        step_days = 7 if total_days > 90 else 1
+        if total_days == 0:
+            total_days = 1
+            
+        while curr_ptr <= today:
+            timeline.append(curr_ptr)
+            curr_ptr += timedelta(days=step_days)
+        if today not in timeline:
+            timeline.append(today)
+            
+        chart_data = []
+        for t_date in timeline:
+            t_invested = 0.0
+            t_current = 0.0
+            
+            for inv in db_investments:
+                inv_date = datetime.strptime(inv["transaction_date"], "%Y-%m-%d").date()
+                if inv_date <= t_date:
+                    qty = float(inv["quantity"])
+                    purch_nav = float(inv["purchase_nav"])
+                    code = inv["scheme_code"]
+                    
+                    t_invested += (qty * purch_nav)
+                    
+                    # Find NAV on t_date
+                    nav_map = scheme_history_maps.get(code, {})
+                    c_nav = 0.0
+                    for offset in range(10):
+                        check_d = t_date - timedelta(days=offset)
+                        if check_d in nav_map:
+                            c_nav = nav_map[check_d]
+                            break
+                    if c_nav == 0.0 and nav_map:
+                        # Fallback to nearest date in history
+                        c_nav = float(scheme_data_cache[code]["data"][0]["nav"])
+                        
+                    t_current += (qty * c_nav)
+            
+            # Format date for frontend
+            chart_data.append({
+                "name": t_date.strftime("%b %y").upper(),
+                "dateStr": t_date.strftime("%Y-%m-%d"),
+                "invested": round(t_invested, 2),
+                "current": round(t_current, 2)
+            })
+            
+        # Simple CAGR calculation over portfolio life
+        years = max(total_days / 365.0, 0.01)
+        cagr_val = 0.0
+        if total_invested_val > 0 and total_current_val > 0:
+            cagr_val = ((total_current_val / total_invested_val) ** (1 / years) - 1) * 100
+        
+        summary = {
+            "total_invested": round(total_invested_val, 2),
+            "current_value": round(total_current_val, 2),
+            "total_gain": round(total_gain, 2),
+            "total_gain_percentage": round(total_gain_percentage, 2),
+            "portfolio_cagr": f"{cagr_val:.1f}%"
+        }
+        
+        # Inject live current NAV inside raw transaction list for detail views
+        enriched_transactions = []
+        for inv in db_investments:
+            code = inv["scheme_code"]
+            c_nav = 0.0
+            if code in scheme_data_cache:
+                nav_list = scheme_data_cache[code].get("data", [])
+                if nav_list:
+                    c_nav = float(nav_list[0]["nav"])
+            
+            enriched_transactions.append({
+                "investment_id": inv["investment_id"],
+                "user_id": inv["user_id"],
+                "scheme_code": inv["scheme_code"],
+                "scheme_name": inv["scheme_name"],
+                "transaction_date": inv["transaction_date"],
+                "quantity": float(inv["quantity"]),
+                "purchase_nav": float(inv["purchase_nav"]),
+                "current_nav": c_nav
+            })
+        
+        return {
+            "success": True,
+            "holdings": holdings,
+            "summary": summary,
+            "chart_data": chart_data,
+            "raw_transactions": enriched_transactions
+        }
+    except Exception as e:
+        print(f"Error fetching user investments: {e}")
+        return {"success": False, "detail": str(e)}
+
 

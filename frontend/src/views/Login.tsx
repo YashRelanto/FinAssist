@@ -90,7 +90,7 @@ export const Login: React.FC = () => {
       const resolvedStatement = data.statement_uploaded !== undefined ? data.statement_uploaded : (data.user?.statement_uploaded || false);
 
       const resolvedRole =
-        data.user?.role === 'admin' || data.role === 'admin' ? 'admin' : 'user';
+        (data.user?.role === 'admin' || data.role === 'admin' ? 'admin' : 'user') as 'admin' | 'user';
 
       const loggedInUser = {
         id: resolvedUserId,
