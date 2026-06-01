@@ -12,3 +12,9 @@ pytesseract
 pdf2image
 openai
 chromadb
+playwright>=1.40.0
+beautifulsoup4
+celery
+redis
+chromadb
+openai
