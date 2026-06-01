@@ -12,6 +12,7 @@ import {
 
 import { useAppContext } from '../context/AppContext';
 import { cn } from '../lib/utils';
+import { saveAuthSession } from '../lib/authSession';
 
 export const Login: React.FC = () => {
   const { updateUser } = useAppContext();
@@ -56,14 +57,13 @@ export const Login: React.FC = () => {
       const data = await response.json();
 
       if (!response.ok) {
-        const errData = await response.json();
-        if (errData.detail === 'email_not_confirmed') {
+        if (data.detail === 'email_not_confirmed') {
           setVerificationEmail(email);
           setEmailVerificationSent(true);
           setIsConnecting(false);
           return;
         }
-        throw new Error(errData.detail || 'Authentication failed');
+        throw new Error(data.detail || 'Authentication failed');
       }
       
       
@@ -89,12 +89,16 @@ export const Login: React.FC = () => {
       const resolvedPrimaryGoal = data.primary_goal || data.user?.primary_goal || '';
       const resolvedStatement = data.statement_uploaded !== undefined ? data.statement_uploaded : (data.user?.statement_uploaded || false);
 
-      updateUser({
+      const resolvedRole =
+        data.user?.role === 'admin' || data.role === 'admin' ? 'admin' : 'user';
+
+      const loggedInUser = {
         id: resolvedUserId,
-        isAuthenticated: true,
+        isAuthenticated: true as const,
         userId: resolvedUserId,
         name: resolvedName,
         email: resolvedEmail,
+        role: resolvedRole,
         onboarded: resolvedOnboarded,
         income: resolvedIncome,
         cityTier: resolvedCityTier,
@@ -103,7 +107,15 @@ export const Login: React.FC = () => {
         biggestCategory: resolvedBiggestCategory,
         primaryGoal: resolvedPrimaryGoal,
         statementUploaded: resolvedStatement
-      });
+      };
+
+      saveAuthSession(
+        data.access_token || '',
+        loggedInUser,
+        data.refresh_token
+      );
+
+      updateUser(loggedInUser);
 
     } catch (err: any) {
       console.error(err);

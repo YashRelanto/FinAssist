@@ -4,6 +4,8 @@ import {
 } from 'recharts';
 import { Calendar, ChevronLeft, Filter, Loader2, ArrowRight } from 'lucide-react';
 import { useAppContext } from '../../context/AppContext';
+import { activeUserId } from '../../lib/activeUserId';
+import { apiFetch } from '../../lib/api';
 import { cn, formatCurrency } from '../../lib/utils';
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -28,10 +30,23 @@ const SUB_COLORS = [
 
 type RangeType = '1w' | '1m' | '3m' | '6m' | '1y' | 'custom';
 
-export const ExpenseBreakdown: React.FC = () => {
+interface BreakdownSlice {
+  name: string;
+  value: number;
+}
+
+interface ExpenseBreakdownProps {
+  /** Calendar-month breakdown from dashboard-summary (matches summary cards). */
+  initialData?: BreakdownSlice[];
+}
+
+export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ initialData }) => {
   const { user } = useAppContext();
   const [loading, setLoading] = useState(false);
   const [transactions, setTransactions] = useState<any[]>([]);
+  const [presetSlices, setPresetSlices] = useState<BreakdownSlice[] | null>(
+    initialData?.length ? initialData : null,
+  );
   const [range, setRange] = useState<RangeType>('1m');
   const [customRange, setCustomRange] = useState({ start: '', end: '' });
   const [drillDown, setDrillDown] = useState<string | null>(null);
@@ -39,7 +54,10 @@ export const ExpenseBreakdown: React.FC = () => {
   const fetchTransactions = async (startDate: string, endDate: string) => {
     setLoading(true);
     try {
-      const response = await fetch(`http://localhost:8000/api/transactions?user_id=${user?.id}&start_date=${startDate}&end_date=${endDate}`);
+      const uid = activeUserId(user);
+      const response = await apiFetch(
+        `/api/transactions?user_id=${encodeURIComponent(uid)}&start_date=${startDate}&end_date=${endDate}`,
+      );
       const data = await response.json();
       if (data.success) {
         setTransactions(data.data.filter((t: any) => t.type === 'expense'));
@@ -52,13 +70,28 @@ export const ExpenseBreakdown: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!user?.id) return;
+    if (initialData?.length) {
+      setPresetSlices(initialData);
+    }
+  }, [initialData]);
+
+  useEffect(() => {
+    const uid = activeUserId(user);
+    if (!uid) return;
+
+    if (range === '1m' && initialData?.length && !drillDown) {
+      setPresetSlices(initialData);
+      setLoading(false);
+      return;
+    }
 
     let start = new Date();
     let end = new Date();
 
     if (range === '1w') start.setDate(end.getDate() - 7);
-    else if (range === '1m') start.setMonth(end.getMonth() - 1);
+    else if (range === '1m') {
+      start = new Date(end.getFullYear(), end.getMonth(), 1);
+    }
     else if (range === '3m') start.setMonth(end.getMonth() - 3);
     else if (range === '6m') start.setMonth(end.getMonth() - 6);
     else if (range === '1y') start.setFullYear(end.getFullYear() - 1);
@@ -69,10 +102,15 @@ export const ExpenseBreakdown: React.FC = () => {
 
     const startStr = start.toISOString().split('T')[0];
     const endStr = end.toISOString().split('T')[0];
+    setPresetSlices(null);
     fetchTransactions(startStr, endStr);
-  }, [range, customRange, user]);
+  }, [range, customRange, user, drillDown, initialData]);
 
   const chartData = useMemo(() => {
+    if (range === '1m' && presetSlices && !drillDown) {
+      return presetSlices;
+    }
+
     const groups: Record<string, number> = {};
     
     transactions.forEach(t => {
@@ -85,7 +123,7 @@ export const ExpenseBreakdown: React.FC = () => {
     return Object.entries(groups)
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value);
-  }, [transactions, drillDown]);
+  }, [transactions, drillDown, range, presetSlices]);
 
   const totalExpense = useMemo(() => chartData.reduce((sum, item) => sum + item.value, 0), [chartData]);
 
@@ -120,7 +158,7 @@ export const ExpenseBreakdown: React.FC = () => {
                 className="w-full pl-10 pr-10 py-2.5 bg-surface-container-low border border-outline-variant/30 rounded-2xl text-[11px] font-black uppercase tracking-widest outline-none focus:ring-2 focus:ring-primary transition-all appearance-none cursor-pointer hover:bg-surface-container-high text-outline hover:text-on-surface"
               >
                 <option value="1w">Last Week</option>
-                <option value="1m">Last 30 Days</option>
+                <option value="1m">This Month</option>
                 <option value="3m">Last 3 Months</option>
                 <option value="6m">Last 6 Months</option>
                 <option value="1y">Last Year</option>

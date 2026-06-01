@@ -22,9 +22,11 @@ import { cn, formatCurrency, CURRENCY_SYMBOL } from '../lib/utils';
 
 import { analyzeStatementFile, AnalysisResult, ParseError } from '../lib/statementParser';
 import { PdfPasswordModal } from '../components/PdfPasswordModal';
+import { apiFetch } from '../lib/api';
+import { activeUserId } from '../lib/activeUserId';
 
 export const Onboarding: React.FC = () => {
-  const { user, updateUser, categories, addTransactions } = useAppContext();
+  const { user, updateUser, categories, loadTransactions } = useAppContext();
   const [step, setStep] = useState(1);
   const totalSteps = 6;
   const [isUploading, setIsUploading] = useState(false);
@@ -38,32 +40,30 @@ export const Onboarding: React.FC = () => {
     try {
       const { transactions } = await analyzeStatementFile(file, categories, password);
 
-      // Sync to local state
-      addTransactions(transactions);
-      updateUser({ statementUploaded: true });
-
-      // Optionally push to Supabase when a real user session exists
-      if (user.userId) {
-        try {
-          await fetch('http://localhost:8000/api/statement/ingest', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              user_id: user.userId,
-              transactions: transactions.map((t) => ({
-                transaction_date: t.date,
-                amount: Math.abs(t.amount),
-                transaction_type: t.type === 'income' ? 'Credit' : 'Debit',
-                merchant_name: t.merchant,
-                description: t.merchant,
-                running_balance: null,
-              })),
-            }),
-          });
-        } catch (e) {
-          console.warn('Supabase ingest skipped (offline mode):', e);
+      const uid = activeUserId(user);
+      if (uid) {
+        const ingestRes = await apiFetch('/api/statement/ingest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: uid,
+            transactions: transactions.map((t) => ({
+              transaction_date: t.date,
+              amount: Math.abs(t.amount),
+              transaction_type: t.type === 'income' ? 'Credit' : 'Debit',
+              merchant_name: t.merchant,
+              description: t.merchant,
+              running_balance: null,
+            })),
+          }),
+        });
+        if (!ingestRes.ok) {
+          throw new Error('Failed to save statement transactions to the database');
         }
+        loadTransactions();
       }
+
+      updateUser({ statementUploaded: true });
 
       setPendingFile(null);
       setPasswordModal({ open: false, wrongPassword: false });

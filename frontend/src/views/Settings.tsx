@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { User, Bell, Shield, CreditCard, Globe, Zap, Flame, Trophy, Smartphone, Lock, Eye, Fingerprint, FileText, Upload, AlertTriangle, Sparkles } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { cn, formatCurrency, CURRENCY_SYMBOL } from '../lib/utils';
-import { CategoryModal } from '../components/CategoryModal';
 import { 
   format, 
   startOfYear, 
@@ -16,20 +15,17 @@ import {
 
 import { analyzeStatementFile } from '../lib/statementParser';
 import { PdfPasswordModal } from '../components/PdfPasswordModal';
+import { apiFetch } from '../lib/api';
+import { activeUserId } from '../lib/activeUserId';
 
 export const Settings: React.FC = () => {
   const { 
     user,
     updateUser,
     heatmapData, 
-    categories, 
-    addCategory, 
-    updateCategory, 
-    deleteCategory, 
-    addSubCategory, 
-    deleteSubCategory,
+    categories,
     navigateToAddTransaction,
-    addTransactions,
+    loadTransactions,
     setCurrentPage
   } = useAppContext();
 
@@ -41,7 +37,30 @@ export const Settings: React.FC = () => {
     setUploadStatus(null);
     try {
       const { transactions, summary } = await analyzeStatementFile(file, categories, password);
-      addTransactions(transactions);
+
+      const uid = activeUserId(user);
+      if (uid) {
+        const ingestRes = await apiFetch('/api/statement/ingest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: uid,
+            transactions: transactions.map((t) => ({
+              transaction_date: t.date,
+              amount: Math.abs(t.amount),
+              transaction_type: t.type === 'income' ? 'Credit' : 'Debit',
+              merchant_name: t.merchant,
+              description: t.merchant,
+              running_balance: null,
+            })),
+          }),
+        });
+        if (!ingestRes.ok) {
+          throw new Error('Failed to save statement transactions to the database');
+        }
+        loadTransactions();
+      }
+
       updateUser({ statementUploaded: true });
       setPendingFile(null);
       setPasswordModal({ open: false, wrongPassword: false });
@@ -68,15 +87,9 @@ export const Settings: React.FC = () => {
     e.target.value = '';
   };
 
-  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
-
   // Simple streak calculation (mock or based on heatmapData)
   const currentStreak = 14; 
   const totalDaysActive = heatmapData.filter(d => d.count > 0).length;
-
-  const handleCreateCategory = (name: string, icon: string, subCategories: string[]) => {
-    addCategory(name, icon, subCategories);
-  };
 
   return (
     <>

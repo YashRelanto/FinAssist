@@ -4,9 +4,11 @@ import { useAppContext } from '../context/AppContext';
 import { TransactionModal } from '../components/TransactionModal';
 import { cn, formatCurrency } from '../lib/utils';
 import { Transaction } from '../types';
+import { apiFetch } from '../lib/api';
+import { activeUserId } from '../lib/activeUserId';
 
 export const Transactions: React.FC = () => {
-  const { user, updateTransaction, deleteTransaction, categories, pendingDate } = useAppContext();
+  const { user, authReady, updateTransaction, deleteTransaction, categories, pendingDate, loadTransactions } = useAppContext();
   const [realTransactions, setRealTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -14,32 +16,38 @@ export const Transactions: React.FC = () => {
   const [search, setSearch] = useState('');
 
   const fetchTransactions = async () => {
-    if (!user?.id) return;
+    const uid = activeUserId(user);
+    if (!uid) return;
     try {
       setLoading(true);
-      const response = await fetch(`http://localhost:8000/api/transactions?user_id=${user.id}`);
+      const response = await apiFetch(`/api/transactions?user_id=${encodeURIComponent(uid)}`);
       const data = await response.json();
       if (data.success) {
         setRealTransactions(data.data);
+      } else {
+        setRealTransactions([]);
       }
     } catch (error) {
-      console.error("Failed to fetch transactions", error);
+      console.error('Failed to fetch transactions', error);
+      setRealTransactions([]);
     } finally {
       setLoading(false);
     }
   };
 
   React.useEffect(() => {
-    if (user?.isAuthenticated && user?.id) fetchTransactions();
-  }, [user]);
+    if (authReady && user?.isAuthenticated && activeUserId(user)) {
+      fetchTransactions();
+    }
+  }, [authReady, user?.isAuthenticated, user?.userId, user?.id]);
 
   const handleUpdateCategory = async (trans: any, newMainCat: string) => {
     try {
-      const response = await fetch(`http://localhost:8000/api/transactions/${trans.id}`, {
+      const response = await apiFetch(`/api/transactions/${trans.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: user?.id,
+          user_id: activeUserId(user),
           account_id: trans.account_id,
           amount: trans.amount,
           transaction_type: trans.type,
@@ -79,12 +87,13 @@ export const Transactions: React.FC = () => {
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this transaction?')) return;
     try {
-      const response = await fetch(`http://localhost:8000/api/transactions/${id}`, {
+      const response = await apiFetch(`/api/transactions/${id}`, {
         method: 'DELETE'
       });
       const data = await response.json();
       if (data.success) {
         fetchTransactions();
+        loadTransactions();
       }
     } catch (error) {
       console.error("Failed to delete transaction", error);

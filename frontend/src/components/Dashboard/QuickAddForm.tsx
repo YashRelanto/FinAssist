@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAppContext } from '../../context/AppContext';
+import { activeUserId } from '../../lib/activeUserId';
 import { cn } from '../../lib/utils';
 import { Plus, Check, Loader2, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
 
@@ -35,12 +36,16 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts 
 
     setLoading(true);
     try {
-      const activeUserId = user.id || user.userId || "";
+      const uid = activeUserId(user);
+      if (!uid) {
+        alert('Please sign in again.');
+        return;
+      }
       const response = await fetch('http://localhost:8000/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: activeUserId,
+          user_id: uid,
           account_id: formData.accountId,
           amount: Math.abs(parseFloat(formData.amount)),
           transaction_type: formData.type,

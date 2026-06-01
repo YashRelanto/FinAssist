@@ -10,6 +10,7 @@ import { Investments } from '../views/Investments';
 import { Reports } from '../views/Reports';
 import { Settings } from '../views/Settings';
 import { Forecasting } from '../views/Forecasting';
+import { AdminPanel } from '../views/AdminPanel';
 import { Onboarding } from '../views/Onboarding';
 import { Login } from '../views/Login';
 import { LinkedAccounts } from '../views/LinkedAccounts';
@@ -19,8 +20,16 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useAppContext } from '../context/AppContext';
 
 export const Layout: React.FC = () => {
-  const { currentPage, setCurrentPage, user } = useAppContext();
+  const { currentPage, setCurrentPage, user, authReady } = useAppContext();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-surface flex items-center justify-center">
+        <div className="text-sm font-medium text-outline">Loading...</div>
+      </div>
+    );
+  }
 
   if (!user.isAuthenticated) {
     return <Login />;
@@ -42,6 +51,7 @@ export const Layout: React.FC = () => {
       case 'settings': return <Settings />;
       case 'linked-accounts': return <LinkedAccounts />;
       case 'edit-profile': return <EditProfile />;
+      case 'admin': return <AdminPanel />;
       default: return <Dashboard />;
     }
   };

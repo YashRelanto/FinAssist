@@ -7,7 +7,8 @@ import {
   TrendingUp, 
   FileText, 
   Bot, 
-  Settings, 
+  Settings,
+  Shield,
   LogOut,
   ChevronRight,
   TrendingUp as TrendingIcon,
@@ -36,6 +37,10 @@ const navItems = [
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate, isOpen, onClose }) => {
   const { user, signOut } = useAppContext();
+  const adminNav =
+    user.role === 'admin'
+      ? [{ id: 'admin', label: 'Model Admin', icon: Shield }]
+      : [];
 
   return (
     <>
@@ -62,7 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate, isOpe
         </div>
 
         <nav className="flex-1 space-y-1">
-          {navItems.map((item) => {
+          {[...navItems, ...adminNav].map((item) => {
             const Icon = item.icon;
             const isActive = currentPage === item.id;
             

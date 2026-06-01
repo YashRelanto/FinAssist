@@ -1,6 +1,8 @@
 import React from 'react';
 
 import { useAppContext } from '../context/AppContext';
+import { activeUserId } from '../lib/activeUserId';
+import { apiFetch } from '../lib/api';
 
 import { SummaryCards } from '../components/Dashboard/SummaryCards';
 import { FinancialPerformanceChart } from '../components/Dashboard/FinancialPerformanceChart';
@@ -11,6 +13,7 @@ import { BudgetUtilization } from '../components/Dashboard/BudgetUtilization';
 import { RecentTransactions } from '../components/Dashboard/RecentTransactions';
 import { QuickAddForm } from '../components/Dashboard/QuickAddForm';
 import { AIInsights } from '../components/Dashboard/AIInsights';
+import { ForecastPredictionCard } from '../components/Dashboard/ForecastPredictionCard';
 
 import { AccountModal } from '../components/AccountModal';
 
@@ -22,11 +25,13 @@ export const Dashboard: React.FC = () => {
   const [isAccountModalOpen, setIsAccountModalOpen] = React.useState(false);
 
   const fetchDashboardData = async () => {
+    const uid = activeUserId(user);
+    if (!uid) return;
     try {
       setLoading(true);
 
-      const response = await fetch(
-        `http://localhost:8000/api/dashboard-summary?user_id=${user?.id}`
+      const response = await apiFetch(
+        `/api/dashboard-summary?user_id=${encodeURIComponent(uid)}`
       );
 
       const data = await response.json();
@@ -49,10 +54,17 @@ export const Dashboard: React.FC = () => {
   };
 
   React.useEffect(() => {
-    if (user?.isAuthenticated) {
+    if (user?.isAuthenticated && activeUserId(user)) {
       fetchDashboardData();
     }
-  }, [user]);
+  }, [user?.isAuthenticated, user?.userId, user?.id]);
+
+  React.useEffect(() => {
+    if (!user?.isAuthenticated) return;
+    const onFocus = () => fetchDashboardData();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [user?.isAuthenticated, user?.userId, user?.id]);
 
   if (loading && !dashboardData) {
     return (
@@ -67,6 +79,10 @@ export const Dashboard: React.FC = () => {
       
       {/* Summary Cards */}
       <SummaryCards data={dashboardData?.summary} />
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <ForecastPredictionCard />
+      </div>
 
       {/* Linked Accounts + Quick Actions */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -105,14 +121,14 @@ export const Dashboard: React.FC = () => {
         />
 
         {/* Expense Breakdown */}
-        <ExpenseBreakdown />
+        <ExpenseBreakdown initialData={dashboardData?.expense_breakdown_month} />
       </div>
 
       {/* Budget + Recent Transactions */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         {/* Budget Utilization */}
-        <BudgetUtilization />
+        <BudgetUtilization items={dashboardData?.budget_utilization} />
 
         {/* Recent Transactions */}
         <RecentTransactions

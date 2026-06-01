@@ -1,9 +1,18 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from app.utils.supabase_client import supabase
+from app.utils.supabase_client import supabase, supabase_auth, supabase_db
+from app.services.user_profile_service import (
+    ensure_user_with_profile,
+    auth_error_detail,
+)
+from app.services.dashboard_metrics_service import (
+    build_budget_goals_payload,
+    build_dashboard_payload,
+    normalize_category_name,
+)
+from app.services.transaction_service import create_transaction_record
 from datetime import datetime
-from collections import defaultdict
 
 router = APIRouter(prefix="/api")
 
@@ -16,123 +25,116 @@ class RegisterRequest(BaseModel):
     email: str
     password: str
 
-async def get_user_with_profile(user_id: str, email: str, full_name: str) -> dict:
-    # 1. Fetch from public.users table
-    u_res = supabase.table("users").select("*").eq("user_id", user_id).execute()
-    if not u_res.data:
-        # User row missing, sync insert it!
-        u_res = supabase.table("users").insert({
-            "user_id": user_id,
-            "full_name": full_name,
-            "email": email
-        }).execute()
-        
-    user = u_res.data[0]
-    
-    # 2. Fetch from public.user_profiles table
-    p_res = supabase.table("user_profiles").select("*").eq("user_id", user_id).execute()
-    if not p_res.data:
-        # Profile row missing, sync insert a default one!
-        p_res = supabase.table("user_profiles").insert({
-            "user_id": user_id,
+
+def _display_name_from_auth_user(auth_user, fallback_email: str) -> str:
+    meta = auth_user.user_metadata or {}
+    return meta.get("full_name") or fallback_email.split("@")[0]
+
+
+def _login_payload(
+    user: dict,
+    email_confirmed: bool = True,
+    *,
+    access_token: str | None = None,
+    refresh_token: str | None = None,
+) -> dict:
+    """Flat + nested shape so Login.tsx and other clients both work."""
+    body = {**user, "email_confirmed": email_confirmed, "success": True}
+    body["user"] = user
+    if access_token:
+        body["access_token"] = access_token
+    if refresh_token:
+        body["refresh_token"] = refresh_token
+    return body
+
+
+@router.post("/login")
+async def api_login(req: LoginRequest):
+    if not supabase_auth or not supabase_db:
+        return _login_payload(
+            {
+                "user_id": "a9a11e1f-f158-4d8e-ae55-407a5e00410f",
+                "full_name": "Demo User",
+                "email": req.email,
+                "role": "user",
+                "onboarded": True,
+                "income": 45000,
+                "city_tier": "Metro",
+                "fixed_rent": 1500,
+                "fixed_emi": 500,
+                "biggest_category": "Shopping",
+                "primary_goal": "Save More Money",
+            },
+            access_token="demo-local-token",
+        )
+
+    try:
+        auth_res = supabase_auth.auth.sign_in_with_password({
+            "email": req.email,
+            "password": req.password,
+        })
+        if not auth_res.user:
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+
+        full_name = _display_name_from_auth_user(auth_res.user, req.email)
+        user = ensure_user_with_profile(auth_res.user.id, req.email, full_name)
+        session = auth_res.session
+        return _login_payload(
+            user,
+            access_token=session.access_token if session else None,
+            refresh_token=session.refresh_token if session else None,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in api_login: {e}")
+        status, detail = auth_error_detail(e)
+        raise HTTPException(status_code=status, detail=detail)
+
+
+@router.post("/register")
+async def api_register(req: RegisterRequest):
+    if not supabase_auth or not supabase_db:
+        return _login_payload({
+            "user_id": "a9a11e1f-f158-4d8e-ae55-407a5e00410f",
+            "full_name": req.full_name,
+            "email": req.email,
+            "role": "user",
             "onboarded": False,
             "income": 0,
             "city_tier": "Metro",
             "fixed_rent": 0,
             "fixed_emi": 0,
             "biggest_category": "",
-            "primary_goal": ""
-        }).execute()
-        
-    profile = p_res.data[0]
-    
-    # 3. Merge and return unified dictionary
-    return {
-        "user_id": user["user_id"],
-        "full_name": user["full_name"],
-        "email": user["email"],
-        "onboarded": profile["onboarded"],
-        "income": float(profile["income"]),
-        "city_tier": profile["city_tier"],
-        "fixed_rent": float(profile["fixed_rent"]),
-        "fixed_emi": float(profile["fixed_emi"]),
-        "biggest_category": profile["biggest_category"],
-        "primary_goal": profile["primary_goal"]
-    }
+            "primary_goal": "",
+        }, email_confirmed=False)
 
-@router.post("/login")
-async def api_login(req: LoginRequest):
     try:
-        # 1. Sign in with Supabase Auth
-        auth_res = supabase.auth.sign_in_with_password({
-            "email": req.email,
-            "password": req.password
-        })
-        
-        if not auth_res.user:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-            
-        # 2. Retrieve user record with profile from database
-        user = await get_user_with_profile(
-            auth_res.user.id, 
-            req.email, 
-            auth_res.user.user_metadata.get("full_name", req.email.split('@')[0]) if auth_res.user.user_metadata else req.email.split('@')[0]
-        )
-        user["email_confirmed"] = True
-            
-        return {"success": True, "message": "Login successful!", "user": user}
-    except Exception as e:
-        print(f"Error in api_login: {e}")
-        err_msg = str(e)
-        if "email not confirmed" in err_msg.lower() or "email_not_confirmed" in err_msg.lower() or "confirm" in err_msg.lower():
-            raise HTTPException(status_code=400, detail="email_not_confirmed")
-            
-        detail_msg = "Invalid credentials"
-        if "Invalid login credentials" in str(e) or "invalid" in str(e).lower():
-            detail_msg = "Invalid email or password"
-        elif hasattr(e, 'message'):
-            detail_msg = e.message
-        raise HTTPException(status_code=401, detail=detail_msg)
-
-@router.post("/register")
-async def api_register(req: RegisterRequest):
-    try:
-        # Check if already exists in public table
-        check = supabase.table("users").select("*").eq("email", req.email).execute()
-        if check.data:
-            raise HTTPException(status_code=400, detail="User already exists")
-        
-        # 1. Sign up with Supabase Auth
-        auth_res = supabase.auth.sign_up({
+        auth_res = supabase_auth.auth.sign_up({
             "email": req.email,
             "password": req.password,
-            "options": {
-                "data": {
-                    "full_name": req.full_name
-                }
-            }
+            "options": {"data": {"full_name": req.full_name}},
         })
-        
         if not auth_res.user:
             raise HTTPException(status_code=500, detail="Failed to create auth user")
-            
-        # Check if email confirmation is required/pending
-        email_confirmed = False
-        if auth_res.session is not None:
-            email_confirmed = True
-        elif auth_res.user and auth_res.user.email_confirmed_at:
-            email_confirmed = True
 
-        # 2. Retrieve user record with profile (auto-registers them in users & profiles tables)
-        user = await get_user_with_profile(auth_res.user.id, req.email, req.full_name)
-        user["email_confirmed"] = email_confirmed
-            
-        return {"success": True, "message": "Registration successful!", "user": user}
+        email_confirmed = auth_res.session is not None or bool(
+            auth_res.user.email_confirmed_at
+        )
+        user = ensure_user_with_profile(auth_res.user.id, req.email, req.full_name)
+        session = auth_res.session
+        return _login_payload(
+            user,
+            email_confirmed=email_confirmed,
+            access_token=session.access_token if session else None,
+            refresh_token=session.refresh_token if session else None,
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error in api_register: {e}")
-        if hasattr(e, 'message'):
-            raise HTTPException(status_code=400, detail=e.message)
-        raise HTTPException(status_code=500, detail=str(e))
+        status, detail = auth_error_detail(e)
+        raise HTTPException(status_code=status, detail=detail)
 
 class UserUpdateRequest(BaseModel):
     full_name: str
@@ -205,7 +207,6 @@ async def api_oauth_login(req: OAuthLoginRequest):
                         "user_id": req.user_id,
                         "full_name": req.full_name,
                         "email": req.email,
-                        "password": "OAUTH_GOOGLE"
                     }).execute()
                     
                     # 3. Update referencing tables
@@ -218,11 +219,11 @@ async def api_oauth_login(req: OAuthLoginRequest):
                 except Exception as sync_err:
                     print(f"Failed self-healing user_id update: {sync_err}")
             
-            user_profile = await get_user_with_profile(req.user_id, req.email, req.full_name)
+            user_profile = ensure_user_with_profile(req.user_id, req.email, req.full_name)
             return {"success": True, "message": "OAuth login successful", "user": user_profile}
         
         # User does not exist, sync insert both user and user profile
-        user_profile = await get_user_with_profile(req.user_id, req.email, req.full_name)
+        user_profile = ensure_user_with_profile(req.user_id, req.email, req.full_name)
         return {"success": True, "message": "OAuth registration successful", "user": user_profile}
     except Exception as e:
         print(f"Error in oauth-login: {e}")
@@ -230,84 +231,50 @@ async def api_oauth_login(req: OAuthLoginRequest):
 
 @router.get("/dashboard-summary")
 async def get_dashboard_summary(user_id: str):
+    if not user_id or not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id is required")
     try:
-        # 1. Fetch Accounts
-        acc_response = supabase.table("accounts").select("*").eq("user_id", user_id).execute()
-        accounts = acc_response.data
-        total_balance = sum(float(a["current_balance"]) for a in accounts) if accounts else 0
-        
-        # 2. Fetch Transactions
-        trans_response = supabase.table("transactions")\
-            .select("amount, transaction_type, transaction_date")\
-            .eq("user_id", user_id)\
-            .order("transaction_date")\
-            .execute()
-        transactions = trans_response.data
-        
-        # 3. Aggregation logic
-        monthly_stats = defaultdict(lambda: {"income": 0, "expense": 0})
-        current_month_str = datetime.now().strftime("%Y-%m")
-        
-        for t in transactions:
-            date_str = t["transaction_date"]
-            month_key = date_str[:7] # YYYY-MM
-            amount = abs(float(t["amount"])) # Ensure positive amount for sums
-            
-            if t["transaction_type"] == "income":
-                monthly_stats[month_key]["income"] += amount
-            else:
-                monthly_stats[month_key]["expense"] += amount
-        
-        # Current month specific stats
-        curr_stats = monthly_stats.get(current_month_str, {"income": 0, "expense": 0})
-        
-        # Format chart data (last 7 months)
-        sorted_months = sorted(monthly_stats.keys())[-7:]
-        chart_data = []
-        for m in sorted_months:
-            inc = monthly_stats[m]["income"]
-            exp = monthly_stats[m]["expense"]
-            chart_data.append({
-                "name": datetime.strptime(m, "%Y-%m").strftime("%b"), # 'Jan', 'Feb', etc.
-                "income": inc,
-                "expense": exp,
-                "net": inc - exp
-            })
-            
-        # 4. Fetch Recent Transactions (last 5)
-        recent_res = supabase.table("transactions")\
-            .select("*, categories(main_category, sub_category), accounts(account_name)")\
-            .eq("user_id", user_id)\
-            .order("transaction_date", desc=True)\
-            .limit(5)\
-            .execute()
-        
-        recent_transactions = []
-        for t in recent_res.data:
-            recent_transactions.append({
-                "id": t["transaction_id"],
-                "date": t["transaction_date"],
-                "merchant": t["merchant_name"],
-                "amount": float(t["amount"]),
-                "type": t["transaction_type"],
-                "category": t["categories"]["main_category"] if t["categories"] else "Uncategorized",
-                "subCategory": t["categories"]["sub_category"] if t["categories"] else "General",
-                "account": t["accounts"]["account_name"] if t["accounts"] else "Unknown"
-            })
+        acc_response = (
+            supabase.table("accounts").select("*").eq("user_id", user_id).execute()
+        )
+        accounts = acc_response.data or []
 
-        return {
-            "success": True,
-            "summary": {
-                "total_balance": total_balance,
-                "monthly_income": curr_stats["income"],
-                "monthly_expenses": curr_stats["expense"],
-                "net_savings": curr_stats["income"] - curr_stats["expense"],
-                "savings_rate": round((curr_stats["income"] - curr_stats["expense"]) / curr_stats["income"] * 100, 1) if curr_stats["income"] > 0 else 0
-            },
-            "chart_data": chart_data,
-            "accounts": accounts,
-            "recent_transactions": recent_transactions
-        }
+        trans_response = (
+            supabase.table("transactions")
+            .select(
+                "transaction_id, amount, transaction_type, transaction_date, "
+                "category_id, categories(main_category, sub_category)"
+            )
+            .eq("user_id", user_id)
+            .order("transaction_date")
+            .execute()
+        )
+        transactions = trans_response.data or []
+
+        recent_res = (
+            supabase.table("transactions")
+            .select("*, categories(main_category, sub_category), accounts(account_name)")
+            .eq("user_id", user_id)
+            .order("transaction_date", desc=True)
+            .limit(5)
+            .execute()
+        )
+
+        budget_res = (
+            supabase.table("budgets")
+            .select("*, categories(main_category, sub_category)")
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+        return build_dashboard_payload(
+            accounts=accounts,
+            transactions=transactions,
+            recent_rows=recent_res.data or [],
+            budgets=budget_res.data or [],
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error in dashboard-summary: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -326,90 +293,26 @@ class TransactionCreate(BaseModel):
 @router.post("/transactions")
 async def create_transaction(req: TransactionCreate):
     try:
-        # 1. Map Category Case-Insensitively
-        cat_res = supabase.table("categories")\
-            .select("category_id")\
-            .ilike("main_category", req.main_category)\
-            .ilike("sub_category", req.sub_category)\
-            .execute()
-        
-        if not cat_res.data:
-            cat_res = supabase.table("categories")\
-                .select("category_id")\
-                .ilike("main_category", req.main_category)\
-                .ilike("sub_category", "General")\
-                .execute()
-        
-        category_id = cat_res.data[0]["category_id"] if cat_res.data else None
-        
-        if not category_id:
-            # Fall back to "Others", "General" if category mapping failed to prevent NOT NULL database violation
-            fallback_res = supabase.table("categories")\
-                .select("category_id")\
-                .ilike("main_category", "Others")\
-                .ilike("sub_category", "General")\
-                .execute()
-            category_id = fallback_res.data[0]["category_id"] if fallback_res.data else None
-        
-        # 2. Resolve Account ID dynamically (supporting UUID or account name, with auto-create fallback)
-        account_id = req.account_id
-        import uuid
-        is_uuid = False
-        try:
-            uuid.UUID(account_id)
-            is_uuid = True
-        except ValueError:
-            pass
-            
-        acc_res = None
-        if is_uuid:
-            acc_res = supabase.table("accounts").select("*").eq("account_id", account_id).execute()
-            
-        if not acc_res or not acc_res.data:
-            # Query by name
-            acc_name = req.account_id if not is_uuid else "Primary Checking"
-            acc_check = supabase.table("accounts").select("*").eq("user_id", req.user_id).eq("account_name", acc_name).execute()
-            if acc_check.data:
-                acc_res = acc_check
-                account_id = acc_check.data[0]["account_id"]
-            else:
-                # Create the account on the fly!
-                new_acc = supabase.table("accounts").insert({
-                    "user_id": req.user_id,
-                    "account_name": acc_name,
-                    "account_type": "checking",
-                    "current_balance": 0.0
-                }).execute()
-                if new_acc.data:
-                    acc_res = new_acc
-                    account_id = new_acc.data[0]["account_id"]
-                else:
-                    raise HTTPException(status_code=500, detail="Failed to auto-create account")
-        
-        curr_bal = float(acc_res.data[0]["current_balance"])
-        # In this DB schema, amount is stored as absolute, type handles sign
-        new_bal = curr_bal + req.amount if req.transaction_type == "income" else curr_bal - req.amount
-        
-        # 3. Insert Transaction
-        trans_data = {
-            "user_id": req.user_id,
-            "account_id": account_id,
-            "category_id": category_id,
-            "amount": req.amount,
-            "transaction_type": req.transaction_type,
-            "merchant_name": req.merchant_name,
-            "description": req.description,
-            "transaction_date": req.transaction_date,
-            "running_balance": new_bal
+        result = create_transaction_record(
+            user_id=req.user_id,
+            account_id=req.account_id,
+            amount=req.amount,
+            transaction_type=req.transaction_type,
+            merchant_name=req.merchant_name,
+            description=req.description,
+            main_category=req.main_category,
+            sub_category=req.sub_category,
+            transaction_date=req.transaction_date,
+        )
+        return {
+            "success": True,
+            "message": "Transaction added successfully",
+            "new_balance": result["new_balance"],
+            "account_id": result["account_id"],
+            "transaction_id": result["transaction"].get("transaction_id"),
         }
-        
-        supabase.table("transactions").insert(trans_data).execute()
-        
-        # 4. Update Account Balance
-        supabase.table("accounts").update({"current_balance": new_bal}).eq("account_id", account_id).execute()
-        
-        return {"success": True, "message": "Transaction added successfully", "new_balance": new_bal}
-        
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error creating transaction: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -446,7 +349,7 @@ async def get_transactions(user_id: str, start_date: str = None, end_date: str =
                 "id": t["transaction_id"],
                 "date": t["transaction_date"],
                 "merchant": t["merchant_name"] or t["description"] or "Unknown",
-                "category": main_cat,
+                "category": normalize_category_name(main_cat),
                 "subCategory": sub_cat,
                 "amount": float(t["amount"]),
                 "account": acc_map.get(t["account_id"], "Unknown Account"),
@@ -564,6 +467,39 @@ class GoalCreate(BaseModel):
     current_amount: float = 0.0
     target_date: str
     status: str = "active"
+
+@router.get("/budget-goals-summary")
+async def get_budget_goals_summary(user_id: str):
+    if not user_id or not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        budget_res = (
+            supabase.table("budgets")
+            .select("*, categories(main_category, sub_category)")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        trans_response = (
+            supabase.table("transactions")
+            .select(
+                "transaction_id, amount, transaction_type, transaction_date, category_id"
+            )
+            .eq("user_id", user_id)
+            .order("transaction_date")
+            .execute()
+        )
+        goals_res = (
+            supabase.table("goals").select("*").eq("user_id", user_id).execute()
+        )
+        return build_budget_goals_payload(
+            budgets=budget_res.data or [],
+            transactions=trans_response.data or [],
+            goals=goals_res.data or [],
+        )
+    except Exception as e:
+        print(f"Error fetching budget-goals summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/budgets")
 async def get_budgets(user_id: str):

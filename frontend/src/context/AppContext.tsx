@@ -1,7 +1,15 @@
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { Transaction, Goal, Category, Report, HeatmapData, UserProfile, Budget } from '../types';
-import { format, subDays, eachDayOfInterval, startOfYear, endOfYear } from 'date-fns';
+import { format, eachDayOfInterval, startOfYear, endOfYear } from 'date-fns';
+import {
+  clearAuthSession,
+  loadAuthSession,
+  saveAuthSession,
+  updateStoredUser,
+} from '../lib/authSession';
+import { apiFetch } from '../lib/api';
+import { activeUserId } from '../lib/activeUserId';
 
 interface AppContextType {
   user: UserProfile;
@@ -12,7 +20,7 @@ interface AppContextType {
   addTransactions: (ts: Omit<Transaction, 'id'>[]) => void;
   updateTransaction: (id: string, t: Partial<Transaction>) => void;
   deleteTransaction: (id: string) => void;
-  
+  loadTransactions: () => void;
   budgets: Budget[];
   addBudget: (b: Omit<Budget, 'id'>) => void;
   updateBudget: (id: string, b: Partial<Budget>) => void;
@@ -45,6 +53,8 @@ interface AppContextType {
   signOut: () => void;
   setCurrentPage: (page: string) => void;
   currentPage: string;
+  authReady: boolean;
+
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -64,20 +74,6 @@ const initialUser: UserProfile = {
   primaryGoal: '',
   statementUploaded: false
 };
-
-const initialTransactions: Transaction[] = [
-  { id: '1', date: '2023-10-24', merchant: 'Starbucks', category: 'Food & Drinks', subCategory: 'bar-cafe', amount: -12.50, account: 'Amex Card', type: 'expense' },
-  { id: '2', date: '2023-10-23', merchant: 'Amazon', category: 'Shopping', subCategory: 'Electronics', amount: -189.99, account: 'HDFC Bank', type: 'expense' },
-  { id: '3', date: '2023-10-21', merchant: 'Landlord Prop', category: 'Housing', subCategory: 'Rent', amount: -2200.00, account: 'HDFC Bank', type: 'expense' },
-  { id: '4', date: '2023-10-20', merchant: 'Uber', category: 'Transportation', subCategory: 'Taxi', amount: -45.00, account: 'ICICI Bank', type: 'expense' },
-  { id: '5', date: '2023-10-19', merchant: 'Monthly Salary', category: 'Income', subCategory: 'Wage/invoices', amount: 40000.00, account: 'HDFC Bank', type: 'income' },
-];
-
-const initialGoals: Goal[] = [
-  { id: '1', label: 'Emergency Fund', sub: 'Security cushion for 6 months of expenses.', current: 18750, target: 25000, date: '2024-12-31', icon: 'ShieldCheck', color: 'bg-secondary' },
-  { id: '2', label: 'European Vacation', sub: 'Summer 2025 family trip across Italy.', current: 5040, target: 12000, date: '2025-06-30', icon: 'PlaneTakeoff', color: 'bg-primary' },
-  { id: '3', label: 'New Workstation', sub: 'Latest Studio setup for trading rig.', current: 420, target: 3500, date: '2024-10-31', icon: 'Laptop', color: 'bg-outline' },
-];
 
 const initialCategories: Category[] = [
   { id: 'cat-0', name: 'Uncategorized', icon: 'HelpCircle', subCategories: [] },
@@ -188,8 +184,9 @@ const initialCategories: Category[] = [
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile>(initialUser);
-  const [transactions, setTransactions] = useState<Transaction[]>(initialTransactions);
-  const [goals, setGoals] = useState<Goal[]>(initialGoals);
+  const [authReady, setAuthReady] = useState(false);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [categories, setCategories] = useState<Category[]>(initialCategories);
   const [currentPage, setCurrentPage] = useState('dashboard');
@@ -197,11 +194,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [reports, setReports] = useState<Report[]>([
     { id: '1', title: 'Monthly Summary', date: 'Sept 2023', size: '2.4 MB', type: 'PDF' },
   ]);
-
   const updateUser = (u: Partial<UserProfile>) => {
     setUser(prev => {
       const newUser = { ...prev, ...u };
       
+      if (newUser.isAuthenticated && (newUser.userId || newUser.id)) {
+        updateStoredUser(newUser);
+      }
+
       // If user is logged in, sync changes to the database
       if (newUser.isAuthenticated && newUser.userId) {
         fetch(`http://localhost:8000/api/users/${newUser.userId}`, {
@@ -224,6 +224,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return newUser;
     });
   };
+
+  // Restore persisted auth session on reload
+  useEffect(() => {
+    const session = loadAuthSession();
+    if (session?.user) {
+      setUser(session.user);
+    }
+    setAuthReady(true);
+  }, []);
 
   // Check for Supabase OAuth redirect parameters in URL hash
   useEffect(() => {
@@ -256,8 +265,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 if (data.success) {
                   // Clear the hash from the URL so it looks clean
                   window.history.replaceState(null, "", window.location.pathname);
-                  
-                  setUser({
+
+                  const restoredUser: UserProfile = {
                     id: user_id,
                     isAuthenticated: true,
                     userId: user_id,
@@ -270,8 +279,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                     fixedEMI: data.user.fixed_emi || 0,
                     biggestCategory: data.user.biggest_category || '',
                     primaryGoal: data.user.primary_goal || '',
-                    statementUploaded: false
-                  });
+                    statementUploaded: false,
+                    role: data.user.role === 'admin' ? 'admin' : 'user',
+                  };
+
+                  saveAuthSession(accessToken, restoredUser);
+                  setUser(restoredUser);
                 }
               })
               .catch(err => {
@@ -290,108 +303,181 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => window.removeEventListener("hashchange", handleHashAuth);
   }, []);
 
-  const loadTransactions = () => {
-    if (user.isAuthenticated && user.userId) {
-      // Clear mock data for signed-in user
+  const loadTransactions = useCallback(() => {
+    const uid = activeUserId(user);
+    if (!uid) {
       setTransactions([]);
-      setGoals([]);
-      setReports([]);
-
-      fetch(`http://localhost:8000/api/transactions?user_id=${user.userId}`)
-        .then(res => {
-          if (!res.ok) throw new Error("Could not load transactions from database");
-          return res.json();
-        })
-        .then(data => {
-          if (Array.isArray(data) && data.length > 0) {
-            setTransactions(data);
-          } else {
-            setTransactions([]);
-          }
-        })
-        .catch(err => {
-          console.warn("FastAPI backend offline or database empty, using empty transactions for real user:", err);
-          setTransactions([]);
-        });
+      return;
     }
-  };
 
-  // Load real-time transactions, budgets, and goals from Supabase on Login / Sign-up
-  useEffect(() => {
+    apiFetch(`/api/transactions?user_id=${encodeURIComponent(uid)}`)
+      .then(res => {
+        if (!res.ok) throw new Error('Could not load transactions from database');
+        return res.json();
+      })
+      .then(data => {
+        const rows = Array.isArray(data?.data) ? data.data : [];
+        setTransactions(rows);
+      })
+      .catch(err => {
+        console.warn('Failed to load transactions from database:', err);
+        setTransactions([]);
+      });
+  }, [user]);
+
+  const loadBudgets = useCallback(() => {
+    const uid = activeUserId(user);
+    if (!uid) {
+      setBudgets([]);
+      return;
+    }
+
+    apiFetch(`/api/budgets?user_id=${encodeURIComponent(uid)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && Array.isArray(data.data)) {
+          setBudgets(data.data);
+        } else {
+          setBudgets([]);
+        }
+      })
+      .catch(err => console.error('Failed to load budgets:', err));
+  }, [user]);
+
+  const loadGoals = useCallback(() => {
+    const uid = activeUserId(user);
+    if (!uid) {
+      setGoals([]);
+      return;
+    }
+
+    apiFetch(`/api/goals?user_id=${encodeURIComponent(uid)}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && Array.isArray(data.data)) {
+          const icons = ['Target', 'ShieldCheck', 'PlaneTakeoff', 'Laptop'];
+          const colors = ['bg-primary', 'bg-secondary', 'bg-tertiary', 'bg-outline'];
+          const mapped = data.data.map((g: Goal, index: number) => ({
+            ...g,
+            icon: icons[index % icons.length],
+            color: colors[index % colors.length],
+          }));
+          setGoals(mapped);
+        } else {
+          setGoals([]);
+        }
+      })
+      .catch(err => console.error('Failed to load goals:', err));
+  }, [user]);
+
+  const refreshUserData = useCallback(() => {
     loadTransactions();
     loadBudgets();
     loadGoals();
-  }, [user.isAuthenticated, user.userId]);
+  }, [loadTransactions, loadBudgets, loadGoals]);
+
+  // Load from database once auth session is restored
+  useEffect(() => {
+    if (!authReady) return;
+    if (user.isAuthenticated && activeUserId(user)) {
+      refreshUserData();
+    } else {
+      setTransactions([]);
+      setGoals([]);
+      setBudgets([]);
+    }
+  }, [authReady, user.isAuthenticated, user.userId, user.id, refreshUserData]);
+
+  // Refetch when the tab regains focus (e.g. after editing in Supabase)
+  useEffect(() => {
+    if (!authReady || !user.isAuthenticated) return;
+
+    const onFocus = () => refreshUserData();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [authReady, user.isAuthenticated, refreshUserData]);
 
   const addTransaction = (t: Omit<Transaction, 'id'>) => {
-    const activeUserId = user.userId || user.id;
-    if (activeUserId) {
-      fetch('http://localhost:8000/api/transactions', {
+    const uid = activeUserId(user);
+    if (uid) {
+      apiFetch('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: activeUserId,
-          account_id: t.account || "Primary Checking",
+          user_id: uid,
+          account_id: t.account || 'Primary Checking',
           amount: Math.abs(t.amount),
           transaction_type: t.type,
           merchant_name: t.merchant,
-          description: t.notes || "",
+          description: t.notes || '',
           main_category: t.category,
           category_name: t.category,
-          sub_category: t.subCategory || "General",
-          sub_category_name: t.subCategory || "General",
-          transaction_date: t.date
-        })
+          sub_category: t.subCategory || 'General',
+          sub_category_name: t.subCategory || 'General',
+          transaction_date: t.date,
+        }),
       })
-      .then(res => res.json())
-      .then(saved => {
-        loadTransactions();
-      })
-      .catch(err => {
-        console.error("Database save failed, using local transaction fallback:", err);
-        setTransactions(prev => [{ ...t, id: Math.random().toString(36).substr(2, 9) }, ...prev]);
-      });
-    } else {
-      setTransactions(prev => [{ ...t, id: Math.random().toString(36).substr(2, 9) }, ...prev]);
+        .then(res => res.json())
+        .then(() => loadTransactions())
+        .catch(err => console.error('Database save failed:', err));
+      return;
     }
   };
 
-  const addTransactions = (ts: Omit<Transaction, 'id'>[]) => {
-    const newTs = ts.map(t => ({ ...t, id: Math.random().toString(36).substr(2, 9) }));
-    setTransactions(prev => [...newTs, ...prev]);
+  const addTransactions = (_ts: Omit<Transaction, 'id'>[]) => {
+    loadTransactions();
   };
 
   const updateTransaction = (id: string, t: Partial<Transaction>) => {
-    setTransactions(prev => prev.map(item => item.id === id ? { ...item, ...t } : item));
+    const uid = activeUserId(user);
+    if (!uid) return;
+
+    const existing = transactions.find(item => item.id === id);
+    if (!existing) return;
+
+    const merged = { ...existing, ...t };
+    apiFetch(`/api/transactions/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: uid,
+        account_id: (merged as Transaction & { account_id?: string }).account_id || merged.account,
+        amount: Math.abs(merged.amount),
+        transaction_type: merged.type,
+        merchant_name: merged.merchant,
+        description: merged.notes || '',
+        main_category: merged.category,
+        sub_category: merged.subCategory || 'General',
+        transaction_date: merged.date,
+      }),
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) loadTransactions();
+      })
+      .catch(err => console.error('Failed to update transaction:', err));
   };
 
   const deleteTransaction = (id: string) => {
-    setTransactions(prev => prev.filter(item => item.id !== id));
-  };
+    const uid = activeUserId(user);
+    if (!uid) return;
 
-  const loadBudgets = () => {
-    if (user.isAuthenticated && user.userId) {
-      fetch(`http://localhost:8000/api/budgets?user_id=${user.userId}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.success && Array.isArray(data.data)) {
-            setBudgets(data.data);
-          }
-        })
-        .catch(err => console.error("Failed to load budgets:", err));
-    } else {
-      setBudgets([]);
-    }
+    apiFetch(`/api/transactions/${id}`, { method: 'DELETE' })
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) loadTransactions();
+      })
+      .catch(err => console.error('Failed to delete transaction:', err));
   };
 
   const addBudget = (b: Omit<Budget, 'id'>) => {
-    const activeUserId = user.userId || user.id;
-    if (activeUserId) {
-      fetch('http://localhost:8000/api/budgets', {
+    const uid = activeUserId(user);
+    if (uid) {
+      apiFetch('/api/budgets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: activeUserId,
+          user_id: uid,
           category_name: b.categoryName,
           budget_name: b.budgetName,
           amount: b.amount,
@@ -410,7 +496,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateBudget = (id: string, b: Partial<Budget>) => {
-    fetch(`http://localhost:8000/api/budgets/${id}`, {
+    apiFetch(`/api/budgets/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -432,7 +518,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteBudget = (id: string) => {
-    fetch(`http://localhost:8000/api/budgets/${id}`, {
+    apiFetch(`/api/budgets/${id}`, {
       method: 'DELETE'
     })
     .then(res => res.json())
@@ -442,36 +528,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     .catch(err => console.error("Failed to delete budget:", err));
   };
 
-  const loadGoals = () => {
-    if (user.isAuthenticated && user.userId) {
-      fetch(`http://localhost:8000/api/goals?user_id=${user.userId}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.success && Array.isArray(data.data)) {
-            const icons = ['Target', 'ShieldCheck', 'PlaneTakeoff', 'Laptop'];
-            const colors = ['bg-primary', 'bg-secondary', 'bg-tertiary', 'bg-outline'];
-            const mapped = data.data.map((g: any, index: number) => ({
-              ...g,
-              icon: icons[index % icons.length],
-              color: colors[index % colors.length]
-            }));
-            setGoals(mapped);
-          }
-        })
-        .catch(err => console.error("Failed to load goals:", err));
-    } else {
-      setGoals(initialGoals);
-    }
-  };
-
   const addGoal = (g: Omit<Goal, 'id'>) => {
-    const activeUserId = user.userId || user.id;
-    if (activeUserId) {
-      fetch('http://localhost:8000/api/goals', {
+    const uid = activeUserId(user);
+    if (uid) {
+      apiFetch('/api/goals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: activeUserId,
+          user_id: uid,
           goal_name: g.label,
           description: g.sub,
           target_amount: g.target,
@@ -489,7 +553,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateGoal = (id: string, g: Partial<Goal>) => {
-    fetch(`http://localhost:8000/api/goals/${id}`, {
+    apiFetch(`/api/goals/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -510,7 +574,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteGoal = (id: string) => {
-    fetch(`http://localhost:8000/api/goals/${id}`, {
+    apiFetch(`/api/goals/${id}`, {
       method: 'DELETE'
     })
     .then(res => res.json())
@@ -558,13 +622,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const resetPendingDate = () => setPendingDate(null);
 
   const signOut = () => {
+    clearAuthSession();
     setUser(initialUser);
-    setTransactions(initialTransactions);
-    setGoals(initialGoals);
+    setTransactions([]);
+    setGoals([]);
     setBudgets([]);
-    setReports([
-      { id: '1', title: 'Monthly Summary', date: 'Sept 2023', size: '2.4 MB', type: 'PDF' },
-    ]);
+    setReports([]);
     setCurrentPage('dashboard');
   };
 
@@ -587,8 +650,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       formData.append("account_name", "Primary Checking");
 
       try {
-        const response = await fetch("http://localhost:8000/api/statement/upload", {
-          method: "POST",
+        const response = await apiFetch('/api/statement/upload', {
+          method: 'POST',
           body: formData,
         });
         if (response.ok) {
@@ -616,7 +679,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider value={{
       user, updateUser,
-      transactions, addTransaction, addTransactions, updateTransaction, deleteTransaction,
+      transactions, addTransaction, addTransactions, updateTransaction, deleteTransaction, loadTransactions,
       budgets, addBudget, updateBudget, deleteBudget, loadBudgets, loadGoals,
       goals, addGoal, updateGoal, deleteGoal,
       categories, addCategory, updateCategory, deleteCategory, addSubCategory, deleteSubCategory,
@@ -624,7 +687,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       heatmapData,
       navigateToAddTransaction, pendingDate, resetPendingDate,
       signOut,
-      setCurrentPage, currentPage
+      setCurrentPage, currentPage,
+      authReady,
     }}>
       {children}
     </AppContext.Provider>

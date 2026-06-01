@@ -1,0 +1,2 @@
+[functions.train-forecast]
+verify_jwt = false

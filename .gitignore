@@ -8,8 +8,11 @@ frontend/node_modules/
 dist/
 build/
 .DS_Store
-
+.venv/
 # ── FinAssist runtime-generated artifacts (do NOT commit) ─────────────────────
+models/staging/
+models/production/*.joblib
+models/jobs/
 backend/chroma_db/
 backend/sessions.json
 *.sqlite

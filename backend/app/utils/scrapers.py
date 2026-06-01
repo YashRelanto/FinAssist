@@ -6,8 +6,6 @@ import uuid
 import re
 import time
 from datetime import datetime
-from celery import shared_task
-
 # Import your local ChromaDB instance
 from app.utils.chroma_store import chroma_db
 
@@ -208,33 +206,6 @@ def scrape_all():
         scrape_category(category)
     print("\n" + "="*60 + "\nSCRAPING COMPLETE\n" + "="*60)
 
-
-# CELERY TASKS FOR PRODUCTION SCHEDULING
-@shared_task
-def scheduled_weekly_scrape():
-    """Run on Sunday 2 AM"""
-    scrape_category("banking")
-
-@shared_task
-def scheduled_daily_morning_scrape():
-    """Run Mon-Fri 9:15 AM"""
-    scrape_category("stocks")
-
-@shared_task
-def scheduled_daily_evening_scrape():
-    """Run Daily 6 PM"""
-    scrape_category("mutual_funds")
-    scrape_category("gold")
-    scrape_category("financial_tips")
-
-@shared_task
-def scheduled_monthly_scrape():
-    """Run 1st of month"""
-    scrape_category("retirement")
-
-# ══════════════════════════════════════════════════════════════════════
-# MANUAL EXECUTION
-# ══════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     scrape_all()

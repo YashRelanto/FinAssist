@@ -4,6 +4,7 @@ export interface UserProfile {
   userId?: string;
   name: string;
   email: string;
+  role?: 'user' | 'admin';
   isAuthenticated: boolean;
   onboarded: boolean;
   income: number;
