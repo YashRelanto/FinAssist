@@ -104,7 +104,8 @@ export const analyzeStatementFile = async (
         amount,
         account: 'Statement Upload',
         type,
-        notes: isHighAmount ? 'High amount anomaly detected. Please verify.' : undefined
+        notes: isHighAmount ? 'High amount anomaly detected. Please verify.' : undefined,
+        runningBalance: t.running_balance
       };
     });
 

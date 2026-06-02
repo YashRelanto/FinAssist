@@ -18,6 +18,33 @@ from PIL import Image
 from pdf2image import convert_from_path
 
 from app.utils.supabase_client import supabase
+import sys
+
+# ─── Self-Healing Windows Poppler Path Loader ──────────────────────
+if sys.platform.startswith("win"):
+    import glob
+    downloads_dir = os.path.expandvars(r"%USERPROFILE%\Downloads")
+    
+    # Dynamic search for extracted poppler installations in downloads or program files
+    candidates = (
+        glob.glob(os.path.join(downloads_dir, "**/Library/bin"), recursive=True) +
+        glob.glob(os.path.join(downloads_dir, "**/poppler*/bin"), recursive=True) +
+        glob.glob(r"C:\Program Files\**/Library/bin", recursive=True) +
+        glob.glob(r"C:\Program Files\**/poppler*/bin", recursive=True)
+    )
+    
+    POPPLER_CANDIDATE_PATHS = [
+        r"C:\Program Files\poppler\bin",
+        r"C:\Program Files\poppler\Library\bin",
+        r"C:\poppler\bin",
+        r"C:\ProgramData\chocolatey\bin",
+        r"C:\ProgramData\chocolatey\lib\poppler\tools\bin",
+        r"C:\msys64\mingw64\bin",
+    ] + candidates
+    
+    for path in POPPLER_CANDIDATE_PATHS:
+        if os.path.isdir(path) and path not in os.environ["PATH"]:
+            os.environ["PATH"] += os.pathsep + path
 
 router = APIRouter(prefix="/api/statement", tags=["Statement Parser"])
 
@@ -31,6 +58,8 @@ class ParsedTransaction(BaseModel):
     merchant_name: Optional[str] = None
     description: str
     running_balance: Optional[float] = None
+    category: Optional[str] = None
+    sub_category: Optional[str] = None
 
 
 class ParseStatementResponse(BaseModel):
@@ -73,13 +102,42 @@ class PasswordProtectedException(Exception):
 class AdvancedBankParser:
     @staticmethod
     def extract_text_from_pdf(file_path: str, password: Optional[str] = None) -> str:
-        """
-        Extract raw text from a PDF.
-        Strategy:
-          1. pdfplumber (fastest, works for digital PDFs)
-          2. pdf2image + pytesseract OCR (for scanned PDFs)
-        """
-        # ── Try pdfplumber ──────────────────────────────────────────
+        # ─── FIRST PASS: Explicit Pure-Python Encryption Detection ───
+        try:
+            import pypdf
+            reader = pypdf.PdfReader(file_path)
+            if reader.is_encrypted:
+                if not password:
+                    raise PasswordProtectedException("Password required to open PDF.", "password_required")
+        except PasswordProtectedException:
+            raise
+        except Exception:
+            pass
+
+        # ─── 1. Try PyMuPDF (fitz) for Digital Extraction (Super Robust & Fast) ───
+        # ─── 1. Try PyMuPDF (fitz) for Digital Extraction (Super Robust & Fast) ───
+        try:
+            import fitz
+            with fitz.open(file_path) as doc:
+                if doc.is_encrypted:
+                    if password:
+                        auth_res = doc.authenticate(password)
+                        if not auth_res:
+                            raise PasswordProtectedException("Incorrect PDF password.", "wrong_password")
+                    else:
+                        raise PasswordProtectedException("Password required to open PDF.", "password_required")
+                
+                text = ""
+                for page in doc:
+                    text += page.get_text() or ""
+                if text.strip():
+                    return text
+        except PasswordProtectedException:
+            raise
+        except Exception:
+            pass
+
+        # ─── 2. Try pdfplumber for Digital Extraction ───
         try:
             with pdfplumber.open(file_path, password=password) as pdf:
                 text = ""
@@ -87,53 +145,67 @@ class AdvancedBankParser:
                     text += page.extract_text() or ""
                 if text.strip():
                     return text
-        except Exception as e:
-            err_msg = str(e).lower()
-            if any(k in err_msg for k in ["password", "encrypted", "authenticate", "passphrase"]):
+        except Exception as e_plumber:
+            from pdfminer.pdfdocument import PDFPasswordIncorrect, PDFEncryptionError
+            err_msg = str(e_plumber).lower()
+            is_password_err = isinstance(e_plumber, (PDFPasswordIncorrect, PDFEncryptionError)) or any(
+                k in err_msg for k in ["password", "encrypted", "authenticate", "passphrase"]
+            )
+            if is_password_err:
                 err_type = "wrong_password" if password else "password_required"
-                raise PasswordProtectedException(f"PDF password error: {e}", err_type)
-            # Non-password error → fall through to OCR
+                raise PasswordProtectedException(f"PDF password error: {e_plumber}", err_type)
+            pass
 
-        # ── OCR fallback ────────────────────────────────────────────
-        # Resolve poppler_path: env var → shutil.which → known Windows install location
-        poppler_path: Optional[str] = os.getenv("POPPLER_PATH")
-        if not poppler_path:
-            pp_bin = shutil.which("pdftoppm")
-            if pp_bin:
-                poppler_path = os.path.dirname(pp_bin)
-
-        # Hardcoded Windows WinGet install path as last resort
-        if not poppler_path and os.name == "nt":
-            _winget_poppler = (
-                r"C:\Users\Relanto\AppData\Local\Microsoft\WinGet\Packages"
-                r"\oschwartz10612.Poppler_Microsoft.Winget.Source_8wekyb3d8bbwe"
-                r"\poppler-25.07.0\Library\bin"
-            )
-            if os.path.isdir(_winget_poppler):
-                poppler_path = _winget_poppler
-
-        if not poppler_path:
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "Poppler is not installed or not in PATH. "
-                    "Install Poppler and ensure 'pdftoppm' is accessible, "
-                    "or set the POPPLER_PATH environment variable to its bin directory."
-                ),
-            )
-
+        # ─── 3. Try pypdf for Digital Extraction ───
         try:
-            images = convert_from_path(file_path, userpw=password, poppler_path=poppler_path)
-            return "\n".join(pytesseract.image_to_string(img) for img in images)
-        except Exception as e:
-            err_msg = str(e).lower()
-            if any(k in err_msg for k in ["password", "encrypted", "authenticate", "passphrase"]):
-                err_type = "wrong_password" if password else "password_required"
-                raise PasswordProtectedException(f"PDF OCR password error: {e}", err_type)
-            raise HTTPException(
-                status_code=500,
-                detail=f"OCR failed. Ensure Poppler & Tesseract are installed. Detail: {e}",
-            )
+            import pypdf
+            reader = pypdf.PdfReader(file_path)
+            if reader.is_encrypted:
+                if password:
+                    res = reader.decrypt(password)
+                    if res == 0:
+                        raise PasswordProtectedException("Incorrect PDF password.", "wrong_password")
+                else:
+                    raise PasswordProtectedException("Password required to open PDF.", "password_required")
+            
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() or ""
+            if text.strip():
+                return text
+        except PasswordProtectedException:
+            raise
+        except Exception:
+            pass
+
+        # ─── 4. Fallback to OCR using PyMuPDF + pytesseract (NO POPPLER REQUIRED!) ───
+        try:
+            import fitz
+            from PIL import Image
+            with fitz.open(file_path) as doc:
+                if doc.is_encrypted:
+                    if password:
+                        doc.authenticate(password)
+                    else:
+                        raise PasswordProtectedException("PDF is password-protected.", "password_required")
+                
+                text = ""
+                for page in doc:
+                    pix = page.get_pixmap()
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    text += pytesseract.image_to_string(img)
+                if text.strip():
+                    return text
+        except PasswordProtectedException:
+            raise
+        except Exception:
+            pass
+
+        # ─── 5. Friendly Warning Fallback ───
+        raise HTTPException(
+            status_code=400,
+            detail="FinAssist currently requires standard digital statement PDFs (with selectable text) or CSV files for secure and accurate ledger ingestion. Scanned/image statement PDFs are not supported."
+        )
 
 
 # ─── Date & Amount Helpers ────────────────────────────────────────
@@ -537,47 +609,239 @@ def _parse_csv_text(raw_text: str) -> List[ParsedTransaction]:
     transactions = []
 
     date_col = next((i for i, h in enumerate(headers) if "date" in h), 0)
-    desc_col = next((i for i, h in enumerate(headers) if "desc" in h or "nar" in h or "particular" in h), 1)
-    debit_col = next((i for i, h in enumerate(headers) if "debit" in h or "dr" in h or "withdrawal" in h), -1)
-    credit_col = next((i for i, h in enumerate(headers) if "credit" in h or "cr" in h or "deposit" in h), -1)
-    amt_col = next((i for i, h in enumerate(headers) if "amount" in h or "amt" in h), 2)
-
+    desc_col = next((i for i, h in enumerate(headers) if "desc" in h or "nar" in h), 1)
+    
+    # Try to find specific credit/debit columns
+    credit_col = next((i for i, h in enumerate(headers) if any(k in h for k in ["credit", "deposit", "inflow", "received"])), None)
+    debit_col = next((i for i, h in enumerate(headers) if any(k in h for k in ["debit", "withdrawal", "outflow", "spent"])), None)
+    
+    amt_col = next((i for i, h in enumerate(headers) if "amt" in h or "amount" in h), 2)
+    type_col = next((i for i, h in enumerate(headers) if "type" in h), None)
+    
     for line in lines[header_idx + 1:]:
-        parts = [p.strip() for p in line.split(",")]
+        import csv
+        try:
+            parts = next(csv.reader([line]))
+        except Exception:
+            parts = [p.strip() for p in line.split(",")]
+            
+        if not parts:
+            continue
+            
         date = _parse_date(parts[date_col]) if len(parts) > date_col else None
         if not date:
             continue
-
+            
         desc = parts[desc_col] if len(parts) > desc_col else "Transaction"
-
-        if debit_col >= 0 and credit_col >= 0 and len(parts) > max(debit_col, credit_col):
-            d = _parse_amount(parts[debit_col]) or 0.0
-            c = _parse_amount(parts[credit_col]) or 0.0
-            if c > 0 and d == 0:
-                amt, tx_type = c, "Credit"
-            else:
-                amt, tx_type = d, "Debit"
-        else:
-            amt = _parse_amount(parts[amt_col]) if len(parts) > amt_col else None
-            if amt is None:
-                continue
-            tx_type = "Debit"
-
-        if amt == 0:
-            continue
-
-        transactions.append(ParsedTransaction(
-            transaction_date=date,
-            amount=amt,
-            transaction_type=tx_type,
-            merchant_name=_extract_merchant_name(desc),
-            description=desc,
-        ))
-
+        
+        amt = None
+        tx_type = "Debit"
+        
+        if credit_col is not None and debit_col is not None:
+            cr_val = parts[credit_col] if len(parts) > credit_col else ""
+            dr_val = parts[debit_col] if len(parts) > debit_col else ""
+            cr_amt = _parse_amount(cr_val)
+            dr_amt = _parse_amount(dr_val)
+            
+            if cr_amt is not None and cr_amt > 0:
+                amt = cr_amt
+                tx_type = "Credit"
+            elif dr_amt is not None and dr_amt > 0:
+                amt = dr_amt
+                tx_type = "Debit"
+                
+        if amt is None:
+            val = parts[amt_col] if len(parts) > amt_col else ""
+            amt = _parse_amount(val)
+            if amt is not None:
+                if val.strip().startswith("-"):
+                    tx_type = "Debit"
+                elif "+" in val:
+                    tx_type = "Credit"
+                elif type_col is not None and len(parts) > type_col:
+                    t_val = parts[type_col].lower()
+                    if any(k in t_val for k in ["cr", "credit", "in"]):
+                        tx_type = "Credit"
+                    else:
+                        tx_type = "Debit"
+                else:
+                    lower_line = line.lower()
+                    if any(kw in lower_line for kw in ["cr", "credit", "dep", "deposit", "received", "refund"]):
+                        tx_type = "Credit"
+                    else:
+                        tx_type = "Debit"
+                        
+        if date and amt is not None:
+            transactions.append(ParsedTransaction(
+                transaction_date=date,
+                amount=amt,
+                transaction_type=tx_type,
+                merchant_name=desc[:50] if len(desc) > 50 else desc,
+                description=desc,
+                running_balance=None
+            ))
     return transactions
 
+_MONTHS_MAP = {"jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06", "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12"}
+def _parse_date_sequential(date_str: str) -> str:
+    date_str = date_str.strip()
+    m = re.match(r'^(\d{1,2})-([A-Za-z]{3})-(\d{4})$', date_str, re.IGNORECASE)
+    if m:
+        day = f"{int(m.group(1)):02d}"
+        mon = _MONTHS_MAP.get(m.group(2).lower(), "01")
+        yr = m.group(3)
+        return f"{yr}-{mon}-{day}"
+    return date_str
 
-# ─── Entry Point ─────────────────────────────────────────────────
+def _parse_pdf_text_robust(raw_text: str) -> List[ParsedTransaction]:
+    lines = [l.strip() for l in raw_text.strip().split("\n") if l.strip()]
+    
+    # ─── PARSER 1: Sequential Columnar Block Parser (e.g. HDFC, Paytm Bank statements) ───
+    sequential_txs = []
+    date_regex = re.compile(
+        r'^(\b\d{1,2}[-/\s]+(?:[A-Za-z]{3,9}|\d{1,2})[-/\s]+\d{2,4}\b)$',
+        re.IGNORECASE
+    )
+    time_regex = re.compile(r'^\d{2}:\d{2}:\d{2}$')
+    
+    i = 0
+    n = len(lines)
+    
+    while i < n:
+        line = lines[i]
+        date_match = date_regex.match(line)
+        
+        if date_match:
+            txn_date_str = date_match.group(1)
+            parsed_date = _parse_date_sequential(txn_date_str)
+            
+            has_time = False
+            if i + 1 < n and time_regex.match(lines[i+1]):
+                has_time = True
+                
+            val_date_idx = i + 2 if has_time else i + 1
+            if val_date_idx < n and date_regex.match(lines[val_date_idx]):
+                idx = val_date_idx + 1
+                tokens = []
+                while idx < n:
+                    l = lines[idx]
+                    if date_regex.match(l) and (idx + 1 >= n or time_regex.match(lines[idx+1]) or date_regex.match(lines[idx+1]) or idx + 2 >= n or date_regex.match(lines[idx+2])):
+                        break
+                    if l.lower() in ["account summary", "current balance", "note:", "this is a computer-generated", "account statement"]:
+                        break
+                    tokens.append(l)
+                    idx += 1
+                
+                if len(tokens) >= 3:
+                    balance_tok = tokens[-1]
+                    credit_tok = tokens[-2]
+                    debit_tok = tokens[-3]
+                    
+                    debit = _parse_amount(debit_tok) if debit_tok != "-" else 0.0
+                    credit = _parse_amount(credit_tok) if credit_tok != "-" else 0.0
+                    balance = _parse_amount(balance_tok)
+                    
+                    desc_tokens = tokens[:-3]
+                    ref_no = ""
+                    if len(desc_tokens) > 0:
+                        last_tok = desc_tokens[-1]
+                        if re.match(r'^\d{12,13}$', last_tok) or last_tok == "-":
+                            ref_no = last_tok
+                            desc_tokens = desc_tokens[:-1]
+                            
+                    description = " ".join(desc_tokens).strip()
+                    
+                    if "B/F" not in description and description.lower() != "balance forward":
+                        if credit and credit > 0:
+                            amount = credit
+                            tx_type = "Credit"
+                        else:
+                            amount = -debit if debit else 0.0
+                            tx_type = "Debit"
+                            
+                        if (debit and debit > 0) or (credit and credit > 0):
+                            sequential_txs.append(ParsedTransaction(
+                                transaction_date=parsed_date,
+                                amount=abs(amount),
+                                transaction_type=tx_type,
+                                merchant_name=description[:50] if len(description) > 50 else description,
+                                description=description,
+                                running_balance=balance
+                            ))
+                i = idx
+                continue
+        i += 1
+        
+    if sequential_txs:
+        return sequential_txs
+
+    # ─── PARSER 2: Flat Single-Line Regex Parser (Fallback) ───
+    transactions = []
+    
+    # regex for dates
+    date_pattern = re.compile(
+        r'(\b\d{1,2}[-/\s]+(?:[A-Za-z]{3,9}|\d{1,2})[-/\s]+\d{2,4}\b|'
+        r'\b\d{4}[-/\s]+\d{1,2}[-/\s]+\d{1,2}\b|'
+        r'\b[A-Za-z]{3,9}\s+\d{1,2}\s*,\s*\d{4}\b)'
+    )
+    
+    for line in lines:
+        date_match = date_pattern.search(line)
+        if not date_match:
+            continue
+            
+        date_str = date_match.group(1)
+        parsed_date = _parse_date(date_str)
+        if not parsed_date:
+            continue
+            
+        rest = line.replace(date_str, " ").strip()
+        
+        amount_pattern = re.compile(r'[-+]?\s*[\d,]+\.\d{2}\b')
+        amounts = amount_pattern.findall(rest)
+        
+        if not amounts:
+            continue
+            
+        parsed_amounts = []
+        for amt in amounts:
+            cleaned = _parse_amount(amt)
+            if cleaned is not None and cleaned > 0:
+                parsed_amounts.append((amt, cleaned))
+                
+        if not parsed_amounts:
+            continue
+            
+        tx_amt_str, tx_amount = parsed_amounts[0]
+        
+        desc = rest
+        for amt_str, _ in parsed_amounts:
+            desc = desc.replace(amt_str, " ")
+            
+        tx_type = "Debit"
+        lower_line = line.lower()
+        if any(kw in lower_line for kw in ["cr", "credit", "dep", "deposit", "received", "refund"]):
+            tx_type = "Credit"
+        elif any(kw in lower_line for kw in ["dr", "debit", "wdr", "withdrawal", "payment", "spent"]):
+            tx_type = "Debit"
+            
+        desc = re.sub(r'\s+', ' ', desc).strip()
+        desc = re.sub(r'^(?:rs|usd|inr|[\$\u20B9\s,\.-])+', '', desc, flags=re.IGNORECASE).strip()
+        desc = re.sub(r'(?:cr|dr)$', '', desc, flags=re.IGNORECASE).strip()
+        
+        if not desc:
+            desc = "Transaction"
+            
+        transactions.append(ParsedTransaction(
+            transaction_date=parsed_date,
+            amount=tx_amount,
+            transaction_type=tx_type,
+            merchant_name=desc[:50] if len(desc) > 50 else desc,
+            description=desc,
+            running_balance=parsed_amounts[1][1] if len(parsed_amounts) > 1 else None
+        ))
+        
+    return transactions
 
 def parse_pdf_to_transactions(file_path: str, password: Optional[str] = None) -> List[ParsedTransaction]:
     if file_path.lower().endswith(".csv"):
@@ -588,7 +852,19 @@ def parse_pdf_to_transactions(file_path: str, password: Optional[str] = None) ->
             raise HTTPException(status_code=400, detail=f"Failed to read CSV: {e}")
 
     raw_text = AdvancedBankParser.extract_text_from_pdf(file_path, password)
-    return _parse_pdf_text_robust(raw_text)
+    
+    print("\n--- DEBUG EXTRACTED PDF TEXT START ---")
+    print(raw_text[:3000])
+    print("--- DEBUG EXTRACTED PDF TEXT END ---\n")
+    
+    txs = _parse_pdf_text_robust(raw_text)
+    
+    print(f"\n--- DEBUG PARSED TRANSACTIONS COUNT: {len(txs)} ---")
+    for idx, tx in enumerate(txs[:10]):
+        print(f"[{idx}] Date: {tx.transaction_date} | Amount: {tx.amount} | Type: {tx.transaction_type} | Desc: {tx.description}")
+    print("--- DEBUG PARSED TRANSACTIONS END ---\n")
+    
+    return txs
 
 
 # ─── Ingestion Logic ──────────────────────────────────────────────
@@ -617,33 +893,51 @@ async def _ingest_transactions(
     if not cat_res.data:
         raise HTTPException(status_code=500, detail="No categories found. Please seed the categories table.")
 
-    default_cat_id = cat_res.data[0]["category_id"]
-    category_cache: dict = {}
+    # Fetch all categories to map them dynamically
+    cats_db = supabase.table("categories").select("*").execute()
+    cat_lookup = {}
+    main_cat_lookup = {}
+    if cats_db.data:
+        for c in cats_db.data:
+            m_cat = c.get("main_category", "").lower().strip() if c.get("main_category") else ""
+            s_cat = c.get("sub_category", "").lower().strip() if c.get("sub_category") else ""
+            c_id = c.get("category_id")
+            if m_cat and s_cat:
+                cat_lookup[(m_cat, s_cat)] = c_id
+            if m_cat and m_cat not in main_cat_lookup:
+                main_cat_lookup[m_cat] = c_id
 
-    # 3. Build insert payload
+    # 3. Map Data and Enforce DB Constraints
     insert_data = []
     for t in transactions:
-        db_type = "income" if t.transaction_type.lower() in ["credit", "income"] else "expense"
-        main_cat, sub_cat = _predict_category(t.description, t.merchant_name or "")
-        cache_key = f"{main_cat}:{sub_cat}"
-
-        if cache_key not in category_cache:
-            cr = supabase.table("categories").select("category_id").eq("sub_category", sub_cat).execute()
-            if cr.data:
-                category_cache[cache_key] = cr.data[0]["category_id"]
-            else:
-                ins = supabase.table("categories").insert({"main_category": main_cat, "sub_category": sub_cat}).execute()
-                category_cache[cache_key] = ins.data[0]["category_id"] if ins.data else default_cat_id
-
+        # Convert "Credit/Debit" to DB constraint "income/expense"
+        db_tx_type = "income" if t.transaction_type.lower() in ["credit", "income"] else "expense"
+        
+        # Resolve category dynamically
+        category_id = default_cat_id
+        t_cat = (t.category or "").lower().strip() if t.category else ""
+        t_sub = (t.sub_category or "").lower().strip() if t.sub_category else ""
+        
+        if t_cat and t_sub and (t_cat, t_sub) in cat_lookup:
+            category_id = cat_lookup[(t_cat, t_sub)]
+        elif t_cat and t_cat in main_cat_lookup:
+            category_id = main_cat_lookup[t_cat]
+        elif t_sub:
+            for (m, s), c_id in cat_lookup.items():
+                if s == t_sub:
+                    category_id = c_id
+                    break
+                    
         insert_data.append({
-            "user_id": user_id,
-            "account_id": account_id,
-            "category_id": category_cache.get(cache_key, default_cat_id),
+            "user_id": user_id, 
+            "account_id": account_id, 
+            "category_id": category_id,
             "transaction_date": t.transaction_date,
             "amount": t.amount,
             "transaction_type": db_type,
             "description": t.description,
             "merchant_name": t.merchant_name,
+            "running_balance": t.running_balance
         })
 
     res = supabase.table("transactions").insert(insert_data).execute()
@@ -723,6 +1017,8 @@ async def parse_statement_file(file: UploadFile = File(...), password: Optional[
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=400, detail=str(e))
     finally:
         if os.path.exists(tmp_path):
@@ -751,6 +1047,8 @@ async def upload_statement(
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=400, detail=str(e))
     finally:
         if os.path.exists(tmp_path):

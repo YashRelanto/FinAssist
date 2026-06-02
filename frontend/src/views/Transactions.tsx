@@ -2,8 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Search, Filter, Download, Upload, Plus, Edit2, Trash2 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { TransactionModal } from '../components/TransactionModal';
-import { PdfPasswordModal } from '../components/PdfPasswordModal';
-import { analyzeStatementFile } from '../lib/statementParser';
+import { BulkUploadModal } from '../components/BulkUploadModal';
 import { cn, formatCurrency } from '../lib/utils';
 import { Transaction } from '../types';
 import { apiFetch } from '../lib/api';
@@ -16,6 +15,7 @@ export const Transactions: React.FC = () => {
   const [dbCategories, setDbCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | undefined>(undefined);
   const [search, setSearch] = useState('');
   const [selectedAccount, setSelectedAccount] = useState('All Accounts');
@@ -220,7 +220,7 @@ export const Transactions: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `FinAssist_Transactions_${new Date().toISOString().slice(0,10)}.csv`);
+    link.setAttribute('download', `FinAssist_Transactions_${new Date().toISOString().slice(0, 10)}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -228,21 +228,21 @@ export const Transactions: React.FC = () => {
   };
 
   const filtered = realTransactions.filter(t => {
-    const matchesSearch = 
+    const matchesSearch =
       t.merchant.toLowerCase().includes(search.toLowerCase()) ||
       t.category.toLowerCase().includes(search.toLowerCase()) ||
       (t.notes && t.notes.toLowerCase().includes(search.toLowerCase()));
 
-    const matchesAccount = 
-      selectedAccount === 'All Accounts' || 
+    const matchesAccount =
+      selectedAccount === 'All Accounts' ||
       t.account.toLowerCase() === selectedAccount.toLowerCase();
 
-    const matchesCategory = 
-      selectedCategory === 'All Categories' || 
+    const matchesCategory =
+      selectedCategory === 'All Categories' ||
       t.category.toLowerCase() === selectedCategory.toLowerCase();
 
-    const matchesType = 
-      selectedType === 'All Types' || 
+    const matchesType =
+      selectedType === 'All Types' ||
       t.type.toLowerCase() === selectedType.toLowerCase();
 
     return matchesSearch && matchesAccount && matchesCategory && matchesType;
@@ -264,32 +264,26 @@ export const Transactions: React.FC = () => {
           <p className="text-on-surface-variant mt-1 text-sm font-medium">Manage and review your detailed financial ledger.</p>
         </div>
         <div className="flex items-center gap-3">
-          <button 
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-on-surface-variant bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low transition-all disabled:opacity-50"
+          <button
+            onClick={() => setBulkUploadOpen(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-on-surface-variant bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low transition-all"
           >
-            {isUploading ? (
-              <span className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
-            ) : (
-              <Upload className="w-4 h-4" />
-            )}
-            Bulk Upload
+            <Upload className="w-4 h-4" /> Bulk Upload
           </button>
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            onChange={handleFileUpload} 
-            accept=".pdf,.csv,.xls,.xlsx" 
-            style={{ display: 'none' }} 
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileUpload}
+            accept=".pdf,.csv,.xls,.xlsx"
+            style={{ display: 'none' }}
           />
-          <button 
+          <button
             onClick={handleExportCSV}
             className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-on-surface-variant bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low transition-all"
           >
             <Download className="w-4 h-4" /> Export CSV
           </button>
-          <button 
+          <button
             onClick={handleAdd}
             className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold bg-primary text-white hover:bg-primary-container shadow-md transition-all"
           >
@@ -305,19 +299,19 @@ export const Transactions: React.FC = () => {
             <label className="text-[10px] font-bold text-outline ml-1 uppercase tracking-widest">Search</label>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-outline" />
-              <input 
+              <input
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search merchant, category..."
-                className="w-full pl-10 pr-4 py-2.5 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none transition-all" 
+                className="w-full pl-10 pr-4 py-2.5 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
               />
             </div>
           </div>
 
           <div className="space-y-2">
             <label className="text-[10px] font-bold text-outline ml-1 uppercase tracking-widest">Account</label>
-            <select 
+            <select
               value={selectedAccount}
               onChange={(e) => setSelectedAccount(e.target.value)}
               className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary transition-all outline-none appearance-none font-bold"
@@ -331,7 +325,7 @@ export const Transactions: React.FC = () => {
 
           <div className="space-y-2">
             <label className="text-[10px] font-bold text-outline ml-1 uppercase tracking-widest">Category</label>
-            <select 
+            <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
               className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary transition-all outline-none appearance-none font-bold"
@@ -345,7 +339,7 @@ export const Transactions: React.FC = () => {
 
           <div className="space-y-2">
             <label className="text-[10px] font-bold text-outline ml-1 uppercase tracking-widest">Type</label>
-            <select 
+            <select
               value={selectedType}
               onChange={(e) => setSelectedType(e.target.value)}
               className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary transition-all outline-none appearance-none font-bold"
@@ -369,7 +363,7 @@ export const Transactions: React.FC = () => {
               <p className="text-sm text-outline font-medium mt-1">Our AI identified transactions that need your classification or validation. High-amount anomalies are highlighted.</p>
             </div>
           </div>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {realTransactions.filter(t => t.category === 'Uncategorized').map(t => {
               const isAnomaly = Math.abs(t.amount) > 5000 || t.notes?.includes('anomaly');
@@ -393,13 +387,13 @@ export const Transactions: React.FC = () => {
                   </div>
                   {isAnomaly && (
                     <div className="mb-4 px-3 py-1.5 bg-error/10 text-error text-[10px] font-bold rounded-lg flex items-center gap-2 border border-error/5">
-                       <span className="w-1.5 h-1.5 bg-error rounded-full animate-pulse"></span>
-                       High Amount Anomaly Detected
+                      <span className="w-1.5 h-1.5 bg-error rounded-full animate-pulse"></span>
+                      High Amount Anomaly Detected
                     </div>
                   )}
                   <div className="space-y-3">
                     <label className="text-[9px] font-bold text-outline uppercase tracking-widest pl-1">Assign Category</label>
-                    <select 
+                    <select
                       onChange={(e) => handleUpdateCategory(t, e.target.value)}
                       className="w-full px-4 py-2.5 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none appearance-none font-bold"
                     >
@@ -425,6 +419,7 @@ export const Transactions: React.FC = () => {
                 <th className="px-6 py-4">Category</th>
                 <th className="px-6 py-4">Account</th>
                 <th className="px-6 py-4 text-right">Amount</th>
+                <th className="px-6 py-4 text-right">Running Balance</th>
                 <th className="px-6 py-4 text-center">Actions</th>
               </tr>
             </thead>
@@ -443,20 +438,23 @@ export const Transactions: React.FC = () => {
                   <td className={`px-6 py-4 text-sm text-right font-bold ${row.type === 'income' ? 'text-secondary' : 'text-error'}`}>
                     {row.type === 'income' ? `+${formatCurrency(row.amount)}` : `-${formatCurrency(row.amount)}`}
                   </td>
+                  <td className="px-6 py-4 text-sm text-right font-medium text-on-surface-variant/80">
+                    {row.runningBalance !== undefined && row.runningBalance !== null ? formatCurrency(row.runningBalance) : '—'}
+                  </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-center gap-2">
-                       <button 
+                      <button
                         onClick={() => handleEdit(row)}
                         className="p-1.5 text-outline hover:text-primary transition-colors hover:bg-primary-container/10 rounded"
-                       >
+                      >
                         <Edit2 className="w-3.5 h-3.5" />
-                       </button>
-                       <button 
+                      </button>
+                      <button
                         onClick={() => handleDelete(row.id)}
                         className="p-1.5 text-outline hover:text-error transition-colors hover:bg-error-container/10 rounded"
-                       >
+                      >
                         <Trash2 className="w-3.5 h-3.5" />
-                       </button>
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -470,27 +468,24 @@ export const Transactions: React.FC = () => {
         </div>
       </div>
 
-      <TransactionModal 
-        isOpen={modalOpen} 
+      <TransactionModal
+        isOpen={modalOpen}
         onClose={() => {
           setModalOpen(false);
           fetchTransactions();
-        }} 
+        }}
         editingTransaction={editingTransaction}
         accounts={accounts}
       />
 
-      {passwordModal.open && pendingFile && (
-        <PdfPasswordModal
-          fileName={pendingFile.name}
-          isWrongPassword={passwordModal.wrongPassword}
-          onSubmit={(pw) => processFile(pendingFile, pw)}
-          onCancel={() => {
-            setPasswordModal({ open: false, wrongPassword: false });
-            setPendingFile(null);
-          }}
-        />
-      )}
+      <BulkUploadModal
+        isOpen={bulkUploadOpen}
+        onClose={() => setBulkUploadOpen(false)}
+        onSuccess={() => {
+          fetchTransactions();
+          loadTransactions();
+        }}
+      />
     </div>
   );
 };
