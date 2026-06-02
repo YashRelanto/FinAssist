@@ -1,7 +1,7 @@
 {
   "model_type": "prophet",
-  "trained_at": "2026-05-30T17:18:27.636152+00:00",
-  "trained_users": 13,
+  "trained_at": "2026-06-02T04:36:08.101160+00:00",
+  "trained_users": 14,
   "horizon_weeks": 4,
   "min_weeks": 8,
   "test_mape": 0.28641455228176926,
@@ -9,6 +9,7 @@
     "0d3c63a6-9cfe-4228-8afa-ea6a26c13cb8",
     "3fda265f-68c3-4ce0-9553-1ba65baa4d75",
     "403c9a03-94c0-4e66-8a78-1e99096b3202",
+    "60a935cd-f7cb-40df-92b7-2746b4a8058b",
     "76d20039-a7e2-46e9-aa21-456f910c717d",
     "88692a3e-9ecb-49b6-92f0-aa115ce81244",
     "958b2a52-d1ea-4696-9f2d-09c5e90c5d24",
@@ -20,8 +21,8 @@
     "f98fe819-1be6-4325-972b-a4401aceaed6",
     "fa1aa036-57fe-468f-a774-776251cf3890"
   ],
-  "skipped_count": 3,
-  "bundle_path": "C:\\Users\\Relanto\\OneDrive - Relanto\\Desktop\\FinAssistAI\\models\\production\\expense_forecast_prophet.joblib",
+  "skipped_count": 4,
+  "bundle_path": "C:\\Users\\Relanto\\Desktop\\FinAssistAI\\models\\production\\expense_forecast_prophet.joblib",
   "storage_bucket": "forecast-models",
   "storage_bundle_key": "production/expense_forecast_prophet.joblib"
 }

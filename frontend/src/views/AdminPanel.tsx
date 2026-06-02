@@ -17,16 +17,32 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
+import { loadAuthSession } from '../lib/authSession';
+import { activeUserId } from '../lib/activeUserId';
 
 const API_BASE = 'http://localhost:8000/api/admin';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
-function token() {
-  return localStorage.getItem('token') ?? '';
+function adminHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const session = loadAuthSession();
+  const uid = activeUserId(session?.user);
+  if (!uid) {
+    throw new Error('Not signed in');
+  }
+  const headers: Record<string, string> = {
+    'X-User-Id': uid,
+    ...extra,
+  };
+  const token = session?.accessToken ?? localStorage.getItem('token');
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
 }
+
 async function adminGet(path: string) {
   const r = await fetch(`${API_BASE}${path}`, {
-    headers: { Authorization: `Bearer ${token()}` },
+    headers: adminHeaders(),
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
@@ -34,10 +50,7 @@ async function adminGet(path: string) {
 async function adminPost(path: string, body?: unknown) {
   const r = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token()}`,
-    },
+    headers: adminHeaders({ 'Content-Type': 'application/json' }),
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) throw new Error(await r.text());
@@ -76,11 +89,13 @@ function Badge({ status }: { status: string }) {
   const map: Record<string, string> = {
     running: 'bg-blue-100 text-blue-700',
     done: 'bg-green-100 text-green-700',
+    completed: 'bg-green-100 text-green-700',
     failed: 'bg-red-100 text-red-700',
     pending: 'bg-yellow-100 text-yellow-700',
+    queued: 'bg-yellow-100 text-yellow-700',
   };
   const Icon =
-    status === 'done'
+    status === 'done' || status === 'completed'
       ? CheckCircle2
       : status === 'failed'
       ? XCircle
@@ -100,36 +115,168 @@ function Badge({ status }: { status: string }) {
 }
 
 // ─── sections ───────────────────────────────────────────────────────────────
+type TrainRun = {
+  job_id: string;
+  model_type?: string;
+  status?: string;
+  test_mape?: number | null;
+  trained_users?: number | null;
+  trained_at?: string | null;
+  deployable?: boolean;
+  label?: string;
+};
+
+function formatMape(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return '—';
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatDriftLevel(drift: Record<string, unknown>): string {
+  const level = drift.drift_level;
+  if (typeof level === 'string' && level) return level;
+  const status = drift.status;
+  if (typeof status === 'string' && status) return status;
+  return '—';
+}
+
+function RunSelector({
+  runs,
+  value,
+  onChange,
+  label,
+  filter,
+}: {
+  runs: TrainRun[];
+  value: string;
+  onChange: (jobId: string) => void;
+  label: string;
+  filter?: (run: TrainRun) => boolean;
+}) {
+  const options = filter ? runs.filter(filter) : runs;
+  return (
+    <label className="block max-w-md">
+      <span className="text-xs text-on-surface-variant mb-1 block">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full text-sm bg-surface border border-outline-variant rounded-lg px-3 py-2 text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
+      >
+        {options.length === 0 && <option value="">No training runs available</option>}
+        {options.map((run) => (
+          <option key={run.job_id} value={run.job_id}>
+            {run.label ?? run.job_id}
+            {run.trained_at ? ` · ${new Date(run.trained_at).toLocaleString()}` : ''}
+            {run.status && run.status !== 'completed' ? ` (${run.status})` : ''}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function OverviewSection() {
+  const [runs, setRuns] = useState<TrainRun[]>([]);
+  const [selectedJobId, setSelectedJobId] = useState('');
   const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const [loadingRuns, setLoadingRuns] = useState(true);
+  const [loadingMetrics, setLoadingMetrics] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    adminGet('/overview')
-      .then(setData)
+    adminGet('/train/runs')
+      .then((d) => {
+        const list: TrainRun[] = d.runs ?? [];
+        setRuns(list);
+        const firstCompleted =
+          list.find((r) => r.status === 'completed') ?? list[0];
+        if (firstCompleted) {
+          setSelectedJobId(firstCompleted.job_id);
+        }
+      })
       .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
+      .finally(() => setLoadingRuns(false));
   }, []);
 
-  if (loading) return <LoadingSpinner />;
-  if (error) return <ErrorBox msg={error} />;
+  useEffect(() => {
+    if (!selectedJobId) return;
+    setLoadingMetrics(true);
+    setError('');
+    adminGet(`/overview?job_id=${encodeURIComponent(selectedJobId)}`)
+      .then(setData)
+      .catch((e) => setError(e.message))
+      .finally(() => setLoadingMetrics(false));
+  }, [selectedJobId]);
 
-  const perf = data?.performance ?? {};
+  if (loadingRuns) return <LoadingSpinner />;
+  if (error && !data) return <ErrorBox msg={error} />;
+
+  const run = data?.run ?? {};
   const drift = data?.drift ?? {};
+  const status = run.status ?? '—';
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-      <StatCard icon={BarChart2} label="MAE" value={perf.mae?.toFixed(3) ?? '—'} color="text-blue-500" />
-      <StatCard icon={Activity} label="RMSE" value={perf.rmse?.toFixed(3) ?? '—'} color="text-violet-500" />
-      <StatCard icon={Cpu} label="R²" value={perf.r2?.toFixed(3) ?? '—'} color="text-emerald-500" />
-      <StatCard
-        icon={AlertTriangle}
-        label="Drift Score"
-        value={drift.score?.toFixed(3) ?? '—'}
-        sub={drift.status ?? ''}
-        color={drift.status === 'ok' ? 'text-green-500' : 'text-orange-500'}
+    <div className="space-y-6">
+      <RunSelector
+        runs={runs}
+        value={selectedJobId}
+        onChange={setSelectedJobId}
+        label="Training run (job id)"
       />
+
+      {loadingMetrics ? (
+        <LoadingSpinner />
+      ) : (
+        <>
+          {error && <ErrorBox msg={error} />}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatCard
+              icon={BarChart2}
+              label="Test MAPE"
+              value={formatMape(run.test_mape)}
+              sub="Holdout weekly forecast error"
+              color="text-blue-500"
+            />
+            <StatCard
+              icon={Activity}
+              label="Trained Users"
+              value={run.trained_users ?? '—'}
+              sub={run.trained_at ? new Date(run.trained_at).toLocaleString() : undefined}
+              color="text-violet-500"
+            />
+            <StatCard
+              icon={Cpu}
+              label="Model"
+              value={run.model_type ?? 'prophet'}
+              sub={`Job ${selectedJobId || '—'}`}
+              color="text-emerald-500"
+            />
+            <StatCard
+              icon={AlertTriangle}
+              label="Drift Level"
+              value={formatDriftLevel(drift)}
+              sub={
+                typeof drift.mean_shift_sigma === 'number'
+                  ? `σ shift ${drift.mean_shift_sigma.toFixed(2)}`
+                  : typeof drift.recommendation === 'string'
+                  ? drift.recommendation
+                  : undefined
+              }
+              color={
+                drift.drift_level === 'high'
+                  ? 'text-orange-500'
+                  : drift.drift_level === 'medium'
+                  ? 'text-yellow-600'
+                  : 'text-green-500'
+              }
+            />
+          </div>
+          {status !== 'completed' && (
+            <p className="text-sm text-on-surface-variant">
+              Run status: <Badge status={status} />
+            </p>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -162,7 +309,7 @@ function DatasetsSection() {
       if (catRef.current?.files?.[0]) form.append('categories', catRef.current.files[0]);
       const r = await fetch(`${API_BASE}/dataset/upload`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token()}` },
+        headers: adminHeaders(),
         body: form,
       });
       if (!r.ok) throw new Error(await r.text());
@@ -363,26 +510,46 @@ function TrainingSection() {
 }
 
 function DeploySection() {
-  const [staged, setStaged] = useState<any[]>([]);
+  const [runs, setRuns] = useState<TrainRun[]>([]);
+  const [selectedJobId, setSelectedJobId] = useState('');
+  const [selectedModel, setSelectedModel] = useState('prophet');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [deploying, setDeploying] = useState(false);
   const [deployMsg, setDeployMsg] = useState('');
 
-  const loadStaged = () =>
-    adminGet('/staging')
-      .then((d) => setStaged(d.staged ?? []))
+  const deployableRuns = runs.filter((r) => r.deployable && r.status === 'completed');
+
+  useEffect(() => {
+    adminGet('/train/runs')
+      .then((d) => {
+        const list: TrainRun[] = d.runs ?? [];
+        setRuns(list);
+        const first = list.find((r) => r.deployable && r.status === 'completed');
+        if (first) {
+          setSelectedJobId(first.job_id);
+          if (first.model_type) setSelectedModel(first.model_type);
+        }
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-
-  useEffect(() => { loadStaged(); }, []);
+  }, []);
 
   const deploy = async () => {
-    setDeploying(true); setDeployMsg('');
+    if (!selectedJobId) {
+      setDeployMsg('Select a training run to deploy.');
+      return;
+    }
+    setDeploying(true);
+    setDeployMsg('');
     try {
-      const d = await adminPost('/deploy');
-      setDeployMsg(`✅ Deployed: ${(d.deployed ?? []).join(', ') || 'none'}`);
-      loadStaged();
+      const d = await adminPost('/deploy', {
+        job_id: selectedJobId,
+        models: [selectedModel],
+      });
+      setDeployMsg(
+        `✅ Deployed job ${d.job_id ?? selectedJobId}: ${(d.deployed ?? []).join(', ') || 'none'}`,
+      );
     } catch (e: any) {
       setDeployMsg(`❌ ${e.message}`);
     } finally {
@@ -393,28 +560,63 @@ function DeploySection() {
   if (loading) return <LoadingSpinner />;
   if (error) return <ErrorBox msg={error} />;
 
+  const selectedRun = runs.find((r) => r.job_id === selectedJobId);
+
   return (
     <div className="space-y-6">
       <div className="bg-surface-variant rounded-2xl p-6 space-y-4">
         <h3 className="text-sm font-semibold text-on-surface flex items-center gap-2">
-          <Rocket className="w-4 h-4 text-primary" /> Staged Models
+          <Rocket className="w-4 h-4 text-primary" /> Deploy Training Run
         </h3>
-        {staged.length === 0 ? (
-          <p className="text-xs text-on-surface-variant">No models staged for deployment.</p>
+
+        {deployableRuns.length === 0 ? (
+          <p className="text-xs text-on-surface-variant">
+            No deployable training runs yet. Complete a training job first — each run is saved by job id.
+          </p>
         ) : (
-          <div className="flex flex-wrap gap-3">
-            {staged.map((s: any) => (
-              <div key={s.id} className="bg-surface rounded-lg px-4 py-2 flex items-center gap-2 text-xs">
-                <Server className="w-3.5 h-3.5 text-emerald-500" />
-                <span className="font-medium text-on-surface">{s.id}</span>
-                <span className="text-on-surface-variant">{s.filename}</span>
-              </div>
-            ))}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <RunSelector
+              runs={deployableRuns}
+              value={selectedJobId}
+              onChange={(jobId) => {
+                setSelectedJobId(jobId);
+                const run = runs.find((r) => r.job_id === jobId);
+                if (run?.model_type) setSelectedModel(run.model_type);
+              }}
+              label="Training run (job id)"
+            />
+            <label className="block">
+              <span className="text-xs text-on-surface-variant mb-1 block">Model</span>
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="w-full text-sm bg-surface border border-outline-variant rounded-lg px-3 py-2 text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="prophet">prophet</option>
+              </select>
+            </label>
           </div>
         )}
+
+        {selectedRun && (
+          <div className="bg-surface rounded-lg px-4 py-3 text-xs space-y-1">
+            <div className="flex items-center gap-2">
+              <Server className="w-3.5 h-3.5 text-emerald-500" />
+              <span className="font-medium text-on-surface">Job {selectedRun.job_id}</span>
+              <Badge status={selectedRun.status ?? 'completed'} />
+            </div>
+            <p className="text-on-surface-variant">
+              MAPE {formatMape(selectedRun.test_mape)} · {selectedRun.trained_users ?? '—'} users
+              {selectedRun.trained_at
+                ? ` · trained ${new Date(selectedRun.trained_at).toLocaleString()}`
+                : ''}
+            </p>
+          </div>
+        )}
+
         <button
           onClick={deploy}
-          disabled={deploying || staged.length === 0}
+          disabled={deploying || !selectedJobId || deployableRuns.length === 0}
           className="inline-flex items-center gap-2 px-5 py-2 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-60 transition"
         >
           {deploying ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
