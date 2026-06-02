@@ -9,10 +9,11 @@ from app.services.model_training_service import (
     STAGING_DIR,
     deploy_staging_models,
     get_evaluation_data,
-    get_job,
+    get_job_details,
+    get_run_metrics,
     list_datasets,
     list_jobs,
-    list_trained_runs,
+    list_train_runs,
     run_training_sync,
     save_uploaded_dataset,
     start_training_job,
@@ -27,16 +28,30 @@ class TrainRequest(BaseModel):
 
 
 class DeployRequest(BaseModel):
-    models: list[str] | None = Field(
+    job_id: str | None = Field(
         default=None,
-        description="Which models to deploy. Defaults to all staged models.",
+        description="Training job id whose saved artifact should be promoted to production.",
+    )
+    models: list[str] | None = Field(
+        default_factory=lambda: ["prophet"],
+        description="Which model types to deploy from the selected run.",
     )
 
 
 @router.get("/overview")
-async def admin_overview(_user=Depends(require_admin)):
-    performance = get_production_performance()
+async def admin_overview(
+    job_id: str | None = Query(default=None, description="Training job id to inspect"),
+    _user=Depends(require_admin),
+):
     drift = compute_drift_stats()
+    if job_id:
+        try:
+            run = get_run_metrics(job_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"success": True, "run": run, "drift": drift}
+
+    performance = get_production_performance()
     return {"success": True, "performance": performance, "drift": drift}
 
 
@@ -114,15 +129,15 @@ async def admin_list_jobs(_user=Depends(require_admin)):
 
 @router.get("/train/runs")
 async def admin_list_trained_runs(_user=Depends(require_admin)):
-    return {"success": True, "runs": list_trained_runs()}
+    return {"success": True, "runs": list_train_runs()}
 
 
 @router.get("/train/{job_id}")
 async def admin_train_status(job_id: str, _user=Depends(require_admin)):
-    job = get_job(job_id)
-    if not job:
+    details = get_job_details(job_id)
+    if not details:
         raise HTTPException(status_code=404, detail="Training job not found")
-    return {"success": True, **job.to_dict()}
+    return {"success": True, **details}
 
 
 @router.get("/staging")
@@ -139,8 +154,10 @@ async def admin_list_staged(_user=Depends(require_admin)):
 @router.post("/deploy")
 async def admin_deploy(body: DeployRequest = DeployRequest(), _user=Depends(require_admin)):
     try:
-        result = deploy_staging_models(models=body.models)
+        result = deploy_staging_models(models=body.models, job_id=body.job_id)
         return {"success": True, **result}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
