@@ -1,7 +1,8 @@
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -9,13 +10,20 @@ SECURITY_EVENTS_FILE = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "..", "security_events.json")
 )
 
-def log_security_event(user_id: str, event_type: str, message: str, reason: str) -> None:
+def log_security_event(
+    user_id: str,
+    event_type: str,
+    message: str,
+    reason: str,
+    thread_id: Optional[str] = None
+) -> None:
     """
     Logs security events to a local JSON file and standard logging for real-time monitoring.
     """
     event = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "user_id": user_id,
+        "thread_id": thread_id,
         "event_type": event_type,
         "message": message[:500],  # Truncate long messages
         "reason": reason,

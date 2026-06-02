@@ -15,6 +15,7 @@ class OutputGuard:
         "connection_string": r'(mongodb|postgres|mysql|sqlite|supabase):\/\/\S+',
         "jwt": r'eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+',
         "private_key": r'-----BEGIN (RSA |)PRIVATE KEY-----',
+        "internal_prompt": r'(you are finassist|role boundaries|system prompt|route_to_nl2sql|nl2sql_planner_system|human-in-the-loop|knowledge strategy|safety guardrails)',
     }
     
     @staticmethod

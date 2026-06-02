@@ -45,6 +45,9 @@ SUSPICIOUS_PHRASES = [
     r"database (schema|structure|credentials)",
     r"API (key|secret|token)",
     r"internal (config|settings)",
+    r"user_id\s*(?:!=|<>|\bin\b|\bnot\s+in\b)",  # user_id IN/!= bypass indicators
+    r"(show|get|retrieve|view|display)\s+(\w+)'s\s+(transactions|data|spending|expenses|income|records|purchases)", # e.g. "show John's transactions"
+    r"compare\s+(my|user)\s+(expenses|data|spending|transactions)\s+(with|to|against)\s+other\s+users", # e.g. "compare my expenses with other users"
 ]
 
 # High-performance Profanity / Abuse detector
