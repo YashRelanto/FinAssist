@@ -893,6 +893,8 @@ async def _ingest_transactions(
     if not cat_res.data:
         raise HTTPException(status_code=500, detail="No categories found. Please seed the categories table.")
 
+    default_cat_id = cat_res.data[0]["category_id"]
+
     # Fetch all categories to map them dynamically
     cats_db = supabase.table("categories").select("*").execute()
     cat_lookup = {}
@@ -934,7 +936,7 @@ async def _ingest_transactions(
             "category_id": category_id,
             "transaction_date": t.transaction_date,
             "amount": t.amount,
-            "transaction_type": db_type,
+            "transaction_type": db_tx_type,
             "description": t.description,
             "merchant_name": t.merchant_name,
             "running_balance": t.running_balance
