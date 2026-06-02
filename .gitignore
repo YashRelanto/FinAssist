@@ -13,7 +13,6 @@ build/
 models/staging/
 models/production/*.joblib
 models/jobs/
-backend/chroma_db/
 backend/sessions.json
 *.sqlite
 *.db
