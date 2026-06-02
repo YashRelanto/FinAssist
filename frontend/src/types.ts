@@ -38,6 +38,7 @@ export interface Transaction {
   account: string;
   notes?: string;
   type: 'income' | 'expense';
+  runningBalance?: number;
 }
 
 export interface Goal {

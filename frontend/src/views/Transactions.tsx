@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Search, Filter, Download, Upload, Plus, Edit2, Trash2 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { TransactionModal } from '../components/TransactionModal';
+import { BulkUploadModal } from '../components/BulkUploadModal';
 import { cn, formatCurrency } from '../lib/utils';
 import { Transaction } from '../types';
 import { apiFetch } from '../lib/api';
@@ -14,6 +15,7 @@ export const Transactions: React.FC = () => {
   const [dbCategories, setDbCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
+  const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | undefined>(undefined);
   const [search, setSearch] = useState('');
   const [selectedAccount, setSelectedAccount] = useState('All Accounts');
@@ -170,7 +172,10 @@ export const Transactions: React.FC = () => {
           <p className="text-on-surface-variant mt-1 text-sm font-medium">Manage and review your detailed financial ledger.</p>
         </div>
         <div className="flex items-center gap-3">
-          <button className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-on-surface-variant bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low transition-all">
+          <button 
+            onClick={() => setBulkUploadOpen(true)}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-on-surface-variant bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low transition-all"
+          >
             <Upload className="w-4 h-4" /> Bulk Upload
           </button>
           <button className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-on-surface-variant bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low transition-all">
@@ -305,13 +310,14 @@ export const Transactions: React.FC = () => {
       <div className="bg-surface-container-lowest rounded-xl soft-shadow border border-outline-variant/30 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-surface-container-low/50 border-b border-outline-variant/30">
+             <thead className="bg-surface-container-low/50 border-b border-outline-variant/30">
               <tr className="text-[10px] text-outline font-bold uppercase tracking-widest">
                 <th className="px-6 py-4">Date</th>
                 <th className="px-6 py-4">Merchant</th>
                 <th className="px-6 py-4">Category</th>
                 <th className="px-6 py-4">Account</th>
                 <th className="px-6 py-4 text-right">Amount</th>
+                <th className="px-6 py-4 text-right">Running Balance</th>
                 <th className="px-6 py-4 text-center">Actions</th>
               </tr>
             </thead>
@@ -329,6 +335,9 @@ export const Transactions: React.FC = () => {
                   <td className="px-6 py-4 text-sm text-outline font-medium">{row.account}</td>
                   <td className={`px-6 py-4 text-sm text-right font-bold ${row.type === 'income' ? 'text-secondary' : 'text-error'}`}>
                     {row.type === 'income' ? `+${formatCurrency(row.amount)}` : `-${formatCurrency(row.amount)}`}
+                  </td>
+                  <td className="px-6 py-4 text-sm text-right font-medium text-on-surface-variant/80">
+                    {row.runningBalance !== undefined && row.runningBalance !== null ? formatCurrency(row.runningBalance) : '—'}
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex items-center justify-center gap-2">
@@ -365,6 +374,15 @@ export const Transactions: React.FC = () => {
         }} 
         editingTransaction={editingTransaction}
         accounts={accounts}
+      />
+
+      <BulkUploadModal 
+        isOpen={bulkUploadOpen}
+        onClose={() => setBulkUploadOpen(false)}
+        onSuccess={() => {
+          fetchTransactions();
+          loadTransactions();
+        }}
       />
     </div>
   );

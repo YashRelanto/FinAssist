@@ -28,7 +28,7 @@ export const PdfPasswordModal: React.FC<PdfPasswordModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
       <div className="w-full max-w-md bg-surface-container-lowest rounded-3xl border border-outline-variant/30 shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="bg-primary/5 border-b border-outline-variant/20 p-6 flex items-start justify-between gap-4">

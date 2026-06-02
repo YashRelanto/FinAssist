@@ -367,7 +367,8 @@ async def get_transactions(user_id: str, start_date: str = None, end_date: str =
                 "account_id": t["account_id"],
                 "category_id": t["category_id"],
                 "type": t["transaction_type"],
-                "notes": t["description"]
+                "notes": t["description"],
+                "runningBalance": float(t["running_balance"]) if t.get("running_balance") is not None else None
             })
             
         return {"success": True, "data": formatted}
