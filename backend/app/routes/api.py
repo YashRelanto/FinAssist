@@ -11,7 +11,12 @@ from app.services.dashboard_metrics_service import (
     build_dashboard_payload,
     normalize_category_name,
 )
-from app.services.transaction_service import create_transaction_record
+from app.services.account_hub_analysis_service import generate_account_hub_analysis
+from app.services.accounts_service import fetch_user_accounts, insert_account
+from app.services.transaction_service import (
+    create_transaction_record,
+    update_transaction_record,
+)
 from datetime import datetime
 
 router = APIRouter(prefix="/api")
@@ -234,10 +239,7 @@ async def get_dashboard_summary(user_id: str):
     if not user_id or not user_id.strip():
         raise HTTPException(status_code=400, detail="user_id is required")
     try:
-        acc_response = (
-            supabase.table("accounts").select("*").eq("user_id", user_id).execute()
-        )
-        accounts = acc_response.data or []
+        accounts = fetch_user_accounts(user_id)
 
         trans_response = (
             supabase.table("transactions")
@@ -290,6 +292,18 @@ async def get_dashboard_summary(user_id: str):
         print(f"Error in dashboard-summary: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.get("/account-hub-analysis")
+async def get_account_hub_analysis(user_id: str):
+    if not user_id or not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        return generate_account_hub_analysis(user_id.strip())
+    except Exception as e:
+        print(f"Error in account-hub-analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class TransactionCreate(BaseModel):
     user_id: str
     account_id: str
@@ -331,46 +345,49 @@ async def create_transaction(req: TransactionCreate):
 @router.get("/transactions")
 async def get_transactions(user_id: str, start_date: str = None, end_date: str = None):
     try:
-        # 1. Fetch Transactions with filtering
-        query = supabase.table("transactions")\
-            .select("*")\
+        # Single query with joins (avoids N+1 / extra mapping queries)
+        query = (
+            supabase.table("transactions")
+            .select(
+                "transaction_id,transaction_date,amount,transaction_type,merchant_name,description,"
+                "account_id,category_id,"
+                "running_balance,"
+                "categories(main_category,sub_category),"
+                "accounts(account_name)"
+            )
             .eq("user_id", user_id)
-        
+        )
+
         if start_date:
             query = query.gte("transaction_date", start_date)
         if end_date:
             query = query.lte("transaction_date", end_date)
-            
+
         trans_res = query.order("transaction_date", desc=True).execute()
-        transactions = trans_res.data
-        
-        # 2. Fetch Categories for mapping
-        cat_res = supabase.table("categories").select("*").execute()
-        cat_map = {c["category_id"]: (c["main_category"], c["sub_category"]) for c in cat_res.data}
-        
-        # 3. Fetch Accounts for mapping
-        acc_res = supabase.table("accounts").select("account_id, account_name").eq("user_id", user_id).execute()
-        acc_map = {a["account_id"]: a["account_name"] for a in acc_res.data}
-        
-        # 4. Map and Format
+        rows = trans_res.data or []
+
         formatted = []
-        for t in transactions:
-            main_cat, sub_cat = cat_map.get(t["category_id"], ("Uncategorized", "General"))
-            formatted.append({
-                "id": t["transaction_id"],
-                "date": t["transaction_date"],
-                "merchant": t["merchant_name"] or t["description"] or "Unknown",
-                "category": normalize_category_name(main_cat),
-                "subCategory": sub_cat,
-                "amount": float(t["amount"]),
-                "account": acc_map.get(t["account_id"], "Unknown Account"),
-                "account_id": t["account_id"],
-                "category_id": t["category_id"],
-                "type": t["transaction_type"],
-                "notes": t["description"],
-                "runningBalance": float(t["running_balance"]) if t.get("running_balance") is not None else None
-            })
-            
+        for row in rows:
+            categories = row.get("categories") or {}
+            accounts = row.get("accounts") or {}
+            formatted.append(
+                {
+                    "id": row["transaction_id"],
+                    "date": row["transaction_date"],
+                    "merchant": row.get("merchant_name") or row.get("description") or "Unknown",
+                    "category": normalize_category_name(categories.get("main_category")),
+                    "subCategory": categories.get("sub_category") or "General",
+                    "amount": float(row.get("amount") or 0),
+                    "account": accounts.get("account_name") or "Unknown Account",
+                    "account_id": row.get("account_id"),
+                    "category_id": row.get("category_id"),
+                    "type": row.get("transaction_type"),
+                    "notes": row.get("description"),
+                    "runningBalance": float(row["running_balance"])
+                    if row.get("running_balance") is not None
+                    else None,
+                }
+            )
         return {"success": True, "data": formatted}
     except Exception as e:
         print(f"Error fetching transactions: {e}")
@@ -379,40 +396,29 @@ async def get_transactions(user_id: str, start_date: str = None, end_date: str =
 @router.put("/transactions/{trans_id}")
 async def update_transaction(trans_id: str, req: TransactionCreate):
     try:
-        # 1. Map Category
-        cat_res = supabase.table("categories")\
-            .select("category_id")\
-            .eq("main_category", req.main_category)\
-            .eq("sub_category", req.sub_category)\
-            .execute()
-        
-        if not cat_res.data:
-            cat_res = supabase.table("categories")\
-                .select("category_id")\
-                .eq("main_category", req.main_category)\
-                .eq("sub_category", "General")\
-                .execute()
-        
-        category_id = cat_res.data[0]["category_id"] if cat_res.data else None
-        
-        # 2. Update Transaction
-        update_data = {
-            "account_id": req.account_id,
-            "category_id": category_id,
-            "amount": req.amount,
-            "transaction_type": req.transaction_type,
-            "merchant_name": req.merchant_name,
-            "description": req.description,
-            "transaction_date": req.transaction_date
+        result = update_transaction_record(
+            transaction_id=trans_id,
+            user_id=req.user_id,
+            account_id=req.account_id,
+            amount=req.amount,
+            transaction_type=req.transaction_type,
+            merchant_name=req.merchant_name,
+            description=req.description,
+            main_category=req.main_category,
+            sub_category=req.sub_category,
+            transaction_date=req.transaction_date,
+        )
+        return {
+            "success": True,
+            "message": "Transaction updated successfully",
+            "account_id": result["account_id"],
+            "new_balance": result["new_balance"],
         }
-        
-        supabase.table("transactions").update(update_data).eq("transaction_id", trans_id).execute()
-        
-        # Note: In a real app, you'd also need to adjust balances, but for now we'll keep it simple
-        return {"success": True, "message": "Transaction updated successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error updating transaction: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.delete("/transactions/{trans_id}")
 async def delete_transaction(trans_id: str):
@@ -428,29 +434,36 @@ class AccountCreate(BaseModel):
     account_name: str
     account_type: str
     current_balance: float = 0.0
+    credit_limit: float | None = None
 
 @router.post("/accounts")
 async def create_account(req: AccountCreate):
+    uid = (req.user_id or "").strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail="user_id is required")
     try:
-        response = supabase.table("accounts").insert({
-            "user_id": req.user_id,
+        row = {
+            "user_id": uid,
             "account_name": req.account_name,
             "account_type": req.account_type,
-            "current_balance": req.current_balance
-        }).execute()
-        
-        if not response.data:
-            raise HTTPException(status_code=500, detail="Failed to create account")
-            
-        return {"success": True, "message": "Account created successfully", "data": response.data[0]}
+            "current_balance": req.current_balance,
+        }
+        if req.credit_limit is not None and req.account_type == "credit_card":
+            row["credit_limit"] = req.credit_limit
+
+        created = insert_account(row)
+        return {"success": True, "message": "Account created successfully", "data": created}
     except Exception as e:
         print(f"Error creating account: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @router.get("/accounts")
 async def get_accounts(user_id: str):
-    res = supabase.table("accounts").select("*").eq("user_id", user_id).execute()
-    return {"success": True, "data": res.data}
+    uid = (user_id or "").strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    return {"success": True, "data": fetch_user_accounts(uid)}
 
 @router.delete("/accounts/{account_id}")
 async def delete_account(account_id: str):
@@ -485,26 +498,46 @@ async def get_budget_goals_summary(user_id: str):
     if not user_id or not user_id.strip():
         raise HTTPException(status_code=400, detail="user_id is required")
     try:
+        uid = user_id.strip()
         budget_res = (
             supabase.table("budgets")
             .select("*, categories(main_category, sub_category)")
-            .eq("user_id", user_id)
+            .eq("user_id", uid)
             .execute()
         )
+
+        # Only fetch the minimum transaction window needed for:
+        # - budget utilization (from earliest active budget start)
+        # - trajectory (needs current + previous month)
+        from datetime import date
+
+        today = date.today()
+        first_of_this_month = today.replace(day=1).isoformat()
+        if today.month == 1:
+            first_of_prev_month = date(today.year - 1, 12, 1).isoformat()
+        else:
+            first_of_prev_month = date(today.year, today.month - 1, 1).isoformat()
+
+        budgets = budget_res.data or []
+        budget_starts = [str(b.get("start_date") or "") for b in budgets if b.get("start_date")]
+        min_budget_start = min(budget_starts) if budget_starts else first_of_this_month
+        min_tx_date = min(min_budget_start, first_of_prev_month)
+
         trans_response = (
             supabase.table("transactions")
             .select(
                 "transaction_id, amount, transaction_type, transaction_date, category_id"
             )
-            .eq("user_id", user_id)
+            .eq("user_id", uid)
+            .gte("transaction_date", min_tx_date)
             .order("transaction_date")
             .execute()
         )
         goals_res = (
-            supabase.table("goals").select("*").eq("user_id", user_id).execute()
+            supabase.table("goals").select("*").eq("user_id", uid).execute()
         )
         return build_budget_goals_payload(
-            budgets=budget_res.data or [],
+            budgets=budgets,
             transactions=trans_response.data or [],
             goals=goals_res.data or [],
         )

@@ -79,7 +79,13 @@ def compute_summary(
     expense = curr["expense"]
     net = income - expense
     savings_rate = round((net / income) * 100, 1) if income > 0 else 0.0
-    total_balance = sum(float(a.get("current_balance") or 0) for a in accounts)
+    # Do not include credit card borrowed amount in "current balance".
+    # Credit cards represent outstanding borrowed (often stored as negative balance).
+    total_balance = 0.0
+    for acc in accounts:
+        if (acc.get("account_type") or "").lower() == "credit_card":
+            continue
+        total_balance += float(acc.get("current_balance") or 0)
     return {
         "total_balance": total_balance,
         "monthly_income": income,

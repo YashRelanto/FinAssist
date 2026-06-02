@@ -24,11 +24,13 @@ export const Dashboard: React.FC = () => {
   const [loading, setLoading] = React.useState(true);
   const [isAccountModalOpen, setIsAccountModalOpen] = React.useState(false);
 
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = async (options?: { silent?: boolean }) => {
     const uid = activeUserId(user);
     if (!uid) return;
     try {
-      setLoading(true);
+      if (!options?.silent) {
+        setLoading(true);
+      }
 
       const response = await apiFetch(
         `/api/dashboard-summary?user_id=${encodeURIComponent(uid)}`
@@ -38,6 +40,8 @@ export const Dashboard: React.FC = () => {
 
       if (data.success) {
         setDashboardData(data);
+      } else {
+        console.error('Dashboard summary failed:', data.detail ?? data);
       }
     } catch (error) {
       console.error(
@@ -45,12 +49,33 @@ export const Dashboard: React.FC = () => {
         error
       );
     } finally {
-      setLoading(false);
+      if (!options?.silent) {
+        setLoading(false);
+      }
     }
   };
 
-  const fetchAccounts = async () => {
-    await fetchDashboardData();
+  const handleAccountCreated = (account: Record<string, unknown>) => {
+    setDashboardData((prev) => {
+      if (!prev) {
+        return {
+          success: true,
+          accounts: [account],
+          summary: {},
+          chart_data: [],
+          recent_transactions: [],
+          expense_breakdown_month: [],
+          budget_utilization: [],
+        };
+      }
+      const existing = (prev.accounts ?? []) as Record<string, unknown>[];
+      const accountId = account.account_id as string | undefined;
+      if (accountId && existing.some((a) => a.account_id === accountId)) {
+        return prev;
+      }
+      return { ...prev, accounts: [...existing, account] };
+    });
+    void fetchDashboardData({ silent: true });
   };
 
   React.useEffect(() => {
@@ -109,7 +134,10 @@ export const Dashboard: React.FC = () => {
         />
 
         {/* Quick Actions */}
-        <QuickActionCard />
+        <QuickActionCard
+          hasAccounts={(dashboardData?.accounts?.length ?? 0) > 0}
+          refreshKey={`${dashboardData?.accounts?.length ?? 0}-${dashboardData?.recent_transactions?.length ?? 0}`}
+        />
       </div>
 
       {/* Charts */}
@@ -153,7 +181,7 @@ export const Dashboard: React.FC = () => {
       <AccountModal
         isOpen={isAccountModalOpen}
         onClose={() => setIsAccountModalOpen(false)}
-        onSuccess={fetchAccounts}
+        onSuccess={handleAccountCreated}
       />
     </div>
   );

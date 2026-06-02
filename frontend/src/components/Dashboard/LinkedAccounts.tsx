@@ -30,10 +30,11 @@ export const LinkedAccounts: React.FC<LinkedAccountsProps> = ({ accounts, onAddA
 
   return (
     <div className="lg:col-span-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-      {accounts.slice(0, 5).map((acc, i) => {
+      {accounts.map((acc) => {
         const isCredit = acc.account_type?.toLowerCase().includes('credit');
+        const accountKey = acc.account_id ?? acc.account_name;
         return (
-          <div key={i} className="bg-surface-container-lowest p-6 rounded-[24px] border border-outline-variant/30 soft-shadow group hover:border-primary transition-all cursor-pointer flex flex-col justify-between min-h-[160px] hover:-translate-y-0.5 duration-300">
+          <div key={accountKey} className="bg-surface-container-lowest p-6 rounded-[24px] border border-outline-variant/30 soft-shadow group hover:border-primary transition-all cursor-pointer flex flex-col justify-between min-h-[160px] hover:-translate-y-0.5 duration-300">
             <div>
               <div className="flex justify-between items-start mb-4">
                 <div className={cn(

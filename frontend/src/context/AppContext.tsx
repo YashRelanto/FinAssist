@@ -18,7 +18,7 @@ interface AppContextType {
   transactions: Transaction[];
   addTransaction: (t: Omit<Transaction, 'id'>) => void;
   addTransactions: (ts: Omit<Transaction, 'id'>[]) => void;
-  updateTransaction: (id: string, t: Partial<Transaction>) => void;
+  updateTransaction: (id: string, t: Partial<Transaction>, onComplete?: (success: boolean) => void) => void;
   deleteTransaction: (id: string) => void;
   loadTransactions: () => void;
   budgets: Budget[];
@@ -428,34 +428,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     loadTransactions();
   };
 
-  const updateTransaction = (id: string, t: Partial<Transaction>) => {
+  const updateTransaction = (
+    id: string,
+    t: Partial<Transaction>,
+    onComplete?: (success: boolean) => void,
+  ) => {
     const uid = activeUserId(user);
-    if (!uid) return;
+    if (!uid) {
+      onComplete?.(false);
+      return;
+    }
 
-    const existing = transactions.find(item => item.id === id);
-    if (!existing) return;
+    const existing = transactions.find((item) => item.id === id);
+    const existingWithAccount = existing as (Transaction & { account_id?: string }) | undefined;
 
-    const merged = { ...existing, ...t };
+    const accountId =
+      t.account ||
+      existingWithAccount?.account_id ||
+      existing?.account ||
+      '';
+
+    const payload = {
+      user_id: uid,
+      account_id: accountId,
+      amount: Math.abs(t.amount ?? existing?.amount ?? 0),
+      transaction_type: t.type ?? existing?.type ?? 'expense',
+      merchant_name: t.merchant ?? existing?.merchant ?? '',
+      description: t.notes ?? existing?.notes ?? '',
+      main_category: t.category ?? existing?.category ?? 'Others',
+      sub_category: t.subCategory || existing?.subCategory || 'General',
+      transaction_date: t.date ?? existing?.date ?? new Date().toISOString().split('T')[0],
+    };
+
     apiFetch(`/api/transactions/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        user_id: uid,
-        account_id: (merged as Transaction & { account_id?: string }).account_id || merged.account,
-        amount: Math.abs(merged.amount),
-        transaction_type: merged.type,
-        merchant_name: merged.merchant,
-        description: merged.notes || '',
-        main_category: merged.category,
-        sub_category: merged.subCategory || 'General',
-        transaction_date: merged.date,
-      }),
+      body: JSON.stringify(payload),
     })
-      .then(res => res.json())
-      .then(data => {
-        if (data.success) loadTransactions();
+      .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (ok && data.success) {
+          loadTransactions();
+          onComplete?.(true);
+        } else {
+          console.error('Failed to update transaction:', data.detail ?? data);
+          onComplete?.(false);
+        }
       })
-      .catch(err => console.error('Failed to update transaction:', err));
+      .catch((err) => {
+        console.error('Failed to update transaction:', err);
+        onComplete?.(false);
+      });
   };
 
   const deleteTransaction = (id: string) => {

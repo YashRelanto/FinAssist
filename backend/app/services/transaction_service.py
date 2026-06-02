@@ -105,6 +105,118 @@ def apply_balance_delta(current_balance: float, amount: float, transaction_type:
     return current_balance - magnitude
 
 
+def reverse_balance_delta(current_balance: float, amount: float, transaction_type: str) -> float:
+    """Undo a prior transaction's effect on an account balance."""
+    magnitude = abs(float(amount))
+    tx_type = (transaction_type or "expense").lower()
+    if tx_type == "income":
+        return current_balance - magnitude
+    if tx_type == "transfer":
+        return current_balance
+    return current_balance + magnitude
+
+
+def update_transaction_record(
+    *,
+    transaction_id: str,
+    user_id: str,
+    account_id: str,
+    amount: float,
+    transaction_type: str,
+    merchant_name: str,
+    description: str,
+    main_category: str,
+    sub_category: str = "General",
+    transaction_date: str,
+) -> dict[str, Any]:
+    if not supabase_db:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    old_res = (
+        supabase_db.table("transactions")
+        .select("*")
+        .eq("transaction_id", transaction_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not old_res.data:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    old = old_res.data[0]
+    category_id = _resolve_category_id(main_category, sub_category)
+    if not category_id:
+        raise HTTPException(status_code=400, detail="Could not resolve category")
+
+    new_account_id, new_account = _resolve_account(user_id, account_id)
+    old_account_id = old["account_id"]
+    stored_amount = abs(float(amount))
+    tx_type = transaction_type.lower()
+
+    old_acc_res = (
+        supabase_db.table("accounts")
+        .select("*")
+        .eq("account_id", old_account_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if old_acc_res.data:
+        old_bal = float(old_acc_res.data[0]["current_balance"] or 0)
+        reversed_bal = reverse_balance_delta(
+            old_bal,
+            float(old["amount"]),
+            old["transaction_type"],
+        )
+        supabase_db.table("accounts").update({"current_balance": reversed_bal}).eq(
+            "account_id", old_account_id
+        ).eq("user_id", user_id).execute()
+
+        if old_account_id == new_account_id:
+            new_bal = apply_balance_delta(reversed_bal, stored_amount, tx_type)
+        else:
+            new_bal = apply_balance_delta(
+                float(new_account.get("current_balance") or 0),
+                stored_amount,
+                tx_type,
+            )
+    else:
+        new_bal = apply_balance_delta(
+            float(new_account.get("current_balance") or 0),
+            stored_amount,
+            tx_type,
+        )
+
+    update_res = (
+        supabase_db.table("transactions")
+        .update(
+            {
+                "account_id": new_account_id,
+                "category_id": category_id,
+                "amount": stored_amount,
+                "transaction_type": tx_type,
+                "merchant_name": merchant_name,
+                "description": description,
+                "transaction_date": transaction_date,
+                "running_balance": new_bal if old_account_id == new_account_id else None,
+            }
+        )
+        .eq("transaction_id", transaction_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not update_res.data:
+        raise HTTPException(status_code=500, detail="Failed to update transaction")
+
+    supabase_db.table("accounts").update({"current_balance": new_bal}).eq(
+        "account_id", new_account_id
+    ).eq("user_id", user_id).execute()
+
+    return {
+        "transaction": update_res.data[0],
+        "account_id": new_account_id,
+        "new_balance": new_bal,
+    }
+
+
 def create_transaction_record(
     *,
     user_id: str,

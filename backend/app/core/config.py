@@ -37,6 +37,10 @@ class Settings:
     LLM_PROVIDER: str = "nvidia"
     NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
     NVIDIA_CHAT_MODEL: str = os.getenv("NVIDIA_CHAT_MODEL", "meta/llama-3.1-8b-instruct")
+    NVIDIA_ACCOUNT_HUB_MODEL: str = os.getenv(
+        "NVIDIA_ACCOUNT_HUB_MODEL",
+        "meta/llama-3.1-70b-instruct",
+    )
     NVIDIA_BASE_URL: str = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
 
     # Aliases used by chatbot_engine
@@ -51,6 +55,10 @@ class Settings:
     @property
     def active_base_url(self) -> str:
         return self.NVIDIA_BASE_URL
+
+    @property
+    def account_hub_model(self) -> str:
+        return self.NVIDIA_ACCOUNT_HUB_MODEL
 
     # ── ChromaDB ──────────────────────────────────────────────────────────────
     CHROMA_DB_PATH: str = os.getenv(

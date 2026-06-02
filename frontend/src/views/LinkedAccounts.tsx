@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { cn, formatCurrency, CURRENCY_SYMBOL } from '../lib/utils';
+import { activeUserId } from '../lib/activeUserId';
+import { apiFetch } from '../lib/api';
 import { AccountModal } from '../components/AccountModal';
 
 export const LinkedAccounts: React.FC = () => {
@@ -27,14 +29,15 @@ export const LinkedAccounts: React.FC = () => {
   const [isDeleting, setIsDeleting] = useState(false);
 
   const fetchAccounts = async () => {
-    if (!user.isAuthenticated || !user.userId) return;
+    const uid = activeUserId(user);
+    if (!user.isAuthenticated || !uid) return;
     setIsLoading(true);
     setError(null);
     try {
-      const res = await fetch(`http://localhost:8000/api/accounts?user_id=${user.userId}`);
+      const res = await apiFetch(`/api/accounts?user_id=${encodeURIComponent(uid)}`);
       const data = await res.json();
       if (data.success) {
-        setAccounts(data.data);
+        setAccounts(data.data ?? []);
       } else {
         throw new Error(data.detail || 'Failed to load accounts');
       }
@@ -48,7 +51,7 @@ export const LinkedAccounts: React.FC = () => {
 
   useEffect(() => {
     fetchAccounts();
-  }, [user.userId, user.isAuthenticated]);
+  }, [user.userId, user.id, user.isAuthenticated]);
 
   const handleDelete = async (accountId: string) => {
     setIsDeleting(true);
@@ -250,7 +253,15 @@ export const LinkedAccounts: React.FC = () => {
       <AccountModal 
         isOpen={isModalOpen} 
         onClose={() => setIsModalOpen(false)} 
-        onSuccess={fetchAccounts} 
+        onSuccess={(account) => {
+          if (account?.account_id) {
+            setAccounts((prev) => {
+              if (prev.some((a) => a.account_id === account.account_id)) return prev;
+              return [...prev, account];
+            });
+          }
+          void fetchAccounts();
+        }}
       />
     </div>
   );

@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { X, Building2, CreditCard, DollarSign, Wallet, ShieldCheck } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { CURRENCY_SYMBOL } from '../lib/utils';
+import { activeUserId } from '../lib/activeUserId';
+import { apiFetch } from '../lib/api';
 
 interface AccountModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess?: () => void;
+  onSuccess?: (account: Record<string, unknown>) => void;
 }
 
 const accountTypes = [
@@ -23,6 +25,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
     account_name: '',
     account_type: 'checking',
     current_balance: 0,
+    credit_limit: 0,
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +36,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
         account_name: '',
         account_type: 'checking',
         current_balance: 0,
+        credit_limit: 0,
       });
       setError(null);
     }
@@ -40,22 +44,32 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
 
   if (!isOpen) return null;
 
+  const isCreditCard = formData.account_type === 'credit_card';
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     setError(null);
 
     try {
-      const response = await fetch('http://localhost:8000/api/accounts', {
+      const uid = activeUserId(user);
+      if (!uid) {
+        throw new Error('You must be signed in to link an account.');
+      }
+
+      const response = await apiFetch('/api/accounts', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          user_id: user?.userId,
+          user_id: uid,
           account_name: formData.account_name,
           account_type: formData.account_type,
           current_balance: formData.current_balance,
+          ...(formData.account_type === 'credit_card'
+            ? { credit_limit: formData.credit_limit }
+            : {}),
         }),
       });
 
@@ -64,8 +78,8 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
         throw new Error(data.detail || 'Failed to link account');
       }
 
-      if (onSuccess) {
-        onSuccess();
+      if (onSuccess && data.data) {
+        onSuccess(data.data);
       }
       onClose();
     } catch (err: any) {
@@ -142,7 +156,9 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
             </div>
 
             <div>
-              <label className="block text-[10px] font-black text-outline uppercase tracking-widest mb-2 px-1">Starting Balance</label>
+              <label className="block text-[10px] font-black text-outline uppercase tracking-widest mb-2 px-1">
+                {isCreditCard ? 'Outstanding Balance (Borrowed)' : 'Starting Balance'}
+              </label>
               <div className="relative">
                 <div className="absolute left-5 top-1/2 -translate-y-1/2 text-primary font-black text-base">
                   {CURRENCY_SYMBOL}
@@ -151,6 +167,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
                   required
                   type="number" 
                   step="0.01"
+                  min="0"
                   value={formData.current_balance || ''}
                   onChange={(e) => setFormData({...formData, current_balance: parseFloat(e.target.value) || 0})}
                   placeholder="0.00" 
@@ -158,9 +175,36 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
                 />
               </div>
               <p className="text-[9px] text-outline font-medium tracking-wide mt-1.5 px-1 leading-relaxed">
-                Enter your current balance. You can add transactions later to keep the balance synced in real-time.
+                {isCreditCard
+                  ? 'Enter the amount currently borrowed on this card. Used for utilization warnings.'
+                  : 'Enter your current balance. You can add transactions later to keep the balance synced in real-time.'}
               </p>
             </div>
+
+            {isCreditCard && (
+              <div>
+                <label className="block text-[10px] font-black text-outline uppercase tracking-widest mb-2 px-1">
+                  Credit Limit
+                </label>
+                <div className="relative">
+                  <div className="absolute left-5 top-1/2 -translate-y-1/2 text-primary font-black text-base">
+                    {CURRENCY_SYMBOL}
+                  </div>
+                  <input
+                    required
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.credit_limit || ''}
+                    onChange={(e) =>
+                      setFormData({ ...formData, credit_limit: parseFloat(e.target.value) || 0 })
+                    }
+                    placeholder="50000"
+                    className="w-full pl-12 pr-5 py-4 bg-surface-container-low rounded-2xl border border-outline-variant/50 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all text-sm font-bold text-on-surface placeholder:text-outline/40"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="pt-4 border-t border-outline-variant/20 flex gap-4">

@@ -370,10 +370,14 @@ export const Transactions: React.FC = () => {
         isOpen={modalOpen} 
         onClose={() => {
           setModalOpen(false);
-          fetchTransactions();
+          setEditingTransaction(undefined);
         }} 
         editingTransaction={editingTransaction}
         accounts={accounts}
+        onSaved={() => {
+          fetchTransactions();
+          loadTransactions();
+        }}
       />
 
       <BulkUploadModal 

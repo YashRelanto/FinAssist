@@ -298,6 +298,9 @@ def seed_user(
     # Replace existing seed data for this user
     supabase.table("transactions").delete().eq("user_id", target_user_id).execute()
     supabase.table("accounts").delete().eq("user_id", target_user_id).execute()
+    # Keep dependent dashboard state consistent with fresh accounts/transactions
+    supabase.table("budgets").delete().eq("user_id", target_user_id).execute()
+    supabase.table("goals").delete().eq("user_id", target_user_id).execute()
     print("Cleared existing accounts/transactions for user")
 
     account_id_map: dict[str, str] = {}
@@ -308,14 +311,33 @@ def seed_user(
 
     opening = _opening_balances(list(account_id_map.values()))
 
+    # Signed balances: our transaction_service decreases balance for expenses.
+    # For credit cards, we store the "borrowed" amount as a negative balance
+    # so `abs(current_balance)` correctly represents outstanding borrowed.
+    account_type_by_newid: dict[str, str] = {}
     for raw_acc, new_id in account_id_map.items():
+        account_type_by_newid[new_id] = _infer_account_type(raw_acc)
+
+    opening_signed = dict(opening)
+    for acc_id, acct_type in account_type_by_newid.items():
+        if acct_type == "credit_card":
+            opening_signed[acc_id] = -abs(float(opening_signed[acc_id]))
+
+    for raw_acc, new_id in account_id_map.items():
+        acct_type = account_type_by_newid[new_id]
+        # Initial credit limit heuristic (updated again after we compute running balances)
+        credit_limit = None
+        if acct_type == "credit_card":
+            credit_limit = round(max(abs(float(opening_signed[new_id])) * 1.25, 1.0), 2)
+
         supabase.table("accounts").insert(
             {
                 "account_id": new_id,
                 "user_id": target_user_id,
                 "account_name": _account_display_name(raw_acc),
-                "account_type": _infer_account_type(raw_acc),
-                "current_balance": opening[new_id],
+                "account_type": acct_type,
+                "current_balance": opening_signed[new_id],
+                **({"credit_limit": credit_limit} if credit_limit is not None else {}),
                 "created_at": datetime.utcnow().isoformat(),
             },
         ).execute()
@@ -355,13 +377,32 @@ def seed_user(
     if shift_to_today:
         tx_df = _shift_dates_to_recent(tx_df)
         print(f"Shifted dates to {tx_df['transaction_date'].min()} .. {tx_df['transaction_date'].max()}")
-    tx_df = _running_balances(tx_df, opening)
+    tx_df = _running_balances(tx_df, opening_signed)
     tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"]).dt.strftime("%Y-%m-%d")
     tx_df["running_balance"] = tx_df["running_balance"].astype(float).round(2)
 
-    final_by_account = _final_balances(tx_df, opening)
+    final_by_account = _final_balances(tx_df, opening_signed)
     for acc_id, balance in final_by_account.items():
         supabase.table("accounts").update({"current_balance": balance}).eq("account_id", acc_id).execute()
+
+    # Now that we know the actual borrowed range for credit cards, set credit_limit
+    # so utilization warnings behave realistically.
+    credit_limit_updates: dict[str, float] = {}
+    for acc_id, acct_type in account_type_by_newid.items():
+        if acct_type != "credit_card":
+            continue
+        acc_rows = tx_df[tx_df["account_id"] == acc_id]
+        max_borrowed = (
+            float(acc_rows["running_balance"].abs().max())
+            if not acc_rows.empty
+            else abs(float(opening_signed.get(acc_id, 0.0)))
+        )
+        credit_limit_updates[acc_id] = round(max(max_borrowed * 1.25, 1.0), 2)
+
+    for acc_id, credit_limit in credit_limit_updates.items():
+        supabase.table("accounts").update({"credit_limit": credit_limit}).eq("account_id", acc_id).eq(
+            "user_id", target_user_id
+        ).execute()
 
     income_total = float(tx_df.loc[tx_df["transaction_type"] == "income", "amount"].sum())
     expense_total = float(tx_df.loc[tx_df["transaction_type"] == "expense", "amount"].sum())
