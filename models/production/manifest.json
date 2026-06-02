@@ -1,6 +1,6 @@
 {
   "model_type": "prophet",
-  "trained_at": "2026-06-02T05:34:27.249204+00:00",
+  "trained_at": "2026-06-02T04:36:08.101160+00:00",
   "trained_users": 14,
   "horizon_weeks": 4,
   "min_weeks": 8,
