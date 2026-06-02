@@ -1,0 +1,66 @@
+[
+  {
+    "timestamp": "2026-06-02T05:18:06.080943Z",
+    "user_id": "user123",
+    "thread_id": "thread123",
+    "event_type": "out_of_scope_request",
+    "message": "Who is Modi?",
+    "reason": "User query is out of the financial advisor domains."
+  },
+  {
+    "timestamp": "2026-06-02T05:18:26.953332Z",
+    "user_id": "user123",
+    "thread_id": "thread123",
+    "event_type": "out_of_scope_request",
+    "message": "Who is Modi?",
+    "reason": "User query is out of the financial advisor domains."
+  },
+  {
+    "timestamp": "2026-06-02T05:19:00.601079Z",
+    "user_id": "user123",
+    "thread_id": "thread123",
+    "event_type": "out_of_scope_request",
+    "message": "Who is Modi?",
+    "reason": "User query is out of the financial advisor domains."
+  },
+  {
+    "timestamp": "2026-06-02T06:17:38.050740Z",
+    "user_id": "user123",
+    "thread_id": "thread123",
+    "event_type": "out_of_scope_request",
+    "message": "Who is Modi?",
+    "reason": "User query is out of the financial advisor domains."
+  },
+  {
+    "timestamp": "2026-06-02T06:17:50.666098Z",
+    "user_id": "user123",
+    "thread_id": "thread123",
+    "event_type": "out_of_scope_request",
+    "message": "Who is Modi?",
+    "reason": "User query is out of the financial advisor domains."
+  },
+  {
+    "timestamp": "2026-06-02T06:28:10.746332Z",
+    "user_id": "test-repro-user-1",
+    "thread_id": "repro-thread-1",
+    "event_type": "out_of_scope_request",
+    "message": "thar , 800000, yes, after 6 or 7 months",
+    "reason": "User query is out of the financial advisor domains."
+  },
+  {
+    "timestamp": "2026-06-02T06:31:43.505173Z",
+    "user_id": "test-repro-user-1",
+    "thread_id": "repro-thread-1",
+    "event_type": "output_blocked",
+    "message": "thar , 800000, yes, after 6 or 7 months",
+    "reason": "Sensitive credentials leaked in response"
+  },
+  {
+    "timestamp": "2026-06-02T06:39:26.132400Z",
+    "user_id": "user123",
+    "thread_id": "thread123",
+    "event_type": "out_of_scope_request",
+    "message": "Who is Modi?",
+    "reason": "User query is out of the financial advisor domains."
+  }
+]

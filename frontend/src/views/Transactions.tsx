@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Search, Filter, Download, Upload, Plus, Edit2, Trash2 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { TransactionModal } from '../components/TransactionModal';
+import { PdfPasswordModal } from '../components/PdfPasswordModal';
+import { analyzeStatementFile } from '../lib/statementParser';
 import { cn, formatCurrency } from '../lib/utils';
 import { Transaction } from '../types';
 import { apiFetch } from '../lib/api';
@@ -19,6 +21,13 @@ export const Transactions: React.FC = () => {
   const [selectedAccount, setSelectedAccount] = useState('All Accounts');
   const [selectedCategory, setSelectedCategory] = useState('All Categories');
   const [selectedType, setSelectedType] = useState('All Types');
+
+  // Bulk statement upload states
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [passwordModal, setPasswordModal] = useState<{ open: boolean; wrongPassword: boolean }>({ open: false, wrongPassword: false });
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const fetchTransactions = async () => {
     const uid = activeUserId(user);
@@ -133,6 +142,91 @@ export const Transactions: React.FC = () => {
     }
   };
 
+  const processFile = async (file: File, password?: string) => {
+    setIsUploading(true);
+    setUploadError(null);
+    try {
+      const { transactions } = await analyzeStatementFile(file, categories, password);
+
+      const uid = activeUserId(user);
+      if (uid) {
+        const ingestRes = await apiFetch('/api/statement/ingest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: uid,
+            transactions: transactions.map((t) => ({
+              transaction_date: t.date,
+              amount: Math.abs(t.amount),
+              transaction_type: t.type === 'income' ? 'Credit' : 'Debit',
+              merchant_name: t.merchant,
+              description: t.merchant,
+              running_balance: null,
+            })),
+          }),
+        });
+        if (!ingestRes.ok) {
+          throw new Error('Failed to save statement transactions to the database');
+        }
+        // Refresh transactions and accounts
+        fetchTransactions();
+        fetchAccounts();
+        loadTransactions();
+      }
+
+      setPendingFile(null);
+      setPasswordModal({ open: false, wrongPassword: false });
+      alert("Statement successfully uploaded and transactions imported!");
+    } catch (err: any) {
+      if (err?.type === 'password_required') {
+        setPendingFile(file);
+        setPasswordModal({ open: true, wrongPassword: false });
+      } else if (err?.type === 'wrong_password') {
+        setPasswordModal({ open: true, wrongPassword: true });
+      } else {
+        setUploadError(err?.message || 'Failed to parse the statement. Please try again.');
+        alert(err?.message || 'Failed to parse the statement. Please try again.');
+      }
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    processFile(file);
+    e.target.value = '';
+  };
+
+  const handleExportCSV = () => {
+    if (filtered.length === 0) {
+      alert('No transactions to export.');
+      return;
+    }
+    const headers = ['Date', 'Merchant', 'Category', 'SubCategory', 'Account', 'Amount', 'Type', 'Notes'];
+    const rows = filtered.map(t => [
+      t.date,
+      `"${t.merchant.replace(/"/g, '""')}"`,
+      t.category,
+      t.subCategory || '',
+      t.account,
+      t.amount,
+      t.type,
+      t.notes ? `"${t.notes.replace(/"/g, '""')}"` : ''
+    ]);
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `FinAssist_Transactions_${new Date().toISOString().slice(0,10)}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const filtered = realTransactions.filter(t => {
     const matchesSearch = 
       t.merchant.toLowerCase().includes(search.toLowerCase()) ||
@@ -170,10 +264,29 @@ export const Transactions: React.FC = () => {
           <p className="text-on-surface-variant mt-1 text-sm font-medium">Manage and review your detailed financial ledger.</p>
         </div>
         <div className="flex items-center gap-3">
-          <button className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-on-surface-variant bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low transition-all">
-            <Upload className="w-4 h-4" /> Bulk Upload
+          <button 
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-on-surface-variant bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low transition-all disabled:opacity-50"
+          >
+            {isUploading ? (
+              <span className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></span>
+            ) : (
+              <Upload className="w-4 h-4" />
+            )}
+            Bulk Upload
           </button>
-          <button className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-on-surface-variant bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low transition-all">
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            onChange={handleFileUpload} 
+            accept=".pdf,.csv,.xls,.xlsx" 
+            style={{ display: 'none' }} 
+          />
+          <button 
+            onClick={handleExportCSV}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-on-surface-variant bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low transition-all"
+          >
             <Download className="w-4 h-4" /> Export CSV
           </button>
           <button 
@@ -366,6 +479,18 @@ export const Transactions: React.FC = () => {
         editingTransaction={editingTransaction}
         accounts={accounts}
       />
+
+      {passwordModal.open && pendingFile && (
+        <PdfPasswordModal
+          fileName={pendingFile.name}
+          isWrongPassword={passwordModal.wrongPassword}
+          onSubmit={(pw) => processFile(pendingFile, pw)}
+          onCancel={() => {
+            setPasswordModal({ open: false, wrongPassword: false });
+            setPendingFile(null);
+          }}
+        />
+      )}
     </div>
   );
 };

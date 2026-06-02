@@ -66,7 +66,7 @@ class ChatResponse(BaseModel):
         ...,
         description=(
             "Classified intent of the query.  One of: "
-            "banking | investing | general_finance | personal_data"
+            "personal_transaction | financial_knowledge | financial_goal_planning | out_of_scope"
         ),
     )
     sources: list[str] = Field(

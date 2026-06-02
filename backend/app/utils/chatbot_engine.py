@@ -3,17 +3,21 @@ Core intelligence coordinator for the FinAssist Financial AI Advisor chatbot.
 
 Responsibilities:
   - SessionManager  : thread-safe JSON-based conversation state persistence
-  - classify_intent : zero-shot LLM intent router
-  - execute_rag     : ChromaDB retrieval + personalised LLM advisory generation
-  - process_chat_message : top-level async orchestrator
+  - classify_intent : 4-category LLM intent router with Domain Guard
+  - run_dynamic_goal_planner : Dynamic Clarification Planner for financial goals
+  - execute_rag     : ChromaDB multi-collection retrieval + FinAssist advisor generation
+  - process_chat_message : top-level async orchestrator executing the 7-layer guardrails
+
+Intent taxonomy (v4):
+  personal_transaction | financial_knowledge | financial_goal_planning | out_of_scope
 """
 
 import json
 import os
 import uuid
 import logging
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Optional, Tuple, List, Dict, Any
 
 import openai
 
@@ -23,6 +27,13 @@ from app.utils.chroma_store import chroma_db
 from app.utils.nl2sql import execute_nl2sql
 from app.guardrails import Guardrails
 from app.utils.security_logger import log_security_event
+from app.utils.prompts import (
+    INTENT_CLASSIFIER_SYSTEM,
+    INTENT_CLASSIFIER_USER,
+    GOAL_PLANNER_SYSTEM,
+    GOAL_PLANNER_USER,
+    FINASSIST_SYSTEM_PROMPT,
+)
 
 # ─── Logging ────────────────────────────────────────────────────────────────
 
@@ -33,13 +44,24 @@ logger = logging.getLogger(__name__)
 SESSIONS_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "sessions.json")
 SESSIONS_FILE = os.path.normpath(SESSIONS_FILE)
 
-INTENT_COLLECTION_MAP: dict[str, str] = {
-    "banking": "banking_data",
-    "investing": "investment_data",
-    "general_finance": "financial_tips",
+# 4-category intent taxonomy
+VALID_INTENTS = {
+    "personal_transaction",
+    "financial_knowledge",
+    "financial_goal_planning",
+    "out_of_scope",
 }
 
-VALID_INTENTS = {"banking", "investing", "general_finance", "personal_data"}
+# Map each intent to one or more ChromaDB collection names.
+INTENT_COLLECTION_MAP: dict[str, list[str]] = {
+    "financial_knowledge":     ["banking_data", "investment_data", "financial_tips"],
+    "financial_goal_planning":  ["financial_tips"],
+    "personal_transaction":    [],
+    "out_of_scope":            [],
+}
+
+# Token the LLM can emit when it detects personal-data intent mid-turn
+ROUTE_TO_NL2SQL_TOKEN = "ROUTE_TO_NL2SQL"
 
 # ── Active LLM settings (resolved from LLM_PROVIDER env var) ────────────────
 OPENAI_MODEL = settings.active_chat_model
@@ -57,27 +79,12 @@ logger.info(
 class SessionManager:
     """
     Manages per-user, per-thread conversation history stored in a local
-    sessions.json file.  The file schema is:
-
-        {
-          "<user_id>": {
-            "<thread_id>": [
-              {"role": "user"|"assistant", "content": "...", "ts": "ISO8601"},
-              ...
-            ]
-          }
-        }
-
-    All public methods are synchronous and include file-level locking via a
-    simple try/except guard to survive concurrent reads/writes in a
-    single-process uvicorn deployment.
+    sessions.json file.
     """
 
     def __init__(self, sessions_file: str = SESSIONS_FILE):
         self.sessions_file = sessions_file
         self._ensure_file()
-
-    # ── Private helpers ──────────────────────────────────────────────────────
 
     def _ensure_file(self) -> None:
         """Create the sessions file and its parent directory if absent."""
@@ -101,12 +108,23 @@ class SessionManager:
         except OSError as exc:
             logger.error("Failed to persist sessions.json: %s", exc)
 
-    # ── Public API ───────────────────────────────────────────────────────────
-
     def get_state(self, user_id: str, thread_id: str) -> list[dict]:
         """Return the ordered message list for a specific user/thread pair."""
         data = self._load()
-        return data.get(user_id, {}).get(thread_id, [])
+        thread_data = data.get(user_id, {}).get(thread_id, [])
+        if isinstance(thread_data, list):
+            return thread_data
+        elif isinstance(thread_data, dict):
+            return thread_data.get("messages", [])
+        return []
+
+    def get_clarification_state(self, user_id: str, thread_id: str) -> dict:
+        """Return the persistent clarification state for a specific user/thread pair."""
+        data = self._load()
+        thread_data = data.get(user_id, {}).get(thread_id, {})
+        if isinstance(thread_data, dict):
+            return thread_data.get("clarification_state", {})
+        return {}
 
     def update_state(
         self,
@@ -118,7 +136,48 @@ class SessionManager:
         data = self._load()
         if user_id not in data:
             data[user_id] = {}
-        data[user_id][thread_id] = messages
+            
+        thread_data = data[user_id].get(thread_id, {})
+        if isinstance(thread_data, list):
+            thread_data = {
+                "messages": messages,
+                "clarification_state": {}
+            }
+        elif isinstance(thread_data, dict):
+            thread_data["messages"] = messages
+        else:
+            thread_data = {
+                "messages": messages,
+                "clarification_state": {}
+            }
+        data[user_id][thread_id] = thread_data
+        self._save(data)
+
+    def update_clarification_state(
+        self,
+        user_id: str,
+        thread_id: str,
+        state: dict,
+    ) -> None:
+        """Persist the updated clarification state for a user/thread pair."""
+        data = self._load()
+        if user_id not in data:
+            data[user_id] = {}
+            
+        thread_data = data[user_id].get(thread_id, {})
+        if isinstance(thread_data, list):
+            thread_data = {
+                "messages": thread_data,
+                "clarification_state": state
+            }
+        elif isinstance(thread_data, dict):
+            thread_data["clarification_state"] = state
+        else:
+            thread_data = {
+                "messages": [],
+                "clarification_state": state
+            }
+        data[user_id][thread_id] = thread_data
         self._save(data)
 
     def append_turn(
@@ -128,49 +187,37 @@ class SessionManager:
         user_message: str,
         assistant_message: str,
     ) -> list[dict]:
-        """
-        Convenience method: append a user+assistant turn to the thread history
-        and immediately persist.  Returns the updated history list.
-        """
+        """Append a user+assistant turn to the thread history and persist."""
         history = self.get_state(user_id, thread_id)
-        ts = datetime.utcnow().isoformat()
+        ts = datetime.now(timezone.utc).isoformat()
         history.append({"role": "user", "content": user_message, "ts": ts})
         history.append({"role": "assistant", "content": assistant_message, "ts": ts})
         self.update_state(user_id, thread_id, history)
         return history
 
 
-# Module-level singleton so all call-sites share one file handle lifecycle
+# Module-level singleton
 session_manager = SessionManager()
 
 
-# ─── Intent Classifier ───────────────────────────────────────────────────────
+# ─── Intent Classifier & Domain Guard (Layer 0 & Layer 2) ──────────────────
 
-def classify_intent(user_message: str) -> str:
+def classify_intent(user_message: str, history: list[dict] = None) -> Tuple[str, bool]:
     """
-    Zero-shot intent classification using an OpenAI completion call.
-
-    Returns exactly one of:
-        "banking" | "investing" | "general_finance" | "personal_data"
-
-    Falls back to "general_finance" if the model response is unparseable.
+    Classifies the user's message into 6 intents:
+      PERSONAL_DATA, BANKING, INVESTING, GENERAL_FINANCE, GOAL_PLANNING, OUT_OF_SCOPE.
+    Also returns whether it is out of scope.
     """
-    system_prompt = (
-        "You are an intent classification engine for a personal finance application.\n"
-        "Classify the user's message into EXACTLY ONE of the following four categories "
-        "and respond with ONLY that single word — no punctuation, no explanation:\n\n"
-        "  banking         – questions about bank accounts, interest rates, FDs, RDs, "
-        "savings accounts, loans, credit cards, or banking products\n"
-        "  investing        – questions about stocks, mutual funds, SIPs, ETFs, bonds, "
-        "portfolio management, market data, or investment strategies\n"
-        "  general_finance  – broader financial topics such as budgeting, tax planning, "
-        "insurance, retirement planning, or financial literacy\n"
-        "  personal_data    – queries about the user's own transactions, spending habits, "
-        "balances, income, or account-specific summaries that require database lookup\n\n"
-        "Reply with one of: banking, investing, general_finance, personal_data"
-    )
-
     try:
+        # Build history context
+        history_lines = []
+        if history:
+            for msg in history[-5:]:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                history_lines.append(f"{role.capitalize()}: {content}")
+        history_str = "\n".join(history_lines) if history_lines else "None."
+
         client = openai.OpenAI(
             api_key=settings.active_api_key,
             base_url=settings.active_base_url,
@@ -178,121 +225,308 @@ def classify_intent(user_message: str) -> str:
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
+                {"role": "system", "content": INTENT_CLASSIFIER_SYSTEM},
+                {
+                    "role": "user",
+                    "content": INTENT_CLASSIFIER_USER.format(
+                        message=user_message,
+                        history=history_str
+                    )
+                },
             ],
-            max_tokens=10,
+            response_format={"type": "json_object"},
+            max_tokens=150,
             temperature=0.0,
         )
-        raw = response.choices[0].message.content.strip().lower()
-        # Sanitise: strip punctuation, take first word
-        intent = raw.split()[0].rstrip(".,;:") if raw else ""
-        if intent in VALID_INTENTS:
-            return intent
-        logger.warning("Unexpected intent token '%s' — defaulting to general_finance", intent)
-        return "general_finance"
+        raw = response.choices[0].message.content.strip()
+        data = json.loads(raw)
+        
+        intent = str(data.get("intent", "general_finance")).lower().strip()
+        out_of_scope = bool(data.get("out_of_scope", False))
+
+        if intent not in VALID_INTENTS:
+            intent = "financial_knowledge"
+
+        if intent == "out_of_scope":
+            out_of_scope = True
+
+        logger.info("[IntentClassifier] '%s' → intent=%s, out_of_scope=%s", user_message[:60], intent, out_of_scope)
+        return intent, out_of_scope
 
     except Exception as exc:
-        logger.error("classify_intent failed: %s", exc)
-        return "general_finance"
+        logger.error("[IntentClassifier] Failed: %s", exc)
+        return "financial_knowledge", False
 
 
-# ─── RAG Executor ────────────────────────────────────────────────────────────
+# ─── Clarification Engine (Layer 3) ──────────────────────────────────────────
+
+def call_dynamic_planner_llm(user_message: str, history: list[dict], state_json: str) -> dict:
+    """
+    Calls the Dynamic Goal Planner LLM to analyze the user message and history,
+    and returns the slot/planning state updates.
+    """
+    try:
+        history_lines = []
+        for msg in history[-10:]:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            history_lines.append(f"{role.capitalize()}: {content}")
+        history_str = "\n".join(history_lines) if history_lines else "None."
+
+        client = openai.OpenAI(
+            api_key=settings.active_api_key,
+            base_url=settings.active_base_url,
+        )
+        
+        from app.utils.prompts import GOAL_PLANNER_SYSTEM, GOAL_PLANNER_USER
+
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": GOAL_PLANNER_SYSTEM},
+                {
+                    "role": "user",
+                    "content": GOAL_PLANNER_USER.format(
+                        state_json=state_json,
+                        history=history_str,
+                        message=user_message
+                    )
+                },
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=300,
+            temperature=0.0,
+        )
+        raw = response.choices[0].message.content.strip()
+        data = json.loads(raw)
+        return data
+    except Exception as exc:
+        logger.error("[DynamicPlanner] LLM call failed: %s", exc)
+        return {}
+
+def run_dynamic_goal_planner(
+    user_id: str,
+    thread_id: str,
+    user_message: str,
+    history: list[dict]
+) -> Tuple[bool, str, dict]:
+    """
+    Executes the dynamic, domain-agnostic goal planner state machine.
+    Merges newly collected details, updates the generic state, and saves to session.
+    Returns (requires_clarification, next_question, updated_state)
+    """
+    state = session_manager.get_clarification_state(user_id, thread_id)
+    if not isinstance(state, dict) or not state.get("intent") or state.get("intent") != "financial_goal_planning":
+        state = {
+            "intent": "financial_goal_planning",
+            "goal_detected": False,
+            "goal_description": "",
+            "collected_information": {},
+            "missing_information": [],
+            "clarification_required": False,
+            "next_question": "",
+            "advisor_ready": False
+        }
+
+    input_state = {
+        "goal_description": state.get("goal_description", ""),
+        "collected_information": state.get("collected_information", {})
+    }
+    state_json = json.dumps(input_state, indent=2)
+
+    planner_output = call_dynamic_planner_llm(user_message, history, state_json)
+
+    state["goal_detected"] = bool(planner_output.get("goal_detected", state.get("goal_detected", False)))
+    
+    desc = planner_output.get("goal_description")
+    if desc:
+        state["goal_description"] = str(desc)
+
+    new_info = planner_output.get("newly_collected_information")
+    if isinstance(new_info, dict):
+        for k, v in new_info.items():
+            if v is not None:
+                state["collected_information"][k] = v
+
+    missing_info = planner_output.get("missing_information")
+    if isinstance(missing_info, list):
+        state["missing_information"] = missing_info
+    else:
+        state["missing_information"] = []
+
+    advisor_ready = bool(planner_output.get("advisor_ready", False))
+    state["advisor_ready"] = advisor_ready
+    state["clarification_required"] = not advisor_ready
+    state["next_question"] = str(planner_output.get("next_question", ""))
+
+    session_manager.update_clarification_state(user_id, thread_id, state)
+
+    return state["clarification_required"], state["next_question"], state
+    
+    session_manager.update_clarification_state(user_id, thread_id, updated_state)
+    
+    # Build list of questions only for the missing slots
+    questions = []
+    questions_dict = SLOT_QUESTIONS.get(intent, {})
+    for slot in missing_slots:
+        if slot in questions_dict:
+            questions.append(questions_dict[slot])
+            
+    return requires_clarification, questions, updated_state
+
+
+# ─── ChromaDB Multi-Collection Retriever with Cosine Distance check ──────────
+
+def _retrieve_context(intent: str, user_message: str, n_per_collection: int = 3) -> tuple[list[str], list[str], float]:
+    """
+    Search one or more ChromaDB collections based on intent and return
+    (context_blocks, source_refs, min_distance) tuples.
+    """
+    collections = INTENT_COLLECTION_MAP.get(intent, ["financial_tips"])
+    seen_texts: set[str] = set()
+    context_blocks: list[str] = []
+    source_refs: list[str] = []
+    min_distance = 1.0
+
+    for collection_name in collections:
+        try:
+            results = chroma_db.search(
+                collection_name=collection_name,
+                query=user_message,
+                n_results=n_per_collection,
+            )
+            for doc in results:
+                text = (doc.get("text") or doc.get("document") or "").strip()
+                if not text or text in seen_texts:
+                    continue
+                seen_texts.add(text)
+                context_blocks.append(text)
+                meta = doc.get("metadata") or {}
+                source_refs.append(
+                    meta.get("source", meta.get("title", "FinAssist Knowledge Base"))
+                )
+                dist = doc.get("distance", 1.0)
+                if dist < min_distance:
+                    min_distance = dist
+        except Exception as exc:
+            logger.warning(
+                "[RAG] ChromaDB search failed for collection '%s': %s",
+                collection_name, exc
+            )
+
+    # Cap at 5 total chunks to keep prompt size reasonable
+    return context_blocks[:5], source_refs[:5], min_distance
+
+
+def format_filled_slots(slots: dict) -> str:
+    lines = []
+    for k, v in slots.items():
+        if k == "car_model":
+            lines.append(f"- Car Model: {v}")
+        elif k == "budget":
+            if isinstance(v, (int, float)):
+                lines.append(f"- Budget: Rs. {v:,.0f}")
+            else:
+                lines.append(f"- Budget: Rs. {v}")
+        elif k == "loan_required":
+            status = "Yes (Loan required)" if v is True else "No (Cash/Outright purchase)" if v is False else str(v)
+            lines.append(f"- Loan Required: {status}")
+        elif k == "timeline":
+            lines.append(f"- Timeline: {v}")
+        elif k == "bank_preference":
+            lines.append(f"- Preferred Bank(s): {v}")
+        elif k == "investment_amount":
+            if isinstance(v, (int, float)):
+                lines.append(f"- Investment Amount: Rs. {v:,.0f}")
+            else:
+                lines.append(f"- Investment Amount: Rs. {v}")
+        elif k == "fd_duration":
+            lines.append(f"- FD Duration/Tenure: {v}")
+        elif k == "senior_citizen":
+            status = "Yes" if v is True else "No" if v is False else str(v)
+            lines.append(f"- Senior Citizen: {status}")
+        elif k == "risk_profile":
+            lines.append(f"- Risk Profile/Appetite: {v}")
+        elif k == "goal":
+            lines.append(f"- Investment Goal/Purpose: {v}")
+        elif k == "investment_horizon":
+            lines.append(f"- Investment Horizon/Duration: {v}")
+        else:
+            key_display = str(k).replace('_', ' ').title()
+            lines.append(f"- {key_display}: {v}")
+    return "\n".join(lines)
+
+
+# ─── RAG Answer Generator (Layer 4A) ─────────────────────────────────────────
 
 def execute_rag(
     user_message: str,
     intent: str,
     history: list[dict],
     profile: dict,
+    clarification_state: Optional[dict] = None,
 ) -> dict:
     """
-    Retrieval-Augmented Generation pipeline.
-
-    Steps:
-      1. Map intent → ChromaDB collection name
-      2. Search ChromaDB for top-3 relevant context chunks
-      3. Compile context + user profile into a personalised advisory prompt
-      4. Call OpenAI chat completion for the final answer
-      5. Return {"answer": str, "sources": list[str]}
+    Retrieval-Augmented Generation pipeline using the FinAssist advisor persona.
+    Includes confidence scoring check (minimum similarity distance <= 0.6).
     """
-    collection_name = INTENT_COLLECTION_MAP.get(intent, "financial_tips")
+    # ── 1. Retrieve context & check confidence ────────────────────────────
+    context_blocks, source_refs, min_distance = _retrieve_context(intent, user_message)
 
-    # 1. Retrieve context from ChromaDB
-    retrieved_docs: list[dict] = []
-    try:
-        results = chroma_db.search(
-            collection_name=collection_name,
-            query=user_message,
-            n_results=3,
-        )
-        # chroma_db.search is expected to return a list of dicts with at least
-        # keys: "text" (str) and optionally "metadata" (dict) / "id" (str)
-        retrieved_docs = results if isinstance(results, list) else []
-    except Exception as exc:
-        logger.warning("ChromaDB search failed for collection '%s': %s", collection_name, exc)
+    if (not context_blocks or min_distance > 0.6) and intent == "financial_knowledge":
+        logger.info("[RAG] Confidence score low (min_distance=%s > 0.6) for intent %s — returning safe rejection", min_distance, intent)
+        return {
+            "answer": "I couldn't find reliable information to answer that accurately.",
+            "sources": ["FinAssist Knowledge Base"],
+            "route_to_nl2sql": False,
+        }
 
-    # 2. Compile context blocks (top 3)
-    context_blocks: list[str] = []
-    source_refs: list[str] = []
-    for doc in retrieved_docs[:3]:
-        text = doc.get("text") or doc.get("document") or str(doc)
-        context_blocks.append(text)
-        meta = doc.get("metadata") or {}
-        source_refs.append(meta.get("source", meta.get("title", "FinAssist Knowledge Base")))
+    context_text = "\n\n---\n\n".join(context_blocks)
 
-    context_text = "\n\n---\n\n".join(context_blocks) if context_blocks else (
-        "No specific data found. Provide general best-practice advice."
-    )
+    # Inject persistent user slots context to RAG so it can make custom recommendations
+    if clarification_state and clarification_state.get("collected_information"):
+        slots_str = format_filled_slots(clarification_state["collected_information"])
+        context_text = f"User Scenario Details (ALL these details are already provided/filled):\n{slots_str}\n\n{context_text}"
 
-    # 3. Build personalised system prompt
+    # ── 2. Build system prompt with all slots filled ──────────────────────
     income = profile.get("income", "unknown")
+    annual_income = profile.get("annual_income", income)
     segment = profile.get("segment", "General")
     city = profile.get("city", "India")
-    annual_income = profile.get("annual_income", income)
     risk_profile = profile.get("risk_profile", "Moderate")
     credit_score = profile.get("credit_score", "N/A")
     current_date = datetime.now().strftime("%d %B %Y")
 
-    # Format income display safely
-    if isinstance(annual_income, (int, float)):
-        income_display = f"₹{annual_income:,.0f} per annum"
-    else:
-        income_display = str(annual_income)
-
-    system_prompt = (
-        f"You are FinAssist, an expert AI financial advisor serving Indian retail banking customers.\n\n"
-        f"Today's Date: {current_date}\n\n"
-        f"User Profile:\n"
-        f"  - Annual Income      : {income_display}\n"
-        f"  - Customer Segment   : {segment}\n"
-        f"  - City Tier          : {city}\n"
-        f"  - Risk Profile       : {risk_profile}\n"
-        f"  - CIBIL Score        : {credit_score}\n\n"
-        f"Relevant Knowledge Base Context:\n"
-        f"{context_text}\n\n"
-        f"Instructions for a neat and premium response:\n"
-        f"  - Provide a precise, personalised, and actionable financial advisory answer.\n"
-        f"  - Tailor all recommendations to the user's income level, risk profile, and segment.\n"
-        f"  - Cite specific product names, institutions, and approximate figures where the context supports it.\n"
-        f"  - Always format money values in Indian Rupees (e.g. ₹50,000 or ₹1.5 Lakhs).\n"
-        f"  - Structure your response beautifully with bold text, clean headings (##), and spacing between paragraphs.\n"
-        f"  - Use bullet points or modern list layouts with relevant financial emojis (like 💰, 📈, 🏥, 🏦) to present suggestions neatly.\n"
-        f"  - Keep the response highly readable and concise — under 350 words.\n"
-        f"  - If the context does not contain sufficient data, clearly acknowledge that and provide general best-practice guidance based on current Indian financial norms."
+    income_display = (
+        f"₹{annual_income:,.0f} per annum"
+        if isinstance(annual_income, (int, float))
+        else str(annual_income)
     )
 
-    # 4. Build message list (last 6 turns of history for context window efficiency)
+    system_prompt = FINASSIST_SYSTEM_PROMPT.format(
+        current_date=current_date,
+        income_display=income_display,
+        segment=segment,
+        city=city,
+        risk_profile=risk_profile,
+        credit_score=credit_score,
+        context_text=context_text,
+    )
+
+    # ── 3. Build message list (last 10 turns for HITL slot recall) ────────
     recent_history = [
         {"role": msg["role"], "content": msg["content"]}
-        for msg in history[-6:]
+        for msg in history[-10:]
         if msg.get("role") in {"user", "assistant"} and msg.get("content")
     ]
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(recent_history)
     messages.append({"role": "user", "content": user_message})
 
-    # 5. Generate advisory answer
+    # ── 4. Call LLM ───────────────────────────────────────────────────────
     answer = ""
+    route_to_nl2sql = False
+
     try:
         client = openai.OpenAI(
             api_key=settings.active_api_key,
@@ -301,59 +535,31 @@ def execute_rag(
         completion = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
-            max_tokens=512,
-            temperature=0.4,
+            max_tokens=700,
+            temperature=0.2,
         )
         answer = completion.choices[0].message.content.strip()
+
+        # Detect ROUTE_TO_NL2SQL token
+        if answer.strip().upper().startswith(ROUTE_TO_NL2SQL_TOKEN):
+            logger.info(
+                "[RAG] LLM emitted ROUTE_TO_NL2SQL for message: '%s'",
+                user_message[:80],
+            )
+            route_to_nl2sql = True
+            answer = ""
+
     except Exception as exc:
-        logger.error("execute_rag LLM call failed: %s", exc)
+        logger.error("[RAG] LLM call failed: %s", exc)
         answer = (
-            "I'm sorry, I encountered a temporary issue generating your advisory. "
+            "I encountered a temporary issue generating your response. "
             "Please try again in a moment."
         )
 
     return {
         "answer": answer,
         "sources": source_refs if source_refs else ["FinAssist Knowledge Base"],
-    }
-
-
-# ─── Personal Data Summariser (NL2SQL Mock) ──────────────────────────────────
-
-def _generate_personal_data_summary(user_message: str, profile: dict) -> dict:
-    """
-    Simulates an NL2SQL output engine.  In production this would translate
-    the natural language query into SQL, execute it against Supabase, and
-    format results.  Here we return a rich, realistic mock analytical summary
-    that mirrors the schema (transactions, accounts, categories tables).
-    """
-    income = profile.get("income", 55000)
-    segment = profile.get("segment", "High Income Low Spender")
-    city = profile.get("city", "Tier 1")
-
-    summary = (
-        f"📊 **Personal Financial Summary** *(Simulated Analytics Engine)*\n\n"
-        f"**Profile**: {segment} | {city} City | Annual Income ₹{income:,}\n\n"
-        f"**Last 30 Days Snapshot:**\n"
-        f"  - 💰 Total Credits: ₹4,58,200 (Salary + Freelance)\n"
-        f"  - 💸 Total Debits: ₹1,23,750 (68 transactions)\n"
-        f"  - 📈 Net Savings Rate: **73.0%** — Well above your 60% target\n\n"
-        f"**Top 3 Spending Categories:**\n"
-        f"  1. 🏠 Housing & Utilities — ₹32,000 (25.8%)\n"
-        f"  2. 🛒 Food & Dining — ₹18,400 (14.9%)\n"
-        f"  3. 🚕 Transportation — ₹9,200 (7.4%)\n\n"
-        f"**Account Balances:**\n"
-        f"  - HDFC Savings Primary: ₹2,14,500\n"
-        f"  - HDFC Savings Emergency: ₹85,000\n"
-        f"  - Zerodha Demat Value: ₹6,32,400\n\n"
-        f"**Insight**: Based on your spending pattern, you are consistently "
-        f"saving over 70% of income. Consider deploying the idle savings "
-        f"(₹2.1L+) into a liquid mutual fund or FD ladder to optimise returns."
-    )
-
-    return {
-        "answer": summary,
-        "sources": ["Supabase: transactions", "Supabase: accounts", "Supabase: categories"],
+        "route_to_nl2sql": route_to_nl2sql,
     }
 
 
@@ -366,65 +572,147 @@ async def process_chat_message(
     user_profile: dict,
 ) -> dict:
     """
-    Top-level async orchestrator for a single chat turn.
-
-    Flow:
-      1. Run input validation guardrails
-      2. Fetch conversation history for the thread
-      3. Classify the user's intent
-      4a. personal_data  → return mock NL2SQL analytical summary
-      4b. RAG intents    → run ChromaDB retrieval + LLM advisory
-      5. Run output validation guardrails
-      6. Persist the completed turn to sessions.json
-      7. Return a unified payload dict
+    Top-level async orchestrator for a single chat turn implementing all layers.
     """
-    # Ensure thread_id is non-empty
     if not thread_id or thread_id.strip() == "":
         thread_id = str(uuid.uuid4())
 
-    # 1. Run Input Guardrails (Layer 1)
+    # ── Layer 1: Input Guardrails ──────────────────────────────────────────
     is_safe, error_message = Guardrails.validate_input(message, user_id)
     if not is_safe:
-        log_security_event(user_id=user_id, event_type="input_blocked", message=message, reason=error_message)
+        log_security_event(
+            user_id=user_id,
+            thread_id=thread_id,
+            event_type="prompt_injection_attempt" if "flagged" in error_message or "security" in error_message else "input_blocked",
+            message=message,
+            reason=error_message,
+        )
         return {
             "answer": error_message,
-            "intent": "general_finance",
+            "intent": "out_of_scope",
             "sources": ["Security Guardrails"],
             "thread_id": thread_id,
             "user_id": user_id,
         }
 
-    # 2. Load conversation history
+    # Load conversation history
     history = session_manager.get_state(user_id, thread_id)
 
-    # 3. Classify intent
-    intent = classify_intent(message)
-    logger.info("user=%s thread=%s intent=%s", user_id, thread_id, intent)
+    # ── Layer 0 & Layer 2: Domain Guard & Intent Classification ────────────
+    intent, out_of_scope = classify_intent(message, history)
 
-    # 4. Route execution
-    if intent == "personal_data":
-        logger.info("[ChatbotEngine] Routing to NL2SQL engine for personal_data...")
-        answer = await execute_nl2sql(user_id, message)
-        result = {
-            "answer": answer,
-            "intent": intent,
-            "sources": ["Supabase Transactions"]
+    if out_of_scope or intent == "out_of_scope":
+        log_security_event(
+            user_id=user_id,
+            thread_id=thread_id,
+            event_type="out_of_scope_request",
+            message=message,
+            reason="User query is out of the financial advisor domains.",
+        )
+        
+        out_of_scope_response = (
+            "I am a Financial Advisor and can assist with:\n\n"
+            "• Banking\n"
+            "• Investments\n"
+            "• Insurance\n"
+            "• Tax Planning\n"
+            "• Budgeting\n"
+            "• Financial Goal Planning\n"
+            "• Personal Spending Analysis\n\n"
+            "Please ask a finance-related question."
+        )
+
+        session_manager.append_turn(
+            user_id=user_id,
+            thread_id=thread_id,
+            user_message=message,
+            assistant_message=out_of_scope_response,
+        )
+
+        return {
+            "answer": out_of_scope_response,
+            "intent": "out_of_scope",
+            "sources": ["Domain Guard"],
+            "thread_id": thread_id,
+            "user_id": user_id,
         }
+
+    # ── Load persistent clarification state ──────────────────────────────────
+    clarification_state = session_manager.get_clarification_state(user_id, thread_id)
+
+    # ── Layer 3: Clarification Engine ──────────────────────────────────────
+    is_clarifying_active = clarification_state.get("clarification_required", False)
+
+    if intent == "financial_goal_planning" or is_clarifying_active:
+        if is_clarifying_active:
+            intent = "financial_goal_planning"
+
+        requires_clarification, next_question, clarification_state = run_dynamic_goal_planner(
+            user_id=user_id,
+            thread_id=thread_id,
+            user_message=message,
+            history=history
+        )
+        
+        if requires_clarification and next_question:
+            session_manager.append_turn(
+                user_id=user_id,
+                thread_id=thread_id,
+                user_message=message,
+                assistant_message=next_question,
+            )
+
+            return {
+                "answer": next_question,
+                "intent": intent,
+                "sources": ["Clarification Planner"],
+                "thread_id": thread_id,
+                "user_id": user_id,
+            }
+
+    # ── Layer 4A & 4B: Execution Routing ────────────────────────────────────
+    sources: list[str] = []
+
+    if intent == "personal_transaction":
+        # 4b. Direct NL2SQL path (User scoping is strictly enforced via user_id)
+        logger.info("[ChatbotEngine] Direct route → NL2SQL (intent=personal_transaction)")
+        answer = await execute_nl2sql(user_id, message)
+        sources = ["Supabase Transactions"]
+
     else:
-        result = execute_rag(
+        # 4a. RAG path
+        rag_result = execute_rag(
             user_message=message,
             intent=intent,
             history=history,
             profile=user_profile,
+            clarification_state=clarification_state,
         )
+        sources = rag_result.get("sources", [])
 
-    answer: str = result.get("answer", "")
-    sources: list[str] = result.get("sources", [])
+        if rag_result.get("route_to_nl2sql"):
+            # Failsafe: LLM detected personal-data query mid-turn
+            logger.info(
+                "[ChatbotEngine] Failsafe route → NL2SQL "
+                "(LLM emitted ROUTE_TO_NL2SQL, classified intent=%s)", intent
+            )
+            answer = await execute_nl2sql(user_id, message)
+            sources = ["Supabase Transactions"]
+            intent = "personal_transaction"
+        else:
+            answer = rag_result.get("answer", "")
 
-    # 5. Run Output Guardrails (Layer 4)
+    # ── Layer 6: Output Guardrails ──────────────────────────────────────────
+    logger.info("[ChatbotEngine] Raw LLM Answer before Output Guard: %s", answer)
     is_output_safe, cleaned_answer = Guardrails.validate_output(answer, user_id)
     if not is_output_safe:
-        log_security_event(user_id=user_id, event_type="output_blocked", message=message, reason="Sensitive credentials leaked in response")
+        log_security_event(
+            user_id=user_id,
+            thread_id=thread_id,
+            event_type="output_blocked",
+            message=message,
+            reason="Sensitive credentials leaked in response",
+        )
         return {
             "answer": cleaned_answer,
             "intent": intent,
@@ -432,10 +720,10 @@ async def process_chat_message(
             "thread_id": thread_id,
             "user_id": user_id,
         }
-    
+
     answer = cleaned_answer
 
-    # 6. Persist the turn
+    # Persist the turn
     session_manager.append_turn(
         user_id=user_id,
         thread_id=thread_id,
@@ -443,7 +731,6 @@ async def process_chat_message(
         assistant_message=answer,
     )
 
-    # 7. Return unified response payload
     return {
         "answer": answer,
         "intent": intent,
