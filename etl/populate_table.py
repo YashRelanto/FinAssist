@@ -25,6 +25,7 @@ accounts:
     account_name
     account_type
     current_balance
+    credit_limit
     created_at
 
 categories:
@@ -108,19 +109,37 @@ for account_id, group in df.groupby("account_id"):
     parts = account_id.split("_")
     account_name = parts[1].upper() if len(parts) >= 3 else account_id
 
-    # Guess account type
-    account_type = "Bank Account"
+    # Guess account type from the account_id string key.
+    # If it's a credit card, store borrowed amounts as a negative balance
+    # so expense transactions move the value further negative.
+    key = str(account_id).lower()
+    if "cc" in key or "credit" in key:
+        account_type = "credit_card"
+    elif "wallet" in key or "gpay" in key or "paytm" in key:
+        account_type = "wallet"
+    elif "invest" in key:
+        account_type = "investment"
+    elif "current" in key:
+        account_type = "checking"
+    else:
+        account_type = "savings"
 
     # Latest balance based on latest date
     latest_row = group.sort_values("date").iloc[-1]
-    current_balance = latest_row["initial_balance"]
+    current_balance = float(latest_row["initial_balance"])
+    credit_limit = None
+    if account_type == "credit_card":
+        current_balance = -abs(current_balance)
+        # Derived credit limit for utilization warnings (can be overridden by CSV later)
+        credit_limit = round(max(abs(current_balance) * 1.25, 1.0), 2)
 
     account_rows.append({
         "account_id": account_id,
         "user_id": first_row["user_id"],
         "account_name": account_name,
         "account_type": account_type,
-        "current_balance": current_balance
+        "current_balance": current_balance,
+        **({"credit_limit": credit_limit} if credit_limit is not None else {}),
     })
 
 # Bulk upsert

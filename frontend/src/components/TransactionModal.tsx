@@ -10,13 +10,22 @@ interface TransactionModalProps {
   onClose: () => void;
   editingTransaction?: Transaction;
   accounts?: any[];
+  onSaved?: () => void;
 }
 
-export const TransactionModal: React.FC<TransactionModalProps> = ({ isOpen, onClose, editingTransaction, accounts = [] }) => {
+export const TransactionModal: React.FC<TransactionModalProps> = ({
+  isOpen,
+  onClose,
+  editingTransaction,
+  accounts = [],
+  onSaved,
+}) => {
   const { addTransaction, updateTransaction, categories, pendingDate, resetPendingDate } = useAppContext();
   
   const defaultAccount = accounts.length > 0 ? accounts[0].account_id : 'HDFC Bank';
 
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [formData, setFormData] = useState<Omit<Transaction, 'id'>>({
     date: new Date().toISOString().split('T')[0],
     merchant: '',
@@ -30,6 +39,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ isOpen, onCl
 
   useEffect(() => {
     if (isOpen) {
+      setSaveError(null);
       if (editingTransaction) {
         const { id, ...rest } = editingTransaction;
         setFormData({
@@ -65,14 +75,28 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ isOpen, onCl
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsSaving(true);
+    setSaveError(null);
+
     if (editingTransaction) {
-      updateTransaction(editingTransaction.id, formData);
-    } else {
-      addTransaction(formData);
+      updateTransaction(editingTransaction.id, formData, (success) => {
+        setIsSaving(false);
+        if (success) {
+          onSaved?.();
+          onClose();
+        } else {
+          setSaveError('Could not save changes. Please try again.');
+        }
+      });
+      return;
     }
+
+    addTransaction(formData);
+    onSaved?.();
     onClose();
+    setIsSaving(false);
   };
 
   const selectedCategory = categories.find(c => c.name === formData.category);
@@ -88,6 +112,11 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ isOpen, onCl
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-5 overflow-y-auto max-h-[80vh]">
+          {saveError && (
+            <div className="p-3 bg-error-container/10 border border-error-container/30 text-error text-xs font-bold rounded-xl">
+              {saveError}
+            </div>
+          )}
           <div className="flex bg-surface-container-low p-1 rounded-xl">
             <button 
               type="button"
@@ -218,9 +247,10 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({ isOpen, onCl
           <div className="pt-4">
             <button 
               type="submit"
-              className="w-full py-4 bg-primary text-white font-bold rounded-xl shadow-lg hover:brightness-110 active:scale-[0.98] transition-all"
+              disabled={isSaving}
+              className="w-full py-4 bg-primary text-white font-bold rounded-xl shadow-lg hover:brightness-110 active:scale-[0.98] transition-all disabled:opacity-60"
             >
-              {editingTransaction ? 'Save Changes' : 'Create Transaction'}
+              {isSaving ? 'Saving…' : editingTransaction ? 'Save Changes' : 'Create Transaction'}
             </button>
           </div>
         </form>
