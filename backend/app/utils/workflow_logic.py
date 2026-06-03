@@ -31,7 +31,7 @@ WORKFLOW_DEFINITIONS = {
 import uuid
 from datetime import datetime, timezone
 
-class WorkflowAgent:
+class WorkflowLogic:
     """
     Generic Slot Manager for handling dynamic multi-turn workflows.
     Responsibilities: slot extraction, slot validation, slot persistence, missing slot detection.
@@ -58,7 +58,7 @@ class WorkflowAgent:
                 "last_updated": datetime.now(timezone.utc).isoformat()
             }
         elif state.get("workflow_status") == "paused":
-            logger.info("[WorkflowAgent] Resuming paused workflow %s", state.get("workflow_id"))
+            logger.info("[WorkflowLogic] Resuming paused workflow %s", state.get("workflow_id"))
             state["workflow_status"] = "active"
             
         state["last_updated"] = datetime.now(timezone.utc).isoformat()
@@ -103,9 +103,9 @@ class WorkflowAgent:
             )
             raw = response.choices[0].message.content.strip()
             extraction_output = json.loads(raw)
-            logger.info("[WorkflowAgent] Extracted Slots: %s", extraction_output)
+            logger.info("[WorkflowLogic] Extracted Slots: %s", extraction_output)
         except Exception as exc:
-            logger.error("[WorkflowAgent] Slot Extraction failed: %s", exc)
+            logger.error("[WorkflowLogic] Slot Extraction failed: %s", exc)
             extraction_output = {}
 
         workflow_type = extraction_output.get("workflow_type", state.get("workflow_type", "general_goal"))
@@ -125,7 +125,7 @@ class WorkflowAgent:
                 if v is not None:
                     state.setdefault("collected_information", {})[k] = v
                     
-        logger.info("[WorkflowAgent] Persisted Slots in state: %s", state["collected_information"])
+        logger.info("[WorkflowLogic] Persisted Slots in state: %s", state["collected_information"])
 
         # 3. Missing Slot Detection Phase
         required_slots = WORKFLOW_DEFINITIONS[workflow_type]["required_slots"]
@@ -136,16 +136,16 @@ class WorkflowAgent:
         state["missing_information"] = missing_slots
         
         if not missing_slots:
-            logger.info("[WorkflowAgent] All slots filled. advisor_ready=True")
+            logger.info("[WorkflowLogic] All slots filled. advisor_ready=True")
             state["workflow_status"] = "completed"
             state["advisor_ready"] = True
             state["clarification_required"] = False
             state["next_question"] = ""
-            logger.info("[WorkflowAgent] Workflow state after update: %s", state)
+            logger.info("[WorkflowLogic] Workflow state after update: %s", state)
             return False, "", state
 
         next_missing_slot = missing_slots[0]
-        logger.info("[WorkflowAgent] Next missing slot: %s", next_missing_slot)
+        logger.info("[WorkflowLogic] Next missing slot: %s", next_missing_slot)
         
         # 5. Question Generation Phase
         try:
@@ -166,14 +166,14 @@ class WorkflowAgent:
             )
             next_question = q_response.choices[0].message.content.strip()
         except Exception as exc:
-            logger.error("[WorkflowAgent] Question Generation failed: %s", exc)
+            logger.error("[WorkflowLogic] Question Generation failed: %s", exc)
             next_question = f"Could you provide your {next_missing_slot}?"
 
         state["advisor_ready"] = False
         state["clarification_required"] = True
         state["next_question"] = next_question
         
-        logger.info("[WorkflowAgent] Workflow state after update: %s", state)
+        logger.info("[WorkflowLogic] Workflow state after update: %s", state)
 
         return state["clarification_required"], state["next_question"], state
 
