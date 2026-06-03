@@ -18,6 +18,7 @@ values (Python wins when both are present).
 import json
 import logging
 import re
+import calendar
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Optional
@@ -47,20 +48,13 @@ _EMPTY_SPEC: QuerySpec = {
 
 # ─── Month name → number map ─────────────────────────────────────────────────
 
-_MONTH_NAMES = {
-    "january": 1,  "jan": 1,
-    "february": 2, "feb": 2,
-    "march": 3,    "mar": 3,
-    "april": 4,    "apr": 4,
-    "may": 5,
-    "june": 6,     "jun": 6,
-    "july": 7,     "jul": 7,
-    "august": 8,   "aug": 8,
-    "september": 9,"sep": 9,  "sept": 9,
-    "october": 10, "oct": 10,
-    "november": 11,"nov": 11,
-    "december": 12,"dec": 12,
-}
+_MONTH_NAMES = {}
+for _i in range(1, 13):
+    _MONTH_NAMES[calendar.month_name[_i].lower()] = _i
+    _MONTH_NAMES[calendar.month_abbr[_i].lower()] = _i
+_MONTH_NAMES["sept"] = 9  # Add common alternative abbreviation
+
+_MONTH_REGEX = r"\b(" + "|".join(_MONTH_NAMES.keys()) + r")(?:\s+(\d{4}))?\b"
 
 
 # ─── Pure-Python Date Resolver ────────────────────────────────────────────────
@@ -141,13 +135,7 @@ def _resolve_dates(question: str) -> Dict[str, Optional[str]]:
             }
 
     # ── <MonthName> [YYYY] ────────────────────────────────────────────────
-    month_m = re.search(
-        r"\b(january|february|march|april|may|june|july|august|"
-        r"september|october|november|december|"
-        r"jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)"
-        r"(?:\s+(\d{4}))?\b",
-        q,
-    )
+    month_m = re.search(_MONTH_REGEX, q)
     if month_m:
         m = _MONTH_NAMES[month_m.group(1)]
         # Year: explicit > current year; but if month is in the future use last year

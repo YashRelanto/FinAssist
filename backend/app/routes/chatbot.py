@@ -13,8 +13,6 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.agents.orchestrator import OrchestratorAgent
-
 # ─── Logging ────────────────────────────────────────────────────────────────
 
 logger = logging.getLogger(__name__)
@@ -147,14 +145,45 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
     # 1. Build user profile (production: replace with DB fetch)
     user_profile = _get_default_user_profile()
 
-    # 2. Call the core engine
+    # 1b. Fetch real-time transaction summary for live balances
     try:
-        result = await OrchestratorAgent.process(
+        from app.utils.nl2sql import _fetch_user_data, _build_summary
+        user_data = _fetch_user_data(request.user_id)
+        summary = _build_summary(user_data.get("transactions", []), user_data.get("accounts", []))
+        
+        balances = summary.get("account_balances", [])
+        user_profile["real_time_balances"] = "\n  - " + "\n  - ".join(balances) if balances else "N/A"
+        
+        net_flow = summary.get("net_flow_inr", 0)
+        user_profile["monthly_net_flow"] = f"₹{net_flow:,.2f}"
+    except Exception as e:
+        logger.error("Failed to fetch real-time balance for profile: %s", e)
+        user_profile["real_time_balances"] = "N/A"
+        user_profile["monthly_net_flow"] = "N/A"
+
+    # 2. Call the core engine (LangGraph)
+    try:
+        from app.graph.graph import finassist_graph
+        from app.graph.state import make_initial_state
+
+        config = {"configurable": {"thread_id": f"{request.user_id}:{request.thread_id}"}}
+
+        # The checkpointer restores state (including workflow state) for this thread
+        # if it exists. We just pass the new message in the initial_state override.
+        initial_state = make_initial_state(
             user_id=request.user_id,
-            message=request.message,
             thread_id=request.thread_id,
+            user_message=request.message,
             user_profile=user_profile,
         )
+
+        final_state = await finassist_graph.ainvoke(initial_state, config=config)
+
+        # Retrieve outputs from the final state
+        answer = final_state.get("final_answer", "")
+        intent = final_state.get("final_intent", "general_finance")
+        sources = final_state.get("sources", [])
+
     except ValueError as exc:
         logger.warning(
             "Validation error in process_chat_message | user=%s | error=%s",
@@ -186,17 +215,15 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=(
-                "An unexpected error occurred while processing your request. "
-                "Our team has been notified. Please try again shortly."
-            ),
+            detail=str(exc),
         ) from exc
 
     # 3. Build and return the response model
     return ChatResponse(
-        answer=result.get("answer", ""),
-        intent=result.get("intent", "general_finance"),
-        sources=result.get("sources", []),
-        thread_id=result.get("thread_id", request.thread_id),
-        user_id=result.get("user_id", request.user_id),
+        answer=answer,
+        intent=intent,
+        sources=sources,
+        thread_id=request.thread_id,
+        user_id=request.user_id,
     )
+# trigger reload

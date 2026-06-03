@@ -179,6 +179,34 @@ def store_in_chroma(category: str, url: str, source_name: str, text: str):
         )
         print(f"[+] Inserted into {collection_name}")
 
+def live_web_search_and_scrape(query: str, max_results: int = 1) -> tuple[str, str]:
+    """
+    Dynamically searches DuckDuckGo for the query, grabs the top URL, 
+    and scrapes it using Playwright.
+    Returns (scraped_text, source_url)
+    """
+    try:
+        from ddgs import DDGS
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
+            
+        if not results:
+            return "", ""
+            
+        top_url = results[0].get("href")
+        title = results[0].get("title", "Live Web Search")
+        snippet = results[0].get("body", "")
+        
+        if not top_url:
+            return "", ""
+            
+        scraped_text = scrape_url_playwright(top_url, f"Live Search: {title}")
+        combined_text = f"Search Summary: {snippet}\n\nWebsite Content: {scraped_text}"
+        return combined_text, top_url
+    except Exception as e:
+        print(f"[!] Live Web Search Failed: {e}")
+        return "", ""
+
 # ══════════════════════════════════════════════════════════════════════
 # ORCHESTRATION & SCHEDULED TASKS
 # ══════════════════════════════════════════════════════════════════════

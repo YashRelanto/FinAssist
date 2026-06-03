@@ -1,3 +1,0 @@
-"""
-FinAssist Agents Package
-"""
