@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.utils.chatbot_engine import process_chat_message
+from app.agents.orchestrator import OrchestratorAgent
 
 # ─── Logging ────────────────────────────────────────────────────────────────
 
@@ -149,7 +149,7 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
 
     # 2. Call the core engine
     try:
-        result = await process_chat_message(
+        result = await OrchestratorAgent.process(
             user_id=request.user_id,
             message=request.message,
             thread_id=request.thread_id,
