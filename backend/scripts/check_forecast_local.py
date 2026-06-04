@@ -49,7 +49,7 @@ def main() -> int:
 
         if has_model and len(txs) > 0:
             cat_res = supabase.table("categories").select("*").execute()
-            result = generate_forecast(txs, cat_res.data or [], user_id=uid, days_analyzed=90)
+            result = generate_forecast(txs, cat_res.data or [], user_id=uid, period="3m")
             ok = result.get("success") and result.get("user_model_available")
             pred = result.get("predicted_next_month")
             msg = result.get("message")
@@ -67,11 +67,11 @@ def main() -> int:
 
     if best_uid:
         print(f"\nTry in browser or curl:")
-        print(f"  http://127.0.0.1:8000/api/forecast?user_id={best_uid}&days=90")
+        print(f"  http://127.0.0.1:8000/api/forecast?user_id={best_uid}&period=3m")
     elif trained_ids:
         sample = next(iter(trained_ids))
         print(f"\nNo Supabase user matched bundle; sample trained id:")
-        print(f"  http://127.0.0.1:8000/api/forecast?user_id={sample}&days=90")
+        print(f"  http://127.0.0.1:8000/api/forecast?user_id={sample}&period=3m")
 
     return 0
 

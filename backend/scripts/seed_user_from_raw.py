@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """
-Seed a Supabase user with transactions from data/raw/transactions_raw.csv.
+Seed a Supabase user with daily expense history tuned for the daily Prophet model.
+
+Each calendar day gets expense rows whose daily total follows real behaviour:
+weekdays ~100–250 INR, weekends ~2,000–5,000 INR. History spans 90 consecutive days
+(>= MIN_DAYS_FOR_PROPHET_USER) ending near today so nightly training can fit
+weekly_seasonality.
 
 Usage:
   PYTHONPATH=backend python backend/scripts/seed_user_from_raw.py
@@ -14,7 +19,7 @@ import random
 import re
 import sys
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -22,12 +27,17 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 
+from app.services.forecast_features import MIN_DAYS_FOR_PROPHET_USER  # noqa: E402
 from app.utils.supabase_client import supabase  # noqa: E402
 
-RAW_CSV = ROOT / "data" / "raw" / "transactions_raw.csv"
 DEFAULT_EMAIL = "suyash.bhadouria@relanto.ai"
-DEFAULT_SOURCE_RAW_USER = "usr_8fca52e4"  # richest row count in raw file
 MIN_SAVINGS_RATIO = 0.18  # income should exceed expenses by at least ~18%
+
+# Daily Prophet training needs a continuous daily expense series (see expenses_to_daily).
+PROPHET_HISTORY_DAYS = max(90, MIN_DAYS_FOR_PROPHET_USER)
+WEEKDAY_DAILY_RANGE = (100, 250)
+WEEKEND_DAILY_RANGE = (2000, 5000)
+MONTHLY_SALARY = 85000.0
 
 # Realistic INR tiers for seeded demo data
 SMALL_EXPENSE = [
@@ -229,6 +239,160 @@ def _shift_dates_to_recent(df: pd.DataFrame, *, end_at: date | None = None) -> p
     return out
 
 
+def _rng_for_day(day: date, *, salt: str = "daily") -> random.Random:
+    return random.Random(hash((day.isoformat(), salt)) & 0xFFFFFFFF)
+
+
+def _daily_expense_target(day: date) -> float:
+    """Per-day expense total: low on Mon–Fri, high on Sat–Sun (Prophet weekly seasonality)."""
+    rng = _rng_for_day(day)
+    lo, hi = WEEKEND_DAILY_RANGE if day.weekday() >= 5 else WEEKDAY_DAILY_RANGE
+    return float(rng.randint(lo, hi))
+
+
+def _split_daily_amount(total: float, day: date) -> list[float]:
+    """Split a daily total into 1–3 expense rows (still sums to the daily target)."""
+    rng = _rng_for_day(day, salt="split")
+    total = round(total, 2)
+    if total <= 0:
+        return []
+    n_parts = rng.randint(1, 3)
+    if n_parts == 1:
+        return [total]
+    weights = [rng.random() for _ in range(n_parts)]
+    weight_sum = sum(weights)
+    parts = [round(total * w / weight_sum, 2) for w in weights]
+    drift = round(total - sum(parts), 2)
+    parts[-1] = round(parts[-1] + drift, 2)
+    return [p for p in parts if p > 0]
+
+
+def _pick_expense_category(day: date, categories: list[dict], fallback_id: str) -> str:
+    """Weekend → leisure/shopping; weekday → food & transport-style categories."""
+    rng = _rng_for_day(day, salt="cat")
+    weekend = day.weekday() >= 5
+    preferred_mains = (
+        ["Entertainment", "Shopping", "Food & Drinks"]
+        if weekend
+        else ["Food & Drinks", "Transportation", "Communication/PC"]
+    )
+    for main in preferred_mains:
+        matches = [c["category_id"] for c in categories if c["main_category"] == main]
+        if matches:
+            return rng.choice(matches)
+    return fallback_id
+
+
+def _merchant_for_day(day: date, part_index: int) -> str:
+    rng = _rng_for_day(day, salt=f"merchant:{part_index}")
+    if day.weekday() >= 5:
+        return rng.choice(
+            ["Weekend Restaurant", "Mall Shopping", "Entertainment Venue", "Travel Booking", "Hotel Stay"],
+        )
+    return rng.choice(
+        ["Grocery Store", "Cafe", "Metro Card", "Fuel Station", "Quick Bite", "Pharmacy"],
+    )
+
+
+def _history_date_range(*, end_at: date | None = None, days: int = PROPHET_HISTORY_DAYS) -> tuple[date, date]:
+    end = end_at or date.today()
+    start = end - timedelta(days=days - 1)
+    return start, end
+
+
+def _build_prophet_daily_transactions(
+    *,
+    user_id: str,
+    account_id: str,
+    categories: list[dict],
+    fallback_expense_cat: str,
+    end_at: date | None = None,
+    days: int = PROPHET_HISTORY_DAYS,
+) -> list[dict]:
+    """One expense row set per calendar day so expenses_to_daily() has full daily coverage."""
+    start, end = _history_date_range(end_at=end_at, days=days)
+    rows: list[dict] = []
+    current = start
+    while current <= end:
+        daily_total = _daily_expense_target(current)
+        cat_id = _pick_expense_category(current, categories, fallback_expense_cat)
+        for idx, amount in enumerate(_split_daily_amount(daily_total, current)):
+            rows.append(
+                {
+                    "transaction_id": str(uuid.uuid4()),
+                    "user_id": user_id,
+                    "account_id": account_id,
+                    "category_id": cat_id,
+                    "transaction_date": current.strftime("%Y-%m-%d"),
+                    "amount": amount,
+                    "transaction_type": "expense",
+                    "merchant_name": _merchant_for_day(current, idx)[:200],
+                    "description": f"Daily spend ({current.strftime('%a')})"[:500],
+                },
+            )
+        current += timedelta(days=1)
+    return rows
+
+
+def _build_monthly_income_transactions(
+    *,
+    user_id: str,
+    account_id: str,
+    income_category_id: str,
+    start: date,
+    end: date,
+) -> list[dict]:
+    """Salary on the 1st of each month within the expense history window."""
+    rows: list[dict] = []
+    month_cursor = date(start.year, start.month, 1)
+    while month_cursor <= end:
+        if month_cursor >= start:
+            rows.append(
+                {
+                    "transaction_id": str(uuid.uuid4()),
+                    "user_id": user_id,
+                    "account_id": account_id,
+                    "category_id": income_category_id,
+                    "transaction_date": month_cursor.strftime("%Y-%m-%d"),
+                    "amount": MONTHLY_SALARY,
+                    "transaction_type": "income",
+                    "merchant_name": "Employer Payroll",
+                    "description": "Monthly salary",
+                },
+            )
+        if month_cursor.month == 12:
+            month_cursor = date(month_cursor.year + 1, 1, 1)
+        else:
+            month_cursor = date(month_cursor.year, month_cursor.month + 1, 1)
+    return rows
+
+
+def _default_accounts(user_id: str) -> list[dict]:
+    """Primary savings + credit card used for seeded daily spend."""
+    savings_id = str(uuid.uuid4())
+    credit_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+    return [
+        {
+            "account_id": savings_id,
+            "user_id": user_id,
+            "account_name": "HDFC Bank",
+            "account_type": "savings",
+            "current_balance": 0.0,
+            "created_at": now,
+        },
+        {
+            "account_id": credit_id,
+            "user_id": user_id,
+            "account_name": "ICICI Credit Card",
+            "account_type": "credit_card",
+            "current_balance": 0.0,
+            "credit_limit": 50000.0,
+            "created_at": now,
+        },
+    ]
+
+
 def _running_balances(df: pd.DataFrame, opening_balances: dict[str, float]) -> pd.DataFrame:
     """Forward-compute running balance from realistic opening amounts."""
     df = df.copy()
@@ -271,9 +435,8 @@ def _final_balances(tx_df: pd.DataFrame, opening_balances: dict[str, float]) -> 
 def seed_user(
     *,
     email: str,
-    source_raw_user: str,
     retrain: bool,
-    shift_to_today: bool,
+    history_days: int = PROPHET_HISTORY_DAYS,
 ) -> None:
     if supabase is None:
         raise RuntimeError("Supabase client not configured")
@@ -284,99 +447,73 @@ def seed_user(
     target_user_id = users.data[0]["user_id"]
     print(f"Target user: {email} ({target_user_id})")
 
-    raw = pd.read_csv(RAW_CSV)
-    subset = raw[raw["user_id"] == source_raw_user].copy()
-    if subset.empty:
-        raise ValueError(f"No rows for source raw user {source_raw_user}")
-
-    print(f"Source raw user {source_raw_user}: {len(subset)} rows ({subset['date'].min()} .. {subset['date'].max()})")
+    if history_days < MIN_DAYS_FOR_PROPHET_USER:
+        raise ValueError(
+            f"history_days={history_days} is below Prophet minimum {MIN_DAYS_FOR_PROPHET_USER}",
+        )
 
     cats_res = supabase.table("categories").select("category_id,main_category,sub_category").execute()
     categories = cats_res.data or []
-    cat_maps = _build_category_maps(categories)
+    _, _, fallback_expense = _build_category_maps(categories)
+    income_cats = [c for c in categories if c["main_category"] == "Income"]
+    income_cat_id = income_cats[0]["category_id"] if income_cats else fallback_expense
 
-    # Replace existing seed data for this user
+    # Delete all prior data for this user (same email → same user_id)
     supabase.table("transactions").delete().eq("user_id", target_user_id).execute()
     supabase.table("accounts").delete().eq("user_id", target_user_id).execute()
-    # Keep dependent dashboard state consistent with fresh accounts/transactions
     supabase.table("budgets").delete().eq("user_id", target_user_id).execute()
     supabase.table("goals").delete().eq("user_id", target_user_id).execute()
-    print("Cleared existing accounts/transactions for user")
+    print("Cleared existing accounts, transactions, budgets, and goals for user")
 
-    account_id_map: dict[str, str] = {}
+    account_rows = _default_accounts(target_user_id)
+    savings_id = account_rows[0]["account_id"]
+    credit_id = account_rows[1]["account_id"]
+    account_type_by_newid = {savings_id: "savings", credit_id: "credit_card"}
 
-    for raw_acc in sorted(subset["account_id"].unique()):
-        new_id = str(uuid.uuid4())
-        account_id_map[raw_acc] = new_id
-
-    opening = _opening_balances(list(account_id_map.values()))
-
-    # Signed balances: our transaction_service decreases balance for expenses.
-    # For credit cards, we store the "borrowed" amount as a negative balance
-    # so `abs(current_balance)` correctly represents outstanding borrowed.
-    account_type_by_newid: dict[str, str] = {}
-    for raw_acc, new_id in account_id_map.items():
-        account_type_by_newid[new_id] = _infer_account_type(raw_acc)
-
+    opening = _opening_balances([savings_id, credit_id])
     opening_signed = dict(opening)
-    for acc_id, acct_type in account_type_by_newid.items():
-        if acct_type == "credit_card":
-            opening_signed[acc_id] = -abs(float(opening_signed[acc_id]))
+    opening_signed[credit_id] = -abs(float(opening_signed[credit_id]))
 
-    for raw_acc, new_id in account_id_map.items():
-        acct_type = account_type_by_newid[new_id]
-        # Initial credit limit heuristic (updated again after we compute running balances)
-        credit_limit = None
-        if acct_type == "credit_card":
-            credit_limit = round(max(abs(float(opening_signed[new_id])) * 1.25, 1.0), 2)
+    for acc in account_rows:
+        acc_id = acc["account_id"]
+        acc_type = account_type_by_newid[acc_id]
+        payload = {
+            **acc,
+            "current_balance": opening_signed[acc_id],
+        }
+        if acc_type == "credit_card":
+            payload["credit_limit"] = acc.get("credit_limit") or 50000.0
+        supabase.table("accounts").insert(payload).execute()
 
-        supabase.table("accounts").insert(
-            {
-                "account_id": new_id,
-                "user_id": target_user_id,
-                "account_name": _account_display_name(raw_acc),
-                "account_type": acct_type,
-                "current_balance": opening_signed[new_id],
-                **({"credit_limit": credit_limit} if credit_limit is not None else {}),
-                "created_at": datetime.utcnow().isoformat(),
-            },
-        ).execute()
+    print(f"Created {len(account_rows)} accounts")
 
-    print(f"Created {len(account_id_map)} accounts")
+    hist_start, hist_end = _history_date_range(days=history_days)
+    print(
+        f"Generating {history_days} days of daily expenses "
+        f"({hist_start} .. {hist_end}): weekdays {WEEKDAY_DAILY_RANGE}, weekends {WEEKEND_DAILY_RANGE}",
+    )
 
-    rows: list[dict] = []
-    for _, r in subset.iterrows():
-        raw_acc = r["account_id"]
-        acc_id = account_id_map[raw_acc]
-        tag = r.get("tags")
-        txn_type = _txn_type(r["transaction_type"], tag)
-        seed_key = str(r.get("reference_id") or r.name)
-        amount = _realistic_amount(txn_type, tag, seed_key)
-        cat_id = _tag_to_category_id(tag, categories, cat_maps)
-        if txn_type == "income":
-            income_cats = [c for c in categories if c["main_category"] == "Income"]
-            if income_cats:
-                cat_id = income_cats[0]["category_id"]
+    # All daily expense totals land on savings so expenses_to_daily() matches weekday/weekend tiers.
+    expense_rows = _build_prophet_daily_transactions(
+        user_id=target_user_id,
+        account_id=savings_id,
+        categories=categories,
+        fallback_expense_cat=fallback_expense,
+        end_at=hist_end,
+        days=history_days,
+    )
 
-        rows.append(
-            {
-                "transaction_id": str(uuid.uuid4()),
-                "user_id": target_user_id,
-                "account_id": acc_id,
-                "category_id": cat_id,
-                "transaction_date": pd.to_datetime(r["date"]).strftime("%Y-%m-%d"),
-                "amount": round(amount, 2),
-                "transaction_type": txn_type,
-                "merchant_name": str(r.get("merchant_name") or "Unknown")[:200],
-                "description": str(r.get("remark") or r.get("merchant_name") or "")[:500] or None,
-            },
-        )
-
+    income_rows = _build_monthly_income_transactions(
+        user_id=target_user_id,
+        account_id=savings_id,
+        income_category_id=income_cat_id,
+        start=hist_start,
+        end=hist_end,
+    )
+    rows = expense_rows + income_rows
     tx_df = pd.DataFrame(rows)
     tx_df = _ensure_net_savings(tx_df)
-    if shift_to_today:
-        tx_df = _shift_dates_to_recent(tx_df)
-        print(f"Shifted dates to {tx_df['transaction_date'].min()} .. {tx_df['transaction_date'].max()}")
+    print(f"Date range: {tx_df['transaction_date'].min()} .. {tx_df['transaction_date'].max()}")
     tx_df = _running_balances(tx_df, opening_signed)
     tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"]).dt.strftime("%Y-%m-%d")
     tx_df["running_balance"] = tx_df["running_balance"].astype(float).round(2)
@@ -420,10 +557,16 @@ def seed_user(
         supabase.table("transactions").upsert(batch, on_conflict="transaction_id").execute()
         print(f"  transactions {start + 1}-{min(start + batch_size, len(records))} / {len(records)}")
 
+    from app.services.forecast_features import expenses_to_daily
+
     expense_df = tx_df[tx_df["transaction_type"] == "expense"].copy()
-    expense_df["week"] = pd.to_datetime(expense_df["transaction_date"]).dt.to_period("W")
-    expense_weeks = expense_df["week"].nunique()
-    print(f"Inserted {len(records)} transactions ({expense_weeks} expense weeks)")
+    daily = expenses_to_daily(expense_df)
+    weekend_avg = float(daily.loc[pd.to_datetime(daily["date"]).dt.dayofweek >= 5, "daily_expense"].mean())
+    weekday_avg = float(daily.loc[pd.to_datetime(daily["date"]).dt.dayofweek < 5, "daily_expense"].mean())
+    print(
+        f"Inserted {len(records)} transactions ({len(daily)} Prophet daily points, "
+        f"weekday avg={weekday_avg:,.0f} weekend avg={weekend_avg:,.0f})",
+    )
 
     supabase.table("users").update({"full_name": "Suyash Bhadouria"}).eq("user_id", target_user_id).execute()
 
@@ -440,27 +583,28 @@ def seed_user(
         )
 
     print("\nTest forecast:")
-    print(f"  http://127.0.0.1:8000/api/forecast?user_id={target_user_id}&days=90")
+    print(f"  http://127.0.0.1:8000/api/forecast?user_id={target_user_id}&period=1m")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Seed Supabase user from raw transactions CSV")
+    parser = argparse.ArgumentParser(
+        description="Seed Supabase user with daily expense history for Prophet training",
+    )
     parser.add_argument("--email", default=DEFAULT_EMAIL)
-    parser.add_argument("--source-raw-user", default=DEFAULT_SOURCE_RAW_USER)
     parser.add_argument("--retrain", action="store_true", help="Retrain production Prophet bundle after seed")
     parser.add_argument(
-        "--no-shift-dates",
-        action="store_true",
-        help="Keep original CSV dates (dashboard 'this month' will be empty if data is old)",
+        "--history-days",
+        type=int,
+        default=PROPHET_HISTORY_DAYS,
+        help=f"Consecutive days of expense history (min {MIN_DAYS_FOR_PROPHET_USER})",
     )
     args = parser.parse_args()
 
     try:
         seed_user(
             email=args.email,
-            source_raw_user=args.source_raw_user,
             retrain=args.retrain,
-            shift_to_today=not args.no_shift_dates,
+            history_days=args.history_days,
         )
         return 0
     except Exception as exc:

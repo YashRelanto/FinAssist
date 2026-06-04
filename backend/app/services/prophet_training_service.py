@@ -14,10 +14,13 @@ import numpy as np
 import pandas as pd
 
 from app.services.forecast_features import (
+    MIN_DAYS_FOR_PROPHET_USER,
     MIN_WEEKS_FOR_PROPHET_USER,
-    create_prophet_model,
+    create_prophet_model_daily,
+    expenses_to_daily,
     expenses_to_weekly,
     prophet_holdout_mape,
+    prophet_holdout_mape_daily,
 )
 logger = logging.getLogger(__name__)
 
@@ -107,44 +110,51 @@ def train_prophet_bundle_from_transactions(
 
     for user_id, group in tx.groupby("user_id"):
         uid = str(user_id)
-        weekly = expenses_to_weekly(group)
-        week_count = len(weekly)
 
-        if week_count < MIN_WEEKS_FOR_PROPHET_USER:
-            skipped_users.append({"user_id": uid, "weeks": week_count, "reason": "insufficient_weeks"})
+        # Build daily series (zero-fills gaps between first and last date)
+        daily = expenses_to_daily(group)
+        day_count = len(daily)
+
+        if day_count < MIN_DAYS_FOR_PROPHET_USER:
+            skipped_users.append(
+                {"user_id": uid, "days": day_count, "reason": "insufficient_days"}
+            )
             continue
 
-        mape = prophet_holdout_mape(weekly)
+        # Compute 7-day hold-out MAPE for evaluation
+        mape = prophet_holdout_mape_daily(daily)
         if mape is not None:
             per_user_mapes.append(mape)
 
-        w = weekly.sort_values("week_start").reset_index(drop=True)
+        d = daily.sort_values("date").reset_index(drop=True)
         train_df = pd.DataFrame(
             {
-                "ds": w["week_start"],
-                "y": w["weekly_expense"].clip(lower=1.0),
-            },
+                "ds": d["date"],
+                # clip at 0 to avoid log-scale issues with zero-spend days
+                "y": d["daily_expense"].clip(lower=0.0),
+            }
         )
-        model = create_prophet_model(len(train_df))
+        model = create_prophet_model_daily(len(train_df))
         model.fit(train_df)
         per_user_models[uid] = model
-        emit(f"Trained Prophet for user {uid[:8]}… ({week_count} weeks)")
+        emit(f"Trained daily Prophet for user {uid[:8]}… ({day_count} days)")
 
     if not per_user_models:
         raise ValueError(
-            f"No users met the minimum of {MIN_WEEKS_FOR_PROPHET_USER} weeks of expense history",
+            f"No users met the minimum of {MIN_DAYS_FOR_PROPHET_USER} days of expense history",
         )
 
     trained_at = datetime.now(timezone.utc).isoformat()
     bundle = {
         "model_name": "Prophet",
         "model_type": "prophet",
+        "granularity": "daily",          # <-- tells forecast_service this is a daily model
         "per_user": per_user_models,
         "test_mape": float(np.mean(per_user_mapes)) if per_user_mapes else None,
         "horizon_weeks": HORIZON_WEEKS,
         "trained_users": len(per_user_models),
         "trained_at": trained_at,
-        "min_weeks": MIN_WEEKS_FOR_PROPHET_USER,
+        "min_days": MIN_DAYS_FOR_PROPHET_USER,
         "skipped_users": skipped_users,
     }
     return bundle

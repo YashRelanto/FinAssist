@@ -1,0 +1,21 @@
+{
+  "958b2a52-d1ea-4696-9f2d-09c5e90c5d24": {
+    "default-thread": {
+      "pending_intents": [],
+      "selected_intent": "financial_knowledge",
+      "messages": [
+        {
+          "role": "user",
+          "content": "How much should I save for emergency?",
+          "ts": "2026-06-03T05:25:49.381843+00:00"
+        },
+        {
+          "role": "assistant",
+          "content": "I encountered a temporary issue generating your response. Please try again in a moment.",
+          "ts": "2026-06-03T05:25:49.381843+00:00"
+        }
+      ],
+      "workflow_state": {}
+    }
+  }
+}

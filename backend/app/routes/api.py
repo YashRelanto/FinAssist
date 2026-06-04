@@ -235,10 +235,16 @@ async def api_oauth_login(req: OAuthLoginRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/dashboard-summary")
-async def get_dashboard_summary(user_id: str):
+async def get_dashboard_summary(
+    user_id: str,
+    period: str = "1m",
+):
     if not user_id or not user_id.strip():
         raise HTTPException(status_code=400, detail="user_id is required")
     try:
+        from app.utils.analysis_period import normalize_period
+
+        period_key = normalize_period(period)
         accounts = fetch_user_accounts(user_id)
 
         trans_response = (
@@ -285,6 +291,7 @@ async def get_dashboard_summary(user_id: str):
             recent_rows=recent_res.data or [],
             budgets=budget_res.data or [],
             profile_income=profile_income,
+            period=period_key,
         )
     except HTTPException:
         raise

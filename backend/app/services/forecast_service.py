@@ -4,27 +4,44 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import timedelta
+import calendar
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import joblib
 import pandas as pd
 
+
+def _fmt_date(ts: pd.Timestamp) -> str:
+    """Return e.g. 'Jun 9' — cross-platform (%-d is Linux-only)."""
+    return ts.strftime("%b ") + str(ts.day)
+
 from app.services.forecast_features import (
     MIN_WEEKS_FOR_FORECAST,
     category_weekly_breakdown,
     daily_expense_series,
+    expenses_to_daily,
     expenses_to_weekly,
     prophet_future_frame,
+    prophet_future_frame_daily,
     prophet_predict_weeks,
     safe_mape,
+    sanitize_daily_predictions,
+    dow_spending_ratios,
     top_merchants,
 )
 from app.services.prophet_training_service import (
     PRODUCTION_BUNDLE_PATH,
     PRODUCTION_MANIFEST_PATH,
     PRODUCTION_DIR,
+)
+from app.utils.analysis_period import (
+    add_months,
+    month_start,
+    normalize_period,
+    resolve_analysis_window,
+    sum_expenses_in_window,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,6 +144,7 @@ def get_model_status() -> dict[str, Any]:
         "model_type": "prophet",
         "model_name": MODEL_NAME,
         "loaded": bundle is not None,
+        "granularity": bundle.get("granularity", "weekly") if bundle else "weekly",
         "trained_users": len(bundle.get("per_user", {})) if bundle else 0,
         "trained_at": bundle.get("trained_at") if bundle else manifest.get("trained_at"),
         "test_mape": bundle.get("test_mape") if bundle else manifest.get("test_mape"),
@@ -174,24 +192,6 @@ def _user_has_trained_model(user_id: str) -> bool:
     return str(user_id) in bundle.get("per_user", {})
 
 
-def _prophet_forecast_for_user(weekly: pd.DataFrame, user_id: str, steps: int) -> list[float]:
-    bundle = _load_prophet_bundle()
-    if bundle is None:
-        raise RuntimeError(
-            "Forecast model not loaded. Run the nightly training job or POST /api/admin/train-from-db",
-        )
-
-    model = bundle.get("per_user", {}).get(str(user_id))
-    if model is None:
-        raise KeyError(
-            f"No trained Prophet model for user {user_id}. "
-            "User needs more expense history or wait for the next nightly train.",
-        )
-
-    w = weekly.copy().sort_values("week_start").reset_index(drop=True)
-    return prophet_predict_weeks(model, w, steps)
-
-
 def _trim_weekly_history(weekly: pd.DataFrame) -> pd.DataFrame:
     w = weekly.sort_values("week_start").reset_index(drop=True)
     if len(w) <= MAX_HISTORY_WEEKS:
@@ -199,19 +199,156 @@ def _trim_weekly_history(weekly: pd.DataFrame) -> pd.DataFrame:
     return w.tail(MAX_HISTORY_WEEKS).reset_index(drop=True)
 
 
-def _build_predicted_weeks(future_preds: list[float], weekly: pd.DataFrame) -> list[dict[str, Any]]:
-    future = prophet_future_frame(weekly, len(future_preds))
-    weeks: list[dict[str, Any]] = []
-    for j, (pred, week_start) in enumerate(zip(future_preds, future["ds"], strict=True)):
-        weeks.append(
-            {
-                "week": j + 1,
-                "label": f"Week +{j + 1}",
-                "week_start": pd.Timestamp(week_start).strftime("%Y-%m-%d"),
-                "amount": round(float(pred), 2),
-            },
+def _prophet_forecast_for_user(weekly: pd.DataFrame, user_id: str, steps: int) -> list[float]:
+    """Weekly-model prediction — kept for holdout MAPE evaluation on legacy bundles."""
+    bundle = _load_prophet_bundle()
+    if bundle is None:
+        raise RuntimeError("Forecast model not loaded.")
+    model = bundle.get("per_user", {}).get(str(user_id))
+    if model is None:
+        raise KeyError(f"No model for user {user_id}.")
+    w = weekly.copy().sort_values("week_start").reset_index(drop=True)
+    return prophet_predict_weeks(model, w, steps)
+
+
+def _is_daily_bundle() -> bool:
+    """True when the loaded bundle was trained on daily data."""
+    bundle = _load_prophet_bundle()
+    return bundle is not None and bundle.get("granularity") == "daily"
+
+
+def _get_daily_predictions(
+    expenses_df: pd.DataFrame,
+    weekly: pd.DataFrame,
+    user_id: str,
+    days: int = 28,
+) -> list[float]:
+    """
+    Return `days` daily spend predictions.
+
+    • Daily bundle  → Prophet predicts each day directly (real Mon–Sun variation).
+    • Weekly bundle → Prophet predicts 4 weekly totals, then distributes them
+      across the 7 days of each week using historical day-of-week ratios
+      (backward-compatible fallback until a retrain is triggered).
+    """
+    bundle = _load_prophet_bundle()
+    if bundle is None:
+        raise RuntimeError(
+            "Forecast model not loaded. Run the nightly training job or POST /api/admin/train-from-db"
         )
-    return weeks
+    model = bundle.get("per_user", {}).get(str(user_id))
+    if model is None:
+        raise KeyError(
+            f"No trained Prophet model for user {user_id}. "
+            "User needs more expense history or wait for the next nightly train."
+        )
+
+    if _is_daily_bundle():
+        daily_df = expenses_to_daily(expenses_df)
+        future = prophet_future_frame_daily(
+            pd.Timestamp(daily_df["date"].iloc[-1]), days
+        )
+        fc = model.predict(future)
+        return sanitize_daily_predictions(fc["yhat"].values, daily_df)
+    else:
+        # Weekly model fallback: distribute each weekly total via historical DoW
+        n_weeks = (days + 6) // 7
+        weekly_preds = prophet_predict_weeks(model, weekly, n_weeks)
+        ratios = dow_spending_ratios(expenses_df)
+        daily_preds: list[float] = []
+        last_week_start = pd.Timestamp(weekly["week_start"].iloc[-1])
+        for i, w_total in enumerate(weekly_preds):
+            week_start = last_week_start + timedelta(weeks=i + 1)
+            for d in range(7):
+                dow = (week_start + timedelta(days=d)).weekday()
+                daily_preds.append(w_total * ratios[dow])
+        return daily_preds[:days]
+
+
+DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _next_calendar_month_bounds(reference: date) -> tuple[date, date]:
+    first = add_months(month_start(reference), 1)
+    last_day = calendar.monthrange(first.year, first.month)[1]
+    return first, date(first.year, first.month, last_day)
+
+
+def _expenses_by_calendar_month(
+    expenses: pd.DataFrame,
+    *,
+    start: date | None,
+    end: date,
+) -> list[dict[str, Any]]:
+    """Monthly expense totals from `start` through `end` (partial current month allowed)."""
+    if expenses.empty:
+        return []
+    df = expenses.copy()
+    df["transaction_date"] = pd.to_datetime(df["transaction_date"])
+    df["amount"] = df["amount"].astype(float).abs()
+    if start is None:
+        start = df["transaction_date"].min().date()
+    cursor = month_start(start)
+    end_m = month_start(end)
+    rows: list[dict[str, Any]] = []
+    while cursor <= end_m:
+        month_end_day = calendar.monthrange(cursor.year, cursor.month)[1]
+        month_end = date(cursor.year, cursor.month, month_end_day)
+        slice_end = min(month_end, end)
+        mask = (df["transaction_date"].dt.date >= cursor) & (
+            df["transaction_date"].dt.date <= slice_end
+        )
+        total = float(df.loc[mask, "amount"].sum()) if mask.any() else 0.0
+        is_partial = slice_end < month_end
+        label = cursor.strftime("%b %Y")
+        if is_partial and cursor == end_m:
+            label += " (MTD)"
+        rows.append(
+            {
+                "month": cursor.strftime("%Y-%m"),
+                "label": label,
+                "month_start": cursor.isoformat(),
+                "month_end": slice_end.isoformat(),
+                "value": round(total, 2),
+                "is_forecast": False,
+                "is_partial": is_partial,
+            }
+        )
+        cursor = add_months(cursor, 1)
+    return rows
+
+
+def _build_predicted_month_from_daily(
+    daily_preds: list[float],
+    pred_start: date,
+) -> dict[str, Any]:
+    """One calendar month of daily predictions with per-day breakdown."""
+    last_day = calendar.monthrange(pred_start.year, pred_start.month)[1]
+    pred_end = date(pred_start.year, pred_start.month, last_day)
+    daily_breakdown: list[dict[str, Any]] = []
+    total = 0.0
+    for offset, amount in enumerate(daily_preds):
+        dt = pred_start + timedelta(days=offset)
+        if dt > pred_end:
+            break
+        amt = round(float(amount), 2)
+        total += amt
+        daily_breakdown.append(
+            {
+                "date": dt.strftime("%Y-%m-%d"),
+                "day": DAY_LABELS[dt.weekday()],
+                "amount": amt,
+                "is_weekend": dt.weekday() >= 5,
+            }
+        )
+    return {
+        "month": pred_start.strftime("%Y-%m"),
+        "label": pred_start.strftime("%B %Y"),
+        "month_start": pred_start.isoformat(),
+        "month_end": pred_end.isoformat(),
+        "amount": round(total, 2),
+        "daily_breakdown": daily_breakdown,
+    }
 
 
 def _detect_outlier(expenses: pd.DataFrame) -> dict | None:
@@ -275,14 +412,26 @@ def generate_forecast(
     account_id: str | None = None,
     category_id: str | None = None,
     merchant: str | None = None,
-    days_analyzed: int = 30,
+    period: str = "1m",
 ) -> dict[str, Any]:
     meta = _model_meta()
+    window = resolve_analysis_window(period)
+    period_key = window["period"]
+    today = date.today()
+    period_end = window["end_date"]
+    period_start = window["start_date"]
+    comp_start = window["comparison_start_date"]
+    comp_end = window["comparison_end_date"]
+
     cat_df = pd.DataFrame(categories) if categories else pd.DataFrame()
     tx_df = pd.DataFrame(transactions) if transactions else pd.DataFrame()
 
     if tx_df.empty:
-        return _empty_response("Not enough transaction history to forecast.", meta)
+        return _empty_response(
+            "Not enough transaction history to forecast.",
+            meta,
+            window=window,
+        )
 
     tx_df = tx_df[tx_df["transaction_type"] == "expense"].copy()
     if account_id:
@@ -301,41 +450,60 @@ def generate_forecast(
         )
 
     tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"])
-    end = tx_df["transaction_date"].max()
-    start = end - timedelta(days=days_analyzed)
-    recent = tx_df[tx_df["transaction_date"] >= start].copy()
-    prev_start = start - timedelta(days=days_analyzed)
-    previous = tx_df[(tx_df["transaction_date"] >= prev_start) & (tx_df["transaction_date"] < start)]
+    tx_rows = tx_df.to_dict(orient="records")
+    total_recent = sum_expenses_in_window(
+        tx_rows, start_date=period_start, end_date=period_end
+    )
+    total_prev = (
+        sum_expenses_in_window(tx_rows, start_date=comp_start, end_date=comp_end)
+        if comp_start and comp_end
+        else 0.0
+    )
+    change_pct = (
+        round((total_recent - total_prev) / total_prev * 100, 1) if total_prev > 0 else 0.0
+    )
 
-    total_recent = float(recent["amount"].astype(float).abs().sum()) if not recent.empty else 0.0
-    total_prev = float(previous["amount"].astype(float).abs().sum()) if not previous.empty else 0.0
-    change_pct = round((total_recent - total_prev) / total_prev * 100, 1) if total_prev > 0 else 0.0
+    period_start_date = (
+        datetime.strptime(period_start, "%Y-%m-%d").date()
+        if period_start
+        else tx_df["transaction_date"].min().date()
+    )
+    period_end_date = datetime.strptime(period_end, "%Y-%m-%d").date()
+    recent = tx_df[
+        (tx_df["transaction_date"].dt.date >= period_start_date)
+        & (tx_df["transaction_date"].dt.date <= period_end_date)
+    ].copy()
 
     weekly_full = expenses_to_weekly(tx_df)
     weekly = _trim_weekly_history(weekly_full)
     enough_history = len(weekly) >= MIN_WEEKS_FOR_FORECAST
+
+    period_partial = {
+        **window,
+        "total_analyzed_spending": total_recent,
+        "period_change_pct": change_pct,
+        "merchants": top_merchants(recent),
+        "heatmap": daily_expense_series(recent, days=max((today - period_start_date).days + 1, 7)),
+        "monthly_chart": _expenses_by_calendar_month(
+            recent, start=period_start_date, end=period_end_date
+        ),
+    }
 
     if not enough_history:
         return _empty_response(
             f"Need at least {MIN_WEEKS_FOR_FORECAST} weeks of expenses (~2 months). "
             f"Currently have {len(weekly)} week(s).",
             meta,
-            partial={
-                "total_analyzed_spending": round(total_recent, 2),
-                "period_change_pct": change_pct,
-                "merchants": top_merchants(recent),
-                "heatmap": daily_expense_series(recent),
-            },
+            partial=period_partial,
+            window=window,
         )
 
     if not model_is_loaded():
         return _empty_response(
             "Forecast models are not loaded yet. The nightly training job has not run.",
             meta,
-            partial={
-                "total_analyzed_spending": round(total_recent, 2),
-                "period_change_pct": change_pct,
-            },
+            partial=period_partial,
+            window=window,
         )
 
     if not _user_has_trained_model(user_id):
@@ -344,27 +512,27 @@ def generate_forecast(
             f"You need at least {MIN_WEEKS_FOR_FORECAST} weeks of expenses; "
             "models are refreshed every night after the training job runs.",
             meta,
-            partial={
-                "total_analyzed_spending": round(total_recent, 2),
-                "period_change_pct": change_pct,
-                "merchants": top_merchants(recent),
-                "heatmap": daily_expense_series(recent),
-            },
+            partial=period_partial,
+            window=window,
         )
 
-    try:
-        future_preds = _prophet_forecast_for_user(weekly, user_id, HORIZON_WEEKS)
-    except (RuntimeError, KeyError) as exc:
-        return _empty_response(str(exc), meta)
+    next_start, next_end = _next_calendar_month_bounds(today)
+    daily_df = expenses_to_daily(tx_df)
+    last_hist = pd.Timestamp(daily_df["date"].iloc[-1]).date()
+    pred_days = max((next_end - last_hist).days, 28)
 
-    predicted_weeks = _build_predicted_weeks(future_preds, weekly)
-    predicted_month = round(sum(w["amount"] for w in predicted_weeks), 2)
-    avg_monthly = float(weekly["weekly_expense"].tail(4).sum())
-    recent_weekly_mean = float(weekly["weekly_expense"].tail(4).mean())
-    budget_alert = predicted_month > avg_monthly * 1.1
+    try:
+        daily_preds = _get_daily_predictions(tx_df, weekly, user_id, days=pred_days)
+    except (RuntimeError, KeyError) as exc:
+        return _empty_response(str(exc), meta, window=window)
+
+    predicted_month_dict = _build_predicted_month_from_daily(daily_preds, next_start)
+    predicted_month = predicted_month_dict["amount"]
+    prev_period_spend = total_prev if total_prev > 0 else total_recent
+    budget_alert = predicted_month > prev_period_spend * 1.1 and prev_period_spend > 0
 
     holdout_mape = None
-    if len(weekly) >= 10:
+    if not _is_daily_bundle() and len(weekly) >= 10:
         hold = float(weekly.iloc[-1]["weekly_expense"])
         train_w = weekly.iloc[:-1]
         try:
@@ -374,24 +542,34 @@ def generate_forecast(
         except (RuntimeError, KeyError):
             holdout_mape = None
 
-    last_weeks = weekly.tail(4).reset_index(drop=True)
-    weekly_chart = []
-    for i, row in last_weeks.iterrows():
-        weekly_chart.append(
-            {
-                "name": f"Week {i + 1}",
-                "value": round(float(row["weekly_expense"]), 2),
-                "is_forecast": False,
-            }
-        )
-    for j, pred in enumerate(future_preds):
-        weekly_chart.append(
-            {
-                "name": f"Week +{j + 1}",
-                "value": round(pred, 2),
-                "is_forecast": True,
-            }
-        )
+    actual_months = _expenses_by_calendar_month(
+        recent, start=period_start_date, end=period_end_date
+    )
+    monthly_chart = [
+        {
+            "name": m["label"],
+            "month": m["month"],
+            "month_start": m["month_start"],
+            "month_end": m["month_end"],
+            "date_range": m["label"],
+            "value": m["value"],
+            "is_forecast": False,
+            "is_partial": m.get("is_partial", False),
+        }
+        for m in actual_months
+    ]
+    monthly_chart.append(
+        {
+            "name": predicted_month_dict["label"] + " (predicted)",
+            "month": predicted_month_dict["month"],
+            "month_start": predicted_month_dict["month_start"],
+            "month_end": predicted_month_dict["month_end"],
+            "date_range": predicted_month_dict["label"],
+            "value": predicted_month_dict["amount"],
+            "is_forecast": True,
+            "is_partial": False,
+        }
+    )
 
     category_chart = category_weekly_breakdown(
         recent,
@@ -410,34 +588,45 @@ def generate_forecast(
         _accuracy_from_mape(holdout_mape) if holdout_mape is not None else meta.get("accuracy_pct")
     )
 
+    comp_label = (
+        f"previous {window['months_in_window']} month(s)"
+        if window.get("months_in_window")
+        else "previous period"
+    )
+
     return {
         "success": True,
         **meta,
+        **window,
         "accuracy_pct": display_accuracy,
         "model_status": get_model_status(),
         "user_model_available": True,
         "enough_history": True,
         "history_weeks": len(weekly_full),
         "weeks_used_for_model": len(weekly),
-        "recent_weekly_avg": round(recent_weekly_mean, 2),
-        "total_analyzed_spending": round(total_recent, 2),
+        "prev_period_spend": round(prev_period_spend, 2),
+        "prev_month_spend": round(prev_period_spend, 2),
+        "total_analyzed_spending": total_recent,
         "period_change_pct": change_pct,
         "period_change_direction": "down" if change_pct < 0 else "up",
         "predicted_next_month": predicted_month,
-        "predicted_weeks": predicted_weeks,
+        "predicted_month_start": predicted_month_dict["month_start"],
+        "predicted_month_end": predicted_month_dict["month_end"],
+        "predicted_months": [predicted_month_dict],
         "budget_alert": budget_alert,
         "budget_alert_message": (
-            "Spending is likely to exceed your recent monthly average"
+            f"Predicted spend for {predicted_month_dict['label']} ({round(predicted_month, 0):,.0f}) "
+            f"is 10%+ above your {comp_label} ({round(prev_period_spend, 0):,.0f})"
             if budget_alert
             else None
         ),
-        "weekly_chart": weekly_chart[-8:],
+        "monthly_chart": monthly_chart,
         "category_chart": category_chart,
         "top_categories": [{"name": c, "value": round(v, 2)} for c, v in top_cats],
         "merchants": top_merchants(recent),
-        "heatmap": daily_expense_series(recent),
+        "heatmap": daily_expense_series(recent, days=max((today - period_start_date).days + 1, 7)),
         "flow": {
-            "accounts_total": round(total_recent, 2),
+            "accounts_total": total_recent,
             "active_categories": int(recent["category_id"].nunique()) if "category_id" in recent.columns else 0,
             "identified_merchants": int(recent["merchant_name"].nunique()) if "merchant_name" in recent.columns else 0,
         },
@@ -445,7 +634,6 @@ def generate_forecast(
             "outlier": _detect_outlier(recent),
             "recurring": _detect_recurring(tx_df),
         },
-        "horizon_weeks": HORIZON_WEEKS,
     }
 
 
@@ -453,18 +641,21 @@ def _empty_response(
     message: str,
     meta: dict[str, Any],
     partial: dict | None = None,
+    *,
+    window: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     base = {
         "success": False,
         "message": message,
         **meta,
+        **(window or resolve_analysis_window()),
         "model_status": get_model_status(),
         "user_model_available": False,
         "enough_history": False,
         "total_analyzed_spending": 0.0,
         "period_change_pct": 0.0,
-        "weekly_chart": [],
-        "predicted_weeks": [],
+        "monthly_chart": [],
+        "predicted_months": [],
         "category_chart": [],
         "merchants": [],
         "heatmap": [],

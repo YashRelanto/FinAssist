@@ -2,11 +2,12 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend 
 } from 'recharts';
-import { Calendar, ChevronLeft, Filter, Loader2, ArrowRight } from 'lucide-react';
+import { Calendar, ChevronLeft, Filter, Loader2 } from 'lucide-react';
 import { useAppContext } from '../../context/AppContext';
 import { activeUserId } from '../../lib/activeUserId';
 import { apiFetch } from '../../lib/api';
 import { cn, formatCurrency } from '../../lib/utils';
+import { type AnalysisPeriod, resolveAnalysisWindow } from '../../lib/analysisPeriod';
 
 const CATEGORY_COLORS: Record<string, string> = {
   'Food & Drinks': '#FF6B6B',
@@ -28,7 +29,7 @@ const SUB_COLORS = [
   '#2F3542', '#747D8C', '#70A1FF', '#7BED9F', '#ECCC68'
 ];
 
-type RangeType = '1w' | '1m' | '3m' | '6m' | '1y' | 'custom';
+type RangeType = AnalysisPeriod;
 
 interface BreakdownSlice {
   name: string;
@@ -41,14 +42,13 @@ interface ExpenseBreakdownProps {
 }
 
 export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ initialData }) => {
-  const { user } = useAppContext();
+  const { user, analysisPeriod } = useAppContext();
   const [loading, setLoading] = useState(false);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [presetSlices, setPresetSlices] = useState<BreakdownSlice[] | null>(
     initialData?.length ? initialData : null,
   );
-  const [range, setRange] = useState<RangeType>('1m');
-  const [customRange, setCustomRange] = useState({ start: '', end: '' });
+  const [range, setRange] = useState<RangeType>(analysisPeriod);
   const [drillDown, setDrillDown] = useState<string | null>(null);
 
   const fetchTransactions = async (startDate: string, endDate: string) => {
@@ -70,6 +70,10 @@ export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ initialData 
   };
 
   useEffect(() => {
+    setRange(analysisPeriod);
+  }, [analysisPeriod]);
+
+  useEffect(() => {
     if (initialData?.length) {
       setPresetSlices(initialData);
     }
@@ -79,32 +83,20 @@ export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ initialData 
     const uid = activeUserId(user);
     if (!uid) return;
 
-    if (range === '1m' && initialData?.length && !drillDown) {
+    if (range === analysisPeriod && initialData?.length && !drillDown) {
       setPresetSlices(initialData);
       setLoading(false);
       return;
     }
 
-    let start = new Date();
-    let end = new Date();
-
-    if (range === '1w') start.setDate(end.getDate() - 7);
-    else if (range === '1m') {
-      start = new Date(end.getFullYear(), end.getMonth(), 1);
-    }
-    else if (range === '3m') start.setMonth(end.getMonth() - 3);
-    else if (range === '6m') start.setMonth(end.getMonth() - 6);
-    else if (range === '1y') start.setFullYear(end.getFullYear() - 1);
-    else if (range === 'custom' && customRange.start && customRange.end) {
-      fetchTransactions(customRange.start, customRange.end);
+    const { startDate, endDate } = resolveAnalysisWindow(range);
+    if (!startDate) {
+      fetchTransactions('2000-01-01', endDate);
       return;
-    } else if (range === 'custom') return;
-
-    const startStr = start.toISOString().split('T')[0];
-    const endStr = end.toISOString().split('T')[0];
+    }
     setPresetSlices(null);
-    fetchTransactions(startStr, endStr);
-  }, [range, customRange, user, drillDown, initialData]);
+    fetchTransactions(startDate, endDate);
+  }, [range, analysisPeriod, user, drillDown, initialData]);
 
   const chartData = useMemo(() => {
     if (range === '1m' && presetSlices && !drillDown) {
@@ -149,54 +141,13 @@ export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ initialData 
         </div>
 
         <div className="h-[42px] flex items-center">
-          {range !== 'custom' ? (
-            <div className="relative w-full group">
-              <Filter className="absolute left-4 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-outline group-hover:text-primary transition-colors" />
-              <select 
-                value={range}
-                onChange={(e) => setRange(e.target.value as RangeType)}
-                className="w-full pl-10 pr-10 py-2.5 bg-surface-container-low border border-outline-variant/30 rounded-2xl text-[11px] font-black uppercase tracking-widest outline-none focus:ring-2 focus:ring-primary transition-all appearance-none cursor-pointer hover:bg-surface-container-high text-outline hover:text-on-surface"
-              >
-                <option value="1w">Last Week</option>
-                <option value="1m">This Month</option>
-                <option value="3m">Last 3 Months</option>
-                <option value="6m">Last 6 Months</option>
-                <option value="1y">Last Year</option>
-                <option value="custom">Custom Range</option>
-              </select>
-              <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-outline/30">
-                <Calendar className="w-3.5 h-3.5" />
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between w-full bg-surface-container-low border border-outline-variant/50 rounded-2xl px-4 py-2 animate-in fade-in zoom-in-95 duration-300">
-              <div className="flex items-center gap-2">
-                <input 
-                  type="date" 
-                  value={customRange.start}
-                  onChange={(e) => setCustomRange({...customRange, start: e.target.value})}
-                  className="bg-transparent text-[10px] font-black uppercase outline-none text-primary w-[80px]"
-                />
-                <ArrowRight className="w-3 h-3 text-outline opacity-40" />
-                <input 
-                  type="date" 
-                  value={customRange.end}
-                  onChange={(e) => setCustomRange({...customRange, end: e.target.value})}
-                  className="bg-transparent text-[10px] font-black uppercase outline-none text-primary w-[80px]"
-                />
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="w-[1px] h-4 bg-outline-variant/30" />
-                <button 
-                  onClick={() => setRange('1m')}
-                  className="p-1 text-outline hover:text-error transition-all"
-                  title="Reset to presets"
-                >
-                  <Calendar className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          )}
+          <div className="flex items-center gap-2 w-full px-4 py-2.5 bg-surface-container-low border border-outline-variant/30 rounded-2xl">
+            <Filter className="w-3.5 h-3.5 text-outline shrink-0" />
+            <p className="text-[11px] font-black uppercase tracking-widest text-outline truncate">
+              {resolveAnalysisWindow(range).periodLabel}
+            </p>
+            <Calendar className="w-3.5 h-3.5 text-outline/40 ml-auto shrink-0" />
+          </div>
         </div>
       </div>
 

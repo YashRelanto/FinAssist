@@ -21,8 +21,6 @@ import { motion } from 'motion/react';
 import { useAppContext } from '../context/AppContext';
 import { cn, formatCurrency } from '../lib/utils';
 
-const API_BASE = 'http://localhost:8000';
-
 const heatmapColors = [
   'bg-blue-50',
   'bg-blue-100',
@@ -32,11 +30,20 @@ const heatmapColors = [
   'bg-blue-700',
 ];
 
-interface PredictedWeek {
-  week: number;
-  label: string;
-  week_start: string;
+interface DailyPrediction {
+  date: string;
+  day: string;
   amount: number;
+  is_weekend: boolean;
+}
+
+interface PredictedMonth {
+  month: string;
+  label: string;
+  month_start: string;
+  month_end: string;
+  amount: number;
+  daily_breakdown?: DailyPrediction[];
 }
 
 interface ForecastData {
@@ -44,14 +51,22 @@ interface ForecastData {
   message?: string;
   model_loaded?: boolean;
   model_name?: string;
+  period?: string;
+  period_label?: string;
+  start_date?: string | null;
+  end_date?: string;
   predicted_next_month?: number;
-  predicted_weeks?: PredictedWeek[];
+  predicted_month_start?: string;
+  predicted_month_end?: string;
+  predicted_months?: PredictedMonth[];
+  prev_period_spend?: number;
+  prev_month_spend?: number;
   total_analyzed_spending: number;
   period_change_pct: number;
   period_change_direction: string;
   budget_alert?: boolean;
   budget_alert_message?: string | null;
-  weekly_chart: { name: string; value: number; is_forecast?: boolean }[];
+  monthly_chart: { name: string; date_range?: string; value: number; is_forecast?: boolean; is_partial?: boolean }[];
   top_categories: { name: string; value: number }[];
   merchants: { name: string; value: number; total: number }[];
   heatmap: { date: string | null; amount: number; intensity: number }[];
@@ -76,71 +91,49 @@ interface CategoryOption {
 }
 
 export const Forecasting: React.FC = () => {
-  const { user } = useAppContext();
+  const {
+    user,
+    accounts,
+    transactions,
+    analysisPeriod,
+    loadAccounts,
+    loadTransactions,
+    loadForecast,
+  } = useAppContext();
   const [forecast, setForecast] = React.useState<ForecastData | null>(null);
   const [loading, setLoading] = React.useState(true);
-  const [accounts, setAccounts] = React.useState<AccountOption[]>([]);
   const [categories, setCategories] = React.useState<CategoryOption[]>([]);
   const [accountId, setAccountId] = React.useState('');
   const [categoryId, setCategoryId] = React.useState('');
   const [merchant, setMerchant] = React.useState('');
   const [draftMerchant, setDraftMerchant] = React.useState('');
 
-  const fetchFilterOptions = React.useCallback(async () => {
-    if (!user?.id) return;
-    try {
-      const accRes = await fetch(`${API_BASE}/api/accounts?user_id=${user.id}`);
-      const accData = await accRes.json();
-      if (accData.success) setAccounts(accData.data || []);
-
-      const txRes = await fetch(`${API_BASE}/api/transactions?user_id=${user.id}`);
-      const txData = await txRes.json();
-      if (txData.success) {
-        const seen = new Map<string, string>();
-        for (const t of txData.data) {
-          if (t.category_id && t.category) {
-            seen.set(t.category_id, t.category);
-          }
-        }
-        setCategories(
-          Array.from(seen.entries()).map(([category_id, main_category]) => ({
-            category_id,
-            main_category,
-          })),
-        );
+  const fetchForecast = React.useCallback(
+    async (options?: { force?: boolean }) => {
+      if (!user?.isAuthenticated) return;
+      try {
+        setLoading(true);
+        const data = await loadForecast({
+          period: analysisPeriod,
+          accountId,
+          categoryId,
+          merchant,
+          force: options?.force,
+        });
+        setForecast(data as ForecastData | null);
+      } finally {
+        setLoading(false);
       }
-    } catch (e) {
-      console.error('Failed to load forecast filters', e);
-    }
-  }, [user?.id]);
-
-  const fetchForecast = React.useCallback(async () => {
-    if (!user?.id) return;
-    try {
-      setLoading(true);
-      const params = new URLSearchParams({
-        user_id: user.id,
-        days: '30',
-      });
-      if (accountId) params.set('account_id', accountId);
-      if (categoryId) params.set('category_id', categoryId);
-      if (merchant) params.set('merchant', merchant);
-
-      const res = await fetch(`${API_BASE}/api/forecast?${params}`);
-      const data = await res.json();
-      setForecast(data);
-    } catch (e) {
-      console.error('Failed to load forecast', e);
-    } finally {
-      setLoading(false);
-    }
-  }, [user?.id, accountId, categoryId, merchant]);
+    },
+    [user?.isAuthenticated, loadForecast, analysisPeriod, accountId, categoryId, merchant],
+  );
 
   React.useEffect(() => {
     if (user?.isAuthenticated) {
-      fetchFilterOptions();
+      loadAccounts();
+      loadTransactions();
     }
-  }, [user?.isAuthenticated, fetchFilterOptions]);
+  }, [user?.isAuthenticated, loadAccounts, loadTransactions]);
 
   React.useEffect(() => {
     if (user?.isAuthenticated) {
@@ -148,10 +141,27 @@ export const Forecasting: React.FC = () => {
     }
   }, [user?.isAuthenticated, fetchForecast]);
 
-  const chartData = forecast?.weekly_chart?.length
-    ? forecast.weekly_chart
-    : [];
-  const displayChart = chartData.filter((entry) => entry.is_forecast);
+  React.useEffect(() => {
+    if (!transactions?.length) {
+      setCategories([]);
+      return;
+    }
+    const seen = new Map<string, string>();
+    for (const t of transactions as any[]) {
+      if (t?.category_id && t?.category) {
+        seen.set(String(t.category_id), String(t.category));
+      }
+    }
+    setCategories(
+      Array.from(seen.entries()).map(([category_id, main_category]) => ({
+        category_id,
+        main_category,
+      })),
+    );
+  }, [transactions]);
+
+  const chartData = forecast?.monthly_chart?.length ? forecast.monthly_chart : [];
+  const prevSpend = forecast?.prev_period_spend ?? forecast?.prev_month_spend;
 
   const categoryColors = ['#d1e4ff', '#004ac6', '#ffdad6', '#e2e2e6'];
   const topCats = forecast?.top_categories?.slice(0, 3) || [];
@@ -206,7 +216,7 @@ export const Forecasting: React.FC = () => {
               className="w-full bg-surface-container-low border border-outline-variant rounded-xl px-3 py-2 text-xs font-bold focus:ring-2 focus:ring-primary outline-none"
             >
               <option value="">All Accounts</option>
-              {accounts.map((a) => (
+              {(accounts as AccountOption[]).map((a) => (
                 <option key={a.account_id} value={a.account_id}>
                   {a.account_name}
                 </option>
@@ -260,7 +270,7 @@ export const Forecasting: React.FC = () => {
             <motion.div className="flex justify-between items-start">
               <motion.div>
                 <motion.p className="text-[10px] font-black text-outline uppercase tracking-[0.2em] mb-2">
-                  Total Analyzed Spending (30 days)
+                  Total spending ({forecast?.period_label ?? 'selected period'})
                 </motion.p>
                 <motion.h2 className="text-5xl font-black text-on-surface">
                   {formatCurrency(forecast?.total_analyzed_spending ?? 0)}
@@ -281,28 +291,29 @@ export const Forecasting: React.FC = () => {
                   <motion.span className="text-xl">{changeAbs}%</motion.span>
                 </motion.div>
                 <motion.p className="text-[10px] font-bold text-outline uppercase tracking-widest mt-1">
-                  {changeDown ? 'lower' : 'higher'} than previous 30-day period
+                  {changeDown ? 'lower' : 'higher'} than comparison period
                 </motion.p>
               </motion.div>
             </motion.div>
           </motion.div>
 
           <motion.div className="bg-surface-container-lowest p-8 rounded-[32px] border border-outline-variant/30">
-            <motion.h3 className="text-lg font-black mb-2 px-2 tracking-tight">
-              Weekly Spending
+            <motion.h3 className="text-lg font-black mb-1 px-2 tracking-tight">
+              Actual + Predicted Spending
             </motion.h3>
             <motion.p className="text-[10px] font-bold text-outline uppercase tracking-widest mb-6 px-2">
-              Each bar = one predicted week
+              Calendar months in range (actual) + next month (predicted)
             </motion.p>
             <motion.div className="h-[300px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={displayChart}>
+                <BarChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" opacity={0.5} />
                   <XAxis
                     dataKey="name"
                     axisLine={false}
                     tickLine={false}
-                    tick={{ fontSize: 10, fill: '#64748B', fontWeight: 600 }}
+                    tick={{ fontSize: 9, fill: '#64748B', fontWeight: 600 }}
+                    interval={0}
                   />
                   <YAxis hide />
                   <Tooltip
@@ -312,10 +323,17 @@ export const Forecasting: React.FC = () => {
                       border: 'none',
                       boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
                     }}
-                    formatter={(value: number) => [formatCurrency(value), 'Amount']}
+                    formatter={(value: number, _name: string, props: any) => [
+                      formatCurrency(value),
+                      props.payload?.is_forecast ? 'Predicted' : 'Actual',
+                    ]}
+                    labelFormatter={(label: string, payload: any[]) => {
+                      const dateRange = payload?.[0]?.payload?.date_range;
+                      return dateRange || label;
+                    }}
                   />
-                  <Bar dataKey="value" radius={[8, 8, 8, 8]} barSize={60}>
-                    {displayChart.map((entry, index) => (
+                  <Bar dataKey="value" radius={[8, 8, 8, 8]} barSize={44}>
+                    {chartData.map((entry, index) => (
                       <Cell
                         key={`cell-${index}`}
                         fill={
@@ -324,29 +342,36 @@ export const Forecasting: React.FC = () => {
                             : categoryColors[index % categoryColors.length]
                         }
                         stroke={entry.is_forecast ? '#475569' : undefined}
-                        strokeWidth={entry.is_forecast ? 2 : 0}
-                        fillOpacity={entry.is_forecast ? 0.5 : 1}
+                        strokeWidth={entry.is_forecast ? 1.5 : 0}
+                        fillOpacity={entry.is_forecast ? 0.55 : 1}
                       />
                     ))}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </motion.div>
-            {topCats.length > 0 && (
-              <motion.div className="flex justify-center gap-8 mt-6 flex-wrap">
-                {topCats.map((c, i) => (
-                  <motion.div key={c.name} className="flex items-center gap-2">
-                    <motion.div
-                      className="w-2 h-2 rounded-full"
-                      style={{ backgroundColor: categoryColors[i % categoryColors.length] }}
-                    />
-                    <motion.span className="text-[10px] font-bold text-outline uppercase tracking-widest">
-                      {c.name}
-                    </motion.span>
-                  </motion.div>
-                ))}
+            {/* Chart Legend */}
+            <motion.div className="flex justify-center gap-6 mt-6 flex-wrap items-center">
+              <motion.div className="flex items-center gap-2">
+                <motion.div className="w-3 h-3 rounded-sm" style={{ backgroundColor: categoryColors[0] }} />
+                <motion.span className="text-[10px] font-bold text-outline uppercase tracking-widest">Actual</motion.span>
               </motion.div>
-            )}
+              <motion.div className="flex items-center gap-2">
+                <motion.div className="w-3 h-3 rounded-sm opacity-55" style={{ backgroundColor: '#94a3b8', border: '1.5px solid #475569' }} />
+                <motion.span className="text-[10px] font-bold text-outline uppercase tracking-widest">Predicted</motion.span>
+              </motion.div>
+              {topCats.map((c, i) => (
+                <motion.div key={c.name} className="flex items-center gap-2">
+                  <motion.div
+                    className="w-2 h-2 rounded-full"
+                    style={{ backgroundColor: categoryColors[(i + 1) % categoryColors.length] }}
+                  />
+                  <motion.span className="text-[10px] font-bold text-outline uppercase tracking-widest">
+                    {c.name}
+                  </motion.span>
+                </motion.div>
+              ))}
+            </motion.div>
           </motion.div>
 
           <motion.div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -472,27 +497,73 @@ export const Forecasting: React.FC = () => {
                 </motion.p>
               </motion.div>
 
-              {forecast?.predicted_weeks && forecast.predicted_weeks.length > 0 && (
+              {forecast?.predicted_months && forecast.predicted_months.length > 0 && (
                 <motion.div className="bg-error/5 p-6 rounded-2xl border border-error/10">
-                  <motion.p className="text-[10px] font-black text-error uppercase tracking-widest mb-4">
-                    4-Week Forecast
+                  <motion.p className="text-[10px] font-black text-error uppercase tracking-widest mb-1">
+                    Next month prediction
                   </motion.p>
-                  <motion.div className="space-y-3">
-                    {forecast.predicted_weeks.map((week) => (
+                  <motion.div className="space-y-4">
+                    {forecast.predicted_months.map((month) => (
                       <motion.div
-                        key={week.week}
-                        className="flex items-center justify-between gap-4 text-xs font-bold"
+                        key={month.month}
+                        className="bg-surface-container-lowest rounded-xl p-3 border border-outline-variant/20"
                       >
-                        <motion.span className="text-on-surface">
-                          {week.label}
-                          <span className="text-outline font-medium ml-2">({week.week_start})</span>
-                        </motion.span>
-                        <motion.span className="text-on-surface font-black">
-                          {formatCurrency(week.amount)}
-                        </motion.span>
+                        <motion.div className="flex items-center justify-between mb-2">
+                          <motion.span className="text-[10px] font-black text-on-surface uppercase tracking-wide">
+                            {month.label}
+                          </motion.span>
+                          <motion.span className="text-xs font-black text-on-surface">
+                            {formatCurrency(month.amount)}
+                          </motion.span>
+                        </motion.div>
+                        {month.daily_breakdown && month.daily_breakdown.length > 0 && (
+                          <motion.div className="grid grid-cols-7 gap-0.5">
+                            {month.daily_breakdown.map((day) => (
+                              <motion.div
+                                key={day.date}
+                                className={cn(
+                                  'rounded-md p-1 text-center',
+                                  day.is_weekend
+                                    ? 'bg-secondary/15 border border-secondary/20'
+                                    : 'bg-surface-container',
+                                )}
+                                title={`${day.date}: ${formatCurrency(day.amount)}`}
+                              >
+                                <motion.p
+                                  className={cn(
+                                    'text-[8px] font-black uppercase mb-0.5',
+                                    day.is_weekend ? 'text-secondary' : 'text-outline',
+                                  )}
+                                >
+                                  {day.day}
+                                </motion.p>
+                                <motion.p className="text-[8px] font-bold text-on-surface leading-none">
+                                  {day.amount > 999
+                                    ? `${(day.amount / 1000).toFixed(1)}k`
+                                    : day.amount > 0
+                                      ? Math.round(day.amount).toLocaleString()
+                                      : '—'}
+                                </motion.p>
+                              </motion.div>
+                            ))}
+                          </motion.div>
+                        )}
                       </motion.div>
                     ))}
                   </motion.div>
+                  <motion.div className="mt-4 pt-4 border-t border-error/10 flex justify-between items-center">
+                    <motion.span className="text-[10px] font-black text-error uppercase tracking-widest">
+                      Predicted total
+                    </motion.span>
+                    <motion.span className="text-sm font-black text-on-surface">
+                      {formatCurrency(forecast.predicted_next_month ?? 0)}
+                    </motion.span>
+                  </motion.div>
+                  {prevSpend != null && (
+                    <motion.p className="text-[10px] text-outline font-bold mt-1 text-right">
+                      vs {formatCurrency(prevSpend)} in comparison period
+                    </motion.p>
+                  )}
                 </motion.div>
               )}
             </motion.div>
@@ -502,7 +573,7 @@ export const Forecasting: React.FC = () => {
                 <motion.p className="text-[10px] font-black text-outline uppercase">Forecast accuracy</motion.p>
                 <motion.button
                   type="button"
-                  onClick={fetchForecast}
+                  onClick={() => fetchForecast({ force: true })}
                   className="p-1 hover:text-primary transition-colors"
                   aria-label="Refresh forecast"
                 >
