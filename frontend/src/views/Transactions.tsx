@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { Search, Filter, Download, Upload, Plus, Edit2, Trash2 } from 'lucide-react';
+import React, { useMemo, useRef, useState } from 'react';
+import { Search, Download, Upload, Plus, Edit2, Trash2 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { TransactionModal } from '../components/TransactionModal';
 import { BulkUploadModal } from '../components/BulkUploadModal';
@@ -7,13 +7,25 @@ import { cn, formatCurrency } from '../lib/utils';
 import { Transaction } from '../types';
 import { apiFetch } from '../lib/api';
 import { activeUserId } from '../lib/activeUserId';
+import { analyzeStatementFile } from '../lib/statementParser';
+import { isWithinAnalysisWindow } from '../lib/analysisPeriod';
 
 export const Transactions: React.FC = () => {
-  const { user, authReady, updateTransaction, deleteTransaction, categories, pendingDate, loadTransactions } = useAppContext();
-  const [realTransactions, setRealTransactions] = useState<Transaction[]>([]);
-  const [accounts, setAccounts] = useState<any[]>([]);
-  const [dbCategories, setDbCategories] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const {
+    user,
+    authReady,
+    analysisPeriod,
+    updateTransaction,
+    deleteTransaction,
+    categories,
+    pendingDate,
+    loadTransactions,
+    transactions,
+    accounts,
+    dbCategories,
+    loadAccounts,
+    loadDbCategories,
+  } = useAppContext();
   const [modalOpen, setModalOpen] = useState(false);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | undefined>(undefined);
@@ -29,59 +41,13 @@ export const Transactions: React.FC = () => {
   const [passwordModal, setPasswordModal] = useState<{ open: boolean; wrongPassword: boolean }>({ open: false, wrongPassword: false });
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  const fetchTransactions = async () => {
-    const uid = activeUserId(user);
-    if (!uid) return;
-    try {
-      setLoading(true);
-      const response = await apiFetch(`/api/transactions?user_id=${encodeURIComponent(uid)}`);
-      const data = await response.json();
-      if (data.success) {
-        setRealTransactions(data.data);
-      } else {
-        setRealTransactions([]);
-      }
-    } catch (error) {
-      console.error('Failed to fetch transactions', error);
-      setRealTransactions([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchAccounts = async () => {
-    const uid = activeUserId(user);
-    if (!uid) return;
-    try {
-      const response = await apiFetch(`/api/accounts?user_id=${encodeURIComponent(uid)}`);
-      const data = await response.json();
-      if (data.success && Array.isArray(data.data)) {
-        setAccounts(data.data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch accounts', error);
-    }
-  };
-
-  const fetchCategories = async () => {
-    try {
-      const response = await apiFetch('/api/categories');
-      const data = await response.json();
-      if (data.success && Array.isArray(data.data)) {
-        setDbCategories(data.data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch categories', error);
-    }
-  };
-
   React.useEffect(() => {
     if (authReady && user?.isAuthenticated && activeUserId(user)) {
-      fetchTransactions();
-      fetchAccounts();
-      fetchCategories();
+      loadTransactions();
+      loadAccounts();
+      loadDbCategories();
     }
-  }, [authReady, user?.isAuthenticated, user?.userId, user?.id]);
+  }, [authReady, user?.isAuthenticated, user?.userId, user?.id, loadTransactions, loadAccounts, loadDbCategories]);
 
   const handleUpdateCategory = async (trans: any, newMainCat: string) => {
     try {
@@ -102,7 +68,7 @@ export const Transactions: React.FC = () => {
       });
       const data = await response.json();
       if (data.success) {
-        fetchTransactions();
+        loadTransactions();
       }
     } catch (error) {
       console.error("Failed to update category", error);
@@ -129,14 +95,7 @@ export const Transactions: React.FC = () => {
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this transaction?')) return;
     try {
-      const response = await apiFetch(`/api/transactions/${id}`, {
-        method: 'DELETE'
-      });
-      const data = await response.json();
-      if (data.success) {
-        fetchTransactions();
-        loadTransactions();
-      }
+      await deleteTransaction(id);
     } catch (error) {
       console.error("Failed to delete transaction", error);
     }
@@ -168,10 +127,9 @@ export const Transactions: React.FC = () => {
         if (!ingestRes.ok) {
           throw new Error('Failed to save statement transactions to the database');
         }
-        // Refresh transactions and accounts
-        fetchTransactions();
-        fetchAccounts();
+        // Refresh centralized caches
         loadTransactions();
+        loadAccounts();
       }
 
       setPendingFile(null);
@@ -227,7 +185,7 @@ export const Transactions: React.FC = () => {
     document.body.removeChild(link);
   };
 
-  const filtered = realTransactions.filter(t => {
+  const filtered = useMemo(() => transactions.filter(t => {
     const matchesSearch =
       t.merchant.toLowerCase().includes(search.toLowerCase()) ||
       t.category.toLowerCase().includes(search.toLowerCase()) ||
@@ -245,10 +203,14 @@ export const Transactions: React.FC = () => {
       selectedType === 'All Types' ||
       t.type.toLowerCase() === selectedType.toLowerCase();
 
-    return matchesSearch && matchesAccount && matchesCategory && matchesType;
-  });
+    const matchesPeriod = isWithinAnalysisWindow(t.date, analysisPeriod);
 
-  if (loading && realTransactions.length === 0) {
+    return (
+      matchesSearch && matchesAccount && matchesCategory && matchesType && matchesPeriod
+    );
+  }), [transactions, search, selectedAccount, selectedCategory, selectedType, analysisPeriod]);
+
+  if (!transactions.length && authReady && user?.isAuthenticated) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
@@ -353,19 +315,19 @@ export const Transactions: React.FC = () => {
       </div>
 
       {/* Categorize Unknown Section */}
-      {realTransactions.filter(t => t.category === 'Uncategorized').length > 0 && (
+      {transactions.filter(t => t.category === 'Uncategorized').length > 0 && (
         <section className="bg-primary/5 border-2 border-primary/20 rounded-2xl p-6 lg:p-8 space-y-6">
           <div className="flex justify-between items-center">
             <div>
               <h3 className="text-xl font-bold flex items-center gap-2">
-                Action Required: Categorize the Unknown <span className="px-2 py-0.5 bg-primary text-white text-[10px] rounded-full">{realTransactions.filter(t => t.category === 'Uncategorized').length}</span>
+                Action Required: Categorize the Unknown <span className="px-2 py-0.5 bg-primary text-white text-[10px] rounded-full">{transactions.filter(t => t.category === 'Uncategorized').length}</span>
               </h3>
               <p className="text-sm text-outline font-medium mt-1">Our AI identified transactions that need your classification or validation. High-amount anomalies are highlighted.</p>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {realTransactions.filter(t => t.category === 'Uncategorized').map(t => {
+            {transactions.filter(t => t.category === 'Uncategorized').map(t => {
               const isAnomaly = Math.abs(t.amount) > 5000 || t.notes?.includes('anomaly');
               return (
                 <div key={t.id} className={cn(
@@ -473,12 +435,11 @@ export const Transactions: React.FC = () => {
         onClose={() => {
           setModalOpen(false);
           setEditingTransaction(undefined);
-          fetchTransactions();
+          loadTransactions();
         }}
         editingTransaction={editingTransaction}
         accounts={accounts}
         onSaved={() => {
-          fetchTransactions();
           loadTransactions();
         }}
       />
@@ -487,7 +448,6 @@ export const Transactions: React.FC = () => {
         isOpen={bulkUploadOpen}
         onClose={() => setBulkUploadOpen(false)}
         onSuccess={() => {
-          fetchTransactions();
           loadTransactions();
         }}
       />

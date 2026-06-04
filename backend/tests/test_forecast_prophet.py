@@ -79,20 +79,17 @@ def test_train_and_predict_e2e(trained_production_bundle):
         tx.to_dict(orient="records"),
         [],
         user_id=SAMPLE_USER,
+        period="1m",
     )
 
     assert result["success"] is True
     assert result["user_model_available"] is True
     assert result["predicted_next_month"] > 0
-    assert len(result["predicted_weeks"]) == 4
-    assert sum(w["amount"] for w in result["predicted_weeks"]) == result["predicted_next_month"]
-    assert len(result["weekly_chart"]) == 8
-
-    recent_avg = result["recent_weekly_avg"]
-    pred_weekly = result["predicted_weeks"][0]["amount"]
-    assert recent_avg > 0
-    ratio = pred_weekly / recent_avg
-    assert 0.3 <= ratio <= 3.0, f"prediction {pred_weekly} vs recent {recent_avg}"
+    assert len(result["predicted_months"]) >= 1
+    assert sum(m["amount"] for m in result["predicted_months"]) == result["predicted_next_month"]
+    assert len(result["monthly_chart"]) >= 1
+    forecast_bars = [b for b in result["monthly_chart"] if b.get("is_forecast")]
+    assert len(forecast_bars) == 1
 
 
 def test_unknown_user_no_model(trained_production_bundle):

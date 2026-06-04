@@ -62,5 +62,21 @@
     "event_type": "out_of_scope_request",
     "message": "Who is Modi?",
     "reason": "User query is out of the financial advisor domains."
+  },
+  {
+    "timestamp": "2026-06-02T12:21:13.173615Z",
+    "user_id": "958b2a52-d1ea-4696-9f2d-09c5e90c5d24",
+    "thread_id": "default-thread",
+    "event_type": "out_of_scope_request",
+    "message": "who is mode",
+    "reason": "User query is out of the financial advisor domains."
+  },
+  {
+    "timestamp": "2026-06-02T12:21:20.283193Z",
+    "user_id": "958b2a52-d1ea-4696-9f2d-09c5e90c5d24",
+    "thread_id": "default-thread",
+    "event_type": "out_of_scope_request",
+    "message": "who is modu",
+    "reason": "User query is out of the financial advisor domains."
   }
 ]

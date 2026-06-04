@@ -1,8 +1,9 @@
-"""Tests for realistic amount shaping in seed_user_from_raw.py."""
+"""Tests for Prophet-oriented daily seeding in seed_user_from_raw.py."""
 
 from __future__ import annotations
 
 import importlib.util
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -14,6 +15,33 @@ _spec = importlib.util.spec_from_file_location("seed_user_from_raw", SCRIPT)
 _mod = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
 _spec.loader.exec_module(_mod)
+
+
+def test_daily_expense_target_weekend_vs_weekday():
+    saturday = date(2025, 6, 7)
+    monday = date(2025, 6, 9)
+    weekend_amounts = [_mod._daily_expense_target(saturday + timedelta(days=7 * i)) for i in range(8)]
+    weekday_amounts = [_mod._daily_expense_target(monday + timedelta(days=i)) for i in range(5)]
+    assert all(_mod.WEEKEND_DAILY_RANGE[0] <= a <= _mod.WEEKEND_DAILY_RANGE[1] for a in weekend_amounts)
+    assert all(_mod.WEEKDAY_DAILY_RANGE[0] <= a <= _mod.WEEKDAY_DAILY_RANGE[1] for a in weekday_amounts)
+    assert min(weekend_amounts) > max(weekday_amounts)
+
+
+def test_build_prophet_daily_transactions_covers_each_day():
+    start, end = _mod._history_date_range(end_at=date(2025, 6, 30), days=60)
+    rows = _mod._build_prophet_daily_transactions(
+        user_id="u1",
+        account_id="a1",
+        categories=[{"category_id": "c1", "main_category": "Food & Drinks", "sub_category": "General"}],
+        fallback_expense_cat="c1",
+        end_at=end,
+        days=60,
+    )
+    df = pd.DataFrame(rows)
+    daily = df.groupby("transaction_date")["amount"].sum()
+    assert len(daily) == 60
+    assert daily.index.min() == start.isoformat()
+    assert daily.index.max() == end.isoformat()
 
 
 def test_small_expenses_are_common():
