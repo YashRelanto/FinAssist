@@ -1,648 +1,89 @@
-# FinAssist Financial Advisor Engine
+# FinAssist - Architecture & Implementation Guide
 
-## Overview
-
-FinAssist is a hybrid AI-powered Financial Advisor designed to provide users with:
-
-* Personal transaction insights through NL2SQL
-* Financial education and FAQs through RAG
-* Goal-based financial planning
-* Banking and investment guidance
-* Product comparisons
-* Market information retrieval
-* Human-in-the-Loop (HITL) clarification for personalized recommendations
-
-The system combines:
-
-* Retrieval-Augmented Generation (RAG)
-* Natural Language to SQL (NL2SQL)
-* Human-in-the-Loop (HITL)
-* Hybrid Knowledge Retrieval
-* ChromaDB Vector Search
-* Live Financial Data Retrieval
-* Multi-Layer Security Guardrails
+This document details the internal architecture, RAG pipelines, LangGraph orchestration, and security mechanisms powering FinAssist.
 
 ---
 
-# High-Level Architecture
+## 1. LangGraph Orchestration & Navigation
 
-`                  ┌──────────────────────┐
-                        │      User Query      │
-                        └──────────┬───────────┘
-                                   │
-                                   ▼
-                     ┌──────────────────────────┐
-                     │   Input Guardrails       │
-                     │ • Prompt Injection Check │
-                     │ • Abuse Detection        │
-                     │ • Query Validation       │
-                     └──────────┬───────────────┘
-                                │
-                                ▼
-                     ┌──────────────────────────┐
-                     │      Intent Router       │
-                     └──────────┬───────────────┘
-                                │
-          ┌─────────────────────┴─────────────────────┐
-          │                                           │
-          ▼                                           ▼
+FinAssist operates entirely on **LangGraph**, replacing traditional linear agent frameworks with a robust, persistent state machine.
 
-┌───────────────────┐                  ┌────────────────────────┐
-│ Personal Finance  │                  │ Financial Advisor      │
-│ Transaction       │                  │ Engine                 │
-│ Queries           │                  └────────────┬───────────┘
-└─────────┬─────────┘                               │
-          │                                         ▼
-          ▼                          ┌──────────────────────────┐
-┌────────────────────┐               │ Query Type Detection     │
-│      NL2SQL        │               └────────────┬─────────────┘
-└─────────┬──────────┘                            │
-          │                                       ▼
-          ▼                        ┌────────────────────────────┐
-┌────────────────────┐             │ Missing Information Check  │
-│     Supabase       │             │ (Clarification Engine)     │
-└─────────┬──────────┘             └────────────┬───────────────┘
-          │                                     │
-          ▼                                     ▼
+### State Management
+All context is stored in `FinAssistState` (a `TypedDict`), acting as the single source of truth. As a query flows through the graph, nodes append data (like `intent_candidates`, `retrieved_context`, `user_profile`) to this state. Checkpointers (`AsyncSqliteSaver` / `AsyncPostgresSaver`) persist this state automatically for multi-turn conversations.
 
-┌────────────────────┐             ┌────────────────────────────┐
-│ Transaction Answer │             │ Clarification Questions    │
-└────────────────────┘             └────────────┬───────────────┘
-                                                │
-                                                ▼
+### Nodes and Navigation (Routing)
+The graph uses **Conditional Edges** to dynamically route the user's query:
 
-                                  ┌────────────────────────────┐
-                                  │ Hybrid Retrieval Layer     │
-                                  └────────────┬───────────────┘
-                                               │
-                           ┌───────────────────┴──────────────────┐
-                           │                                      │
-                           ▼                                      ▼
-
-              ┌───────────────────────┐         ┌───────────────────────┐
-              │ ChromaDB Retrieval    │         │ Live Financial Search │
-              │ (MMR Retrieval)       │         │ & Scraping            │
-              └──────────┬────────────┘         └──────────┬────────────┘
-                         │                                 │
-                         └──────────────┬──────────────────┘
-                                        │
-                                        ▼
-
-                          ┌────────────────────────────┐
-                          │ Knowledge Aggregation      │
-                          └────────────┬───────────────┘
-                                       │
-                                       ▼
-
-                          ┌────────────────────────────┐
-                          │ Financial Advisor LLM      │
-                          └────────────┬───────────────┘
-                                       │
-                                       ▼
-
-                          ┌────────────────────────────┐
-                          │ Output Guardrails          │
-                          │ • PII Protection           │
-                          │ • Data Sanitization        │
-                          │ • Response Validation      │
-                          └────────────┬───────────────┘
-                                       │
-                                       ▼
-
-                              ┌──────────────────┐
-                              │ Final Response   │
-                              └──────────────────┘
+1. **`input_guardrail_node`**: Checks for abuse. If safe, routes to Domain Scope.
+2. **`domain_scope_node`**: Uses conversation history to determine if the query is finance-related.
+3. **`intent_classifier_node`**: Classifies the *latest* message into an intent (`financial_knowledge`, `financial_goal_planning`, etc.). It strictly selects the highest confidence intent to avoid getting stuck in clarification loops.
+4. **`intent_router`** (Edge logic):
+   - → `nl2sql` if checking transactions.
+   - → `workflow_slot` if planning a goal.
+   - → `rag_retrieval` if seeking financial knowledge/rates.
+5. **Action Nodes**:
+   - **`nl2sql_node`**: Fetches user transaction data.
+   - **`workflow_slot_node`**: HITL (Human-in-the-Loop) node that extracts missing slots (target amount, timeline) for goal planning.
+   - **`rag_retrieval_node`**: Fetches ChromaDB context or triggers Hybrid Web Search.
+6. **`advisor_node`**: The final LLM synthesis node that reads all collected state data and outputs the 1-3 sentence response.
 
 ---
 
-# System Components
+## 2. Scraping & Anti-Blocking Strategies
 
-## 1. Intent Router
+To gather domain-specific financial knowledge, FinAssist utilizes a massive scheduled scraper pipeline (`scrapers.py`).
 
-The Intent Router determines whether a query should be handled by:
-
-### NL2SQL Engine
-
-Handles:
-
-* Spending analysis
-* Expense analysis
-* Income analysis
-* Transaction history
-* Merchant analysis
-* Category-wise spending
-* Date-wise spending
-
-Examples:
-
-* How much did I spend on food last month?
-* Show my Amazon transactions.
-* How much salary did I receive in June?
-
-### Financial Advisor Engine
-
-Handles:
-
-* Financial education
-* Banking
-* Investments
-* Insurance
-* Taxation
-* Goal planning
-* Product comparisons
+### Headless Playwright Scraping
+We use `playwright.sync_api` to launch a headless Chromium browser. This is critical for modern financial websites (like BankBazaar or Groww) that render data tables asynchronously via React/Angular.
+- **Bypassing Blocks**: The browser is injected with realistic User-Agents and viewport sizes. We utilize `page.wait_for_timeout(3000)` to ensure all Javascript dynamic tables physically render before extracting the DOM.
+- **Noise Reduction**: BeautifulSoup strips out `<nav>`, `<footer>`, `<script>`, and `<style>` tags to extract only the pure article/table content.
 
 ---
 
-# NL2SQL Engine
+## 3. Chunking Strategy
 
-## Purpose
+Before storing scraped data into ChromaDB, it must be chunked to fit within LLM context windows while preserving semantic meaning.
 
-Convert user financial transaction queries into SQL queries dynamically.
-
-The engine operates exclusively on the user's own transaction data.
-
----
-
-## Flow
-
-```text
-User Query
-     │
-     ▼
-Entity Extraction
-     │
-     ▼
-Filter Detection
-     │
-     ▼
-SQL Generation
-     │
-     ▼
-Authorization Validation
-     │
-     ▼
-Supabase Execution
-     │
-     ▼
-Result Formatting
-     │
-     ▼
-Answer
-```
+- **Algorithm**: Overlapping Sliding Window.
+- **Parameters**: `chunk_size = 800` words, `overlap = 100` words.
+- **Why?**: Financial articles often span multiple paragraphs. A 100-word overlap guarantees that if a paragraph breaks mid-sentence during chunking, the context is carried over into the next chunk. 
+- **Storage**: Chunks are embedded and stored in three isolated ChromaDB collections: `banking_data`, `investment_data`, and `financial_tips`.
 
 ---
 
-## Examples
+## 4. Retrieval & Hybrid Search
 
-### Category Analysis
+FinAssist employs a **Real-Time Hybrid RAG Architecture**.
 
-User:
+### Local Vector Search (ChromaDB)
+When a query enters the `rag_retrieval_node`:
+1. It queries ChromaDB using Cosine Distance.
+2. If the `min_distance` is `≤ 0.6` (High Confidence), it returns the top 5 chunks immediately (latency: ~50ms).
 
-```text
-How much did I spend on food?
-```
-
-Generated Query:
-
-```sql
-SELECT SUM(amount)
-FROM transactions
-WHERE category = 'Food'
-AND user_id = ?
-```
+### Live Web Search Fallback (Agentic Scraping)
+If ChromaDB fails to find relevant context (0 results or `min_distance > 0.6`), the graph intercepts the failure and dynamically scrapes the internet to prevent hallucinations.
+1. **Search Engine**: Uses the `ddgs` (DuckDuckGo Search) library to bypass standard search engine API rate limits.
+2. **Snippet Extraction**: It instantly pulls the search engine's summary "snippet" containing live data (e.g., today's stock price).
+3. **Deep Scraping**: It grabs the top-ranking URL from the search result and boots up Playwright mid-conversation to scrape the full article.
+4. **Context Injection**: It merges the Search Snippet + Scraped DOM, forces the `rag_confidence` to `0.1` (spoofing high confidence), and hands it to the `advisor_node`.
 
 ---
 
-### Merchant Analysis
+## 5. NL2SQL Implementation
 
-User:
+To answer questions like *"How much did I spend on food?"*, we use a secure **2-Stage NL2SQL Pipeline**.
 
-```text
-How much did I spend on Amazon?
-```
-
-Generated Query:
-
-```sql
-SELECT SUM(amount)
-FROM transactions
-WHERE merchant_name = 'Amazon'
-AND user_id = ?
-```
+- **Stage 1 (Query Planner)**: An LLM transforms natural language into a strict `QuerySpec` JSON object containing filters (e.g., `category = 'Food'`), date ranges, and aggregations.
+- **Stage 2 (Query Executor)**: Instead of generating raw, dangerous SQL strings, the JSON is mapped directly into safe **Supabase Python Client** chains (e.g., `.select().eq().gte()`).
+- **Result**: Complete immunity to SQL Injection attacks, as raw SQL is never executed.
 
 ---
 
-### Date Analysis
+## 6. Guardrails System
 
-User:
+FinAssist utilizes a 4-Layer Security architecture to protect the LLM and the user's data:
 
-```text
-How much did I spend on January 5?
-```
-
-Generated Query:
-
-```sql
-SELECT SUM(amount)
-FROM transactions
-WHERE transaction_date = '2025-01-05'
-AND user_id = ?
-```
-
----
-
-# Financial Advisor Engine
-
-The advisor handles all non-personal-data financial questions.
-
----
-
-# Query Categories
-
-The advisor dynamically classifies queries into:
-
-* Educational
-* Market Information
-* Product Comparison
-* Goal Planning
-* Investment Planning
-* Banking Products
-* Insurance
-* Taxation
-* Retirement Planning
-
----
-
-# Human-in-the-Loop (HITL)
-
-## Purpose
-
-Prevent incorrect recommendations caused by missing information.
-
-The advisor should never make assumptions.
-
----
-
-## Example
-
-User:
-
-```text
-I want to buy a bike next year.
-```
-
-Missing Information:
-
-* Bike model
-* Budget
-* Timeline
-* Existing savings
-
-Advisor Response:
-
-```text
-To help you create a plan:
-
-1. Which bike are you planning to buy?
-2. What's your estimated budget?
-3. How much have you already saved?
-4. When do you plan to purchase it?
-```
-
-Only after collecting the missing information should recommendations be generated.
-
----
-
-# Slot Filling Engine
-
-Each advisory category defines required information.
-
-## Goal Planning
-
-Required:
-
-* Goal
-* Budget
-* Timeline
-* Existing savings
-
----
-
-## Investment Planning
-
-Required:
-
-* Risk profile
-* Investment amount
-* Investment horizon
-* Financial objective
-
----
-
-## Banking Products
-
-Required:
-
-* Amount
-* Tenure
-* Existing banking relationship
-* Senior citizen status
-
----
-
-## Insurance
-
-Required:
-
-* Age
-* Dependents
-* Coverage objective
-
----
-
-# Hybrid Retrieval Strategy
-
-The advisor does not rely solely on ChromaDB.
-
-It combines:
-
-1. Cached Knowledge
-2. Live Financial Retrieval
-
----
-
-## Flow
-
-```text
-User Query
-      │
-      ▼
-Chroma Search
-      │
-      ▼
-Confidence Check
-      │
- ┌────┴────┐
- │         │
-High      Low
- │         │
- ▼         ▼
-
-Answer   Live Retrieval
-              │
-              ▼
-
-      Store New Knowledge
-              │
-              ▼
-
-           Answer
-```
-
----
-
-# ChromaDB Knowledge Layer
-
-## Purpose
-
-Serve as a high-speed knowledge cache.
-
-Contains:
-
-* Banking information
-* Investment information
-* Financial education
-* Financial tips
-* Historical retrieval results
-
----
-
-## Retrieval Method
-
-Maximum Marginal Relevance (MMR)
-
-Benefits:
-
-* Diverse context retrieval
-* Reduced duplicate chunks
-* Better answer quality
-* Improved context coverage
-
----
-
-# Live Financial Retrieval
-
-Triggered when:
-
-* Retrieval confidence is low
-* Information is stale
-* Information is missing
-
-Examples:
-
-* New FD rates
-* RBI announcements
-* Market updates
-* Recently launched products
-
----
-
-# Knowledge Refresh Strategy
-
-## Scheduled Updates
-
-### Every 6–12 Hours
-
-* FD Rates
-* RD Rates
-* Savings Rates
-* Loan Rates
-* Credit Card Information
-
-### Weekly
-
-* Financial Tips
-* Educational Articles
-* Market Commentary
-
-### Monthly
-
-* Government Schemes
-* NPS Updates
-* Tax Updates
-* Policy Changes
-
----
-
-## Dynamic Updates
-
-If a user asks a question unavailable in ChromaDB:
-
-```text
-Live Retrieval
-      │
-      ▼
-Answer Generation
-      │
-      ▼
-Store in ChromaDB
-```
-
-This continuously improves system coverage.
-
----
-
-# Source Priority Framework
-
-The advisor ranks sources based on trust.
-
-## Tier 1
-
-Highest Trust
-
-* RBI
-* SEBI
-* Income Tax Department
-* NPS Trust
-* Government Portals
-
-## Tier 2
-
-High Trust
-
-* Groww
-* ET Money
-* MoneyControl
-* Value Research
-
-## Tier 3
-
-Moderate Trust
-
-* BankBazaar
-* PolicyBazaar
-* Financial Blogs
-
----
-
-# Security Architecture
-
-The system uses four protection layers.
-
-## Layer 1 — Input Guardrails
-
-Protects against:
-
-* Prompt Injection
-* Abuse
-* Excessive Input
-* Malicious Requests
-
----
-
-## Layer 2 — Authorization Guard
-
-Ensures:
-
-* User can only access their own data
-* SQL queries contain mandatory user filtering
-
----
-
-## Layer 3 — PII Protection
-
-Masks:
-
-* PAN
-* Aadhaar
-* Phone Numbers
-* Email Addresses
-* Account Numbers
-* UPI IDs
-
----
-
-## Layer 4 — Output Guardrails
-
-Prevents:
-
-* Secret leakage
-* SQL leakage
-* PII exposure
-
----
-
-# Response Standards
-
-Every advisor response should follow:
-
-```text
-Short Answer
-
-Key Insights
-- Point 1
-- Point 2
-- Point 3
-
-Recommendation
-- Suggested action
-
-Next Step
-- Clear user action
-```
-
----
-
-# Design Principles
-
-The system should:
-
-✓ Ask before assuming
-
-✓ Personalize recommendations
-
-✓ Retrieve trusted information
-
-✓ Separate personal data from advisory data
-
-✓ Explain reasoning clearly
-
-✓ Maintain financial safety
-
-✓ Continuously improve knowledge coverage
-
-✓ Use HITL only when necessary
-
-✓ Keep responses concise and structured
-
-✓ Prioritize user understanding over complexity
-
----
-
-# Future Enhancements
-
-* Portfolio Analysis Engine
-* Budget Planning Engine
-* Goal Tracking Engine
-* Financial Health Score
-* Personalized Recommendation Engine
-* Real-Time Market Monitoring
-* Automated Knowledge Refresh Pipelines
-* User Preference Memory
-* Recommendation Explainability Layer
-
----
-
-# Summary
-
-FinAssist combines:
-
-* NL2SQL for personal financial analytics
-* Hybrid RAG for financial knowledge
-* HITL for personalized planning
-* ChromaDB for fast retrieval
-* Live Retrieval for freshness
-* MMR for better context diversity
-* Multi-layer security for safe financial assistance
-
-This architecture enables scalable, accurate, explainable, and user-centric financial advisory experiences while maintaining strong security, personalization, and data isolation guarantees.
+1. **L1: Input Guard**: An LLM-based firewall that detects and blocks jailbreaks, prompt injection, and abusive language before the workflow begins.
+2. **L2: Domain Scope**: Ensures the conversation remains strictly about finance. Crucially, this node has access to conversation history, so it won't mistakenly block isolated user inputs (like typing "50000" when asked for a budget).
+3. **L3: PII Masking**: A Regex-based interceptor that scans for Indian PII (Aadhaar cards, PAN cards, phone numbers) and replaces them with `[MASKED]` before they reach OpenAI's servers.
+4. **L4: Output Guard**: Scans the final LLM response to ensure no internal system prompts, database schemas, or API keys are accidentally leaked to the user.

@@ -1,8 +1,13 @@
 import re
 from typing import Tuple
 import logging
+from better_profanity import profanity
 
 logger = logging.getLogger(__name__)
+
+# Add custom financial abuse words to the default global profanity list
+custom_badwords = ["scam", "fraud", "cheat", "steal", "hack", "scammer", "swindle", "exploit"]
+profanity.add_censor_words(custom_badwords)
 
 # Patterns that indicate prompt injection attempts
 INJECTION_PATTERNS = [
@@ -50,12 +55,7 @@ SUSPICIOUS_PHRASES = [
     r"compare\s+(my|user)\s+(expenses|data|spending|transactions)\s+(with|to|against)\s+other\s+users", # e.g. "compare my expenses with other users"
 ]
 
-# High-performance Profanity / Abuse detector
-PROFANE_WORDS = {
-    # Standard English profanity list (curated, non-extreme examples but highly representative)
-    "shit", "piss", "fuck", "cunt", "asshole", "bitch", "bastard", "dick", "crap",
-    "scam", "fraud", "cheat", "steal", "hack", "scammer", "swindle", "exploit"
-}
+
 
 def detect_prompt_injection(message: str) -> Tuple[bool, str]:
     """
@@ -102,10 +102,8 @@ def contains_profanity(message: str) -> Tuple[bool, str]:
     """
     Check if message contains profanity or abusive language
     """
-    words = re.findall(r"\b[a-zA-Z]+\b", message.lower())
-    for word in words:
-        if word in PROFANE_WORDS:
-            return False, "Message contains inappropriate language"
+    if profanity.contains_profanity(message):
+        return False, "Message contains inappropriate language"
     return True, ""
 
 class InputGuard:

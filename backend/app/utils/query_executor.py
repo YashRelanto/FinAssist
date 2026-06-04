@@ -122,7 +122,7 @@ def _build_and_fetch(user_id: str, spec: QuerySpec) -> List[Dict]:
         supabase.table("transactions")
         .select(
             "id, transaction_date, amount, transaction_type, "
-            "merchant_name, description, category_id"
+            "merchant_name, description, category_id, categories(main_category)"
         )
         .eq("user_id", user_id)
     )
@@ -225,9 +225,12 @@ def _group_aggregate(rows: List[Dict], group_by: str, metric: str) -> List[Dict]
         if group_by == "merchant":
             key = r.get("merchant_name") or r.get("description") or "Unknown"
         else:
-            # group_by == "category": use category_id as proxy (name enrichment
-            # would require a join — keep it simple for now)
-            key = r.get("category_id") or "Uncategorized"
+            # group_by == "category": extract main_category from joined categories table
+            cat_obj = r.get("categories")
+            if cat_obj and isinstance(cat_obj, dict):
+                key = cat_obj.get("main_category") or r.get("category_id") or "Uncategorized"
+            else:
+                key = r.get("category_id") or "Uncategorized"
         buckets[key].append(r.get("amount", 0))
 
     results = []
