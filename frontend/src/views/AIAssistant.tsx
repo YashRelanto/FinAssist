@@ -20,10 +20,10 @@ export const AIAssistant: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages or loading state change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, isLoading]);
 
   const handleSendMessage = async (text: string) => {
     if (!text.trim()) return;
@@ -113,20 +113,6 @@ export const AIAssistant: React.FC = () => {
                 <p className="text-[10px] text-outline font-medium mt-1">{item.time} • {item.sub}</p>
              </button>
            ))}
-           {isLoading && (
-             <div className="flex gap-4 max-w-2xl">
-               <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 shadow-sm bg-primary-container text-white">
-                 <Bot className="w-5 h-5" />
-               </div>
-               <div className="space-y-2 w-full max-w-lg">
-                 <div className="p-5 rounded-2xl soft-shadow border border-outline-variant/10 leading-relaxed font-medium bg-surface-container-low rounded-tl-none text-on-surface flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                    <span className="text-sm text-outline font-bold">Thinking...</span>
-                 </div>
-               </div>
-             </div>
-           )}
-           <div ref={messagesEndRef} />
         </div>
       </aside>
 
@@ -170,22 +156,38 @@ export const AIAssistant: React.FC = () => {
                 </div>
              </div>
           ))}
+          {isLoading && (
+            <div className="flex gap-4 max-w-2xl">
+              <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 shadow-sm bg-primary-container text-white">
+                <Bot className="w-5 h-5" />
+              </div>
+              <div className="space-y-2 w-full max-w-lg">
+                <div className="p-5 rounded-2xl soft-shadow border border-outline-variant/10 leading-relaxed font-medium bg-surface-container-low rounded-tl-none text-on-surface flex items-center gap-2">
+                   <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                   <span className="text-sm text-outline font-bold">Thinking...</span>
+                </div>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
         </div>
 
         {/* Input Area */}
         <div className="absolute bottom-0 left-0 right-0 p-8 bg-gradient-to-t from-surface-container-lowest via-surface-container-lowest/90 to-transparent">
            <div className="max-w-3xl mx-auto">
-             <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-hide pb-2">
-               {['Best FD rates in India?', "Predict next month's expenses", "How much should I save for emergency?"].map((chip) => (
-                 <button 
-                   key={chip} 
-                   onClick={() => handleSendMessage(chip)}
-                   className="shrink-0 px-4 py-1.5 bg-white border border-outline-variant/50 rounded-full text-[10px] font-bold text-outline hover:border-primary hover:text-primary transition-all shadow-sm"
-                 >
-                   {chip}
-                 </button>
-               ))}
-             </div>
+             {!messages.some(m => m.role === 'user') && (
+               <div className="flex gap-2 mb-4 overflow-x-auto scrollbar-hide pb-2">
+                 {['Best FD rates in India?', "Predict next month's expenses", "How much should I save for emergency?"].map((chip) => (
+                   <button 
+                     key={chip} 
+                     onClick={() => handleSendMessage(chip)}
+                     className="shrink-0 px-4 py-1.5 bg-white border border-outline-variant/50 rounded-full text-[10px] font-bold text-outline hover:border-primary hover:text-primary transition-all shadow-sm"
+                   >
+                     {chip}
+                   </button>
+                 ))}
+               </div>
+             )}
              <div className="bg-surface-container-low border border-outline-variant/50 rounded-2xl p-2 flex items-center gap-2 shadow-sm focus-within:ring-2 focus-within:ring-primary transition-all">
                 <button className="p-2.5 text-outline hover:text-primary transition-colors">
                   <Paperclip className="w-5 h-5 -rotate-45" />

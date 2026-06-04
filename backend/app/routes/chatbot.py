@@ -8,10 +8,14 @@ Endpoints:
 """
 
 import logging
-from typing import Optional
+import time
+from typing import Optional, Dict, List, Any
+from collections import defaultdict
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
+
+from app.utils.supabase_client import supabase
 
 # ─── Logging ────────────────────────────────────────────────────────────────
 
@@ -90,9 +94,6 @@ def _get_default_user_profile() -> dict:
     """
     Returns a mock user profile dictionary that simulates variables sourced
     from the Supabase users / profiles table.
-
-    In a production deployment, replace this with a Supabase lookup using the
-    request's user_id before passing the profile to the engine.
     """
     return {
         "income": 55000,                         # Monthly net income in INR
@@ -110,6 +111,131 @@ def _get_default_user_profile() -> dict:
         "outstanding_loans": [],                 # Active loan facilities
         "credit_score": 780,                     # CIBIL / Experian score
         "preferred_language": "English",
+    }
+
+
+# ─── Local Helpers for User Profile Context ───────────────────────────────
+
+def _fetch_user_data(user_id: str) -> Dict[str, Any]:
+    """
+    Pull real user data from Supabase to construct profile metrics.
+    """
+    data: Dict[str, Any] = {"transactions": [], "accounts": []}
+
+    try:
+        tx_res = (
+            supabase.table("transactions")
+            .select("transaction_date, amount, transaction_type, merchant_name, description, category_id")
+            .eq("user_id", user_id)
+            .order("transaction_date", desc=True)
+            .limit(200)
+            .execute()
+        )
+        data["transactions"] = tx_res.data or []
+    except Exception as e:
+        logger.error("Failed to fetch transactions for profile: %s", e)
+
+    try:
+        acc_res = (
+            supabase.table("accounts")
+            .select("account_name, account_type, current_balance")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        data["accounts"] = acc_res.data or []
+    except Exception as e:
+        logger.error("Failed to fetch accounts for profile: %s", e)
+
+    return data
+
+
+def _build_summary(transactions: List[Dict], accounts: List[Dict]) -> Dict[str, Any]:
+    """
+    Compute key financial metrics to populate in the LLM user profile system prompt.
+    """
+    if not transactions:
+        return {}
+
+    total_credit = sum(t["amount"] for t in transactions if t.get("transaction_type") == "income")
+    total_debit  = sum(t["amount"] for t in transactions if t.get("transaction_type") == "expense")
+    net_flow     = total_credit - total_debit
+    tx_count     = len(transactions)
+
+    # Spending by merchant (top 10)
+    merchant_spend: Dict[str, float] = defaultdict(float)
+    for t in transactions:
+        if t.get("transaction_type") == "expense":
+            name = t.get("merchant_name") or t.get("description") or "Unknown"
+            merchant_spend[name] += t.get("amount", 0)
+    top_merchants = sorted(merchant_spend.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    # Monthly breakdown (last 6 months)
+    monthly: Dict[str, Dict[str, float]] = defaultdict(lambda: {"income": 0.0, "expense": 0.0})
+    for t in transactions:
+        try:
+            month = t["transaction_date"][:7]  # "YYYY-MM"
+            monthly[month][t.get("transaction_type", "expense")] += t.get("amount", 0)
+        except Exception:
+            continue
+    monthly_sorted = sorted(monthly.items(), reverse=True)[:6]
+
+    # Largest single transactions
+    largest_debits  = sorted(
+        [t for t in transactions if t.get("transaction_type") == "expense"],
+        key=lambda x: x.get("amount", 0), reverse=True
+    )[:5]
+    largest_credits = sorted(
+        [t for t in transactions if t.get("transaction_type") == "income"],
+        key=lambda x: x.get("amount", 0), reverse=True
+    )[:5]
+
+    # Date range
+    dates = [t["transaction_date"] for t in transactions if t.get("transaction_date")]
+    date_from = min(dates) if dates else "N/A"
+    date_to   = max(dates) if dates else "N/A"
+
+    # Account balances
+    account_info = [
+        f"{a.get('account_name', 'Account')} ({a.get('account_type', '')}): ₹{a.get('current_balance', 0):,.2f}"
+        for a in accounts
+    ]
+
+    return {
+        "date_range": f"{date_from} to {date_to}",
+        "total_transactions": tx_count,
+        "total_money_SPENT_inr": round(total_debit, 2),
+        "total_money_RECEIVED_inr": round(total_credit, 2),
+        "net_flow_inr": round(net_flow, 2),
+        "top_merchants_by_spend": [
+            {"merchant": m, "total_SPENT_inr": round(v, 2)} for m, v in top_merchants
+        ],
+        "monthly_summary": [
+            {
+                "month": m,
+                "money_SPENT_expenses_only_inr": round(v["expense"], 2),
+                "money_RECEIVED_income_only_inr": round(v["income"], 2),
+            }
+            for m, v in monthly_sorted
+        ],
+        "largest_EXPENSE_transactions": [
+            {
+                "date": t["transaction_date"],
+                "merchant": t.get("merchant_name") or t.get("description"),
+                "amount_SPENT_inr": t["amount"],
+                "type": "expense",
+            }
+            for t in largest_debits
+        ],
+        "largest_INCOME_transactions": [
+            {
+                "date": t["transaction_date"],
+                "merchant": t.get("merchant_name") or t.get("description"),
+                "amount_RECEIVED_inr": t["amount"],
+                "type": "income",
+            }
+            for t in largest_credits
+        ],
+        "account_balances": account_info,
     }
 
 
@@ -135,25 +261,18 @@ def _get_default_user_profile() -> dict:
 async def post_chat_message(request: ChatRequest) -> ChatResponse:
     """
     Main chat endpoint orchestrator.
-
-    Flow:
-      1. Load a fallback user profile (production: fetch from Supabase by user_id)
-      2. Call the async chatbot engine
-      3. Return structured ChatResponse
-      4. Any unhandled exception is caught and re-raised as HTTP 500
     """
-    # 1. Build user profile (production: replace with DB fetch)
+    # 1. Build user profile
     user_profile = _get_default_user_profile()
 
     # 1b. Fetch real-time transaction summary for live balances
     try:
-        from app.utils.nl2sql import _fetch_user_data, _build_summary
         user_data = _fetch_user_data(request.user_id)
         summary = _build_summary(user_data.get("transactions", []), user_data.get("accounts", []))
-        
+
         balances = summary.get("account_balances", [])
         user_profile["real_time_balances"] = "\n  - " + "\n  - ".join(balances) if balances else "N/A"
-        
+
         net_flow = summary.get("net_flow_inr", 0)
         user_profile["monthly_net_flow"] = f"₹{net_flow:,.2f}"
     except Exception as e:
@@ -168,21 +287,31 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
 
         config = {"configurable": {"thread_id": f"{request.user_id}:{request.thread_id}"}}
 
-        # The checkpointer restores state (including workflow state) for this thread
-        # if it exists. We just pass the new message in the initial_state override.
+        # Fetch the current state snapshot from checkpointer to preserve workflow state
+        state_snapshot = await finassist_graph.aget_state(config)
+        wf_state = {}
+        wf_active = False
+
+        if state_snapshot and state_snapshot.values:
+            wf_state = state_snapshot.values.get("workflow_state") or {}
+            wf_active = state_snapshot.values.get("workflow_active", False)
+
+        # Initialize state with correct argument names
         initial_state = make_initial_state(
             user_id=request.user_id,
-            thread_id=request.thread_id,
-            user_message=request.message,
+            session_id=request.thread_id,
+            user_query=request.message,
             user_profile=user_profile,
+            workflow_state=wf_state,
+            workflow_active=wf_active,
         )
 
         final_state = await finassist_graph.ainvoke(initial_state, config=config)
 
         # Retrieve outputs from the final state
-        answer = final_state.get("final_answer", "")
-        intent = final_state.get("final_intent", "general_finance")
-        sources = final_state.get("sources", [])
+        answer = final_state.get("final_answer") or final_state.get("raw_answer") or ""
+        intent = final_state.get("final_intent") or final_state.get("intent") or "FINANCIAL_KNOWLEDGE"
+        sources = final_state.get("sources") or []
 
     except ValueError as exc:
         logger.warning(
@@ -221,9 +350,8 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
     # 3. Build and return the response model
     return ChatResponse(
         answer=answer,
-        intent=intent,
+        intent=intent.lower(),  # Convert to lowercase to match expected frontend schema
         sources=sources,
         thread_id=request.thread_id,
         user_id=request.user_id,
     )
-# trigger reload

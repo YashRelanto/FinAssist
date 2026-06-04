@@ -1,21 +1,7 @@
 """
 graph/edges.py
 ==============
-All conditional edge router functions for the FinAssist LangGraph pipeline.
-
-Each router:
-  - Receives the current FinAssistState
-  - Returns a string that names the NEXT NODE (or "__end__")
-  - Contains zero business logic — only reads state fields set by nodes
-
-Router inventory:
-  route_after_input_guard       → "domain_scope"     | "__end__"
-  route_after_domain_scope      → "intent_classifier" | "__end__"
-  route_after_intent_classifier → "intent_router"     | "__end__"
-  route_after_intent_router     → "nl2sql" | "workflow_relevance" | "rag_retrieval"
-  route_after_workflow_relevance→ "workflow_slot" | "intent_router"
-  route_after_workflow_slot     → "advisor" | "__end__"
-  route_after_advisor           → "nl2sql" | "output_guardrail"
+Conditional routing functions for the FinAssist v2 LangGraph pipeline.
 """
 
 from __future__ import annotations
@@ -23,160 +9,130 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from app.graph.state import FinAssistState
+from app.graph.state import AgentState
 
 logger = logging.getLogger(__name__)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-
-def route_after_input_guard(
-    state: FinAssistState,
-) -> Literal["domain_scope", "__end__"]:
+def route_after_input_guardrail(
+    state: AgentState,
+) -> Literal["intent_node", "__end__"]:
     """
-    If input was blocked → END (final_answer already set by input_guardrail_node).
-    Otherwise → proceed to domain scope validation.
+    If the user input was blocked by guardrails -> END.
+    Otherwise -> intent_node.
     """
     if state.get("input_blocked"):
-        logger.debug("[Edge] input_guard → __end__ (blocked)")
+        logger.debug("[Edge] input_guardrail -> __end__ (blocked)")
         return "__end__"
-    logger.debug("[Edge] input_guard → domain_scope")
-    return "domain_scope"
+    logger.debug("[Edge] input_guardrail -> intent_node")
+    return "intent_node"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-
-def route_after_domain_scope(
-    state: FinAssistState,
-) -> Literal["intent_classifier", "__end__"]:
+def route_after_intent(
+    state: AgentState,
+) -> Literal["context_node", "workflow_relevance_node", "goal_planning_node", "__end__"]:
     """
-    If domain is out-of-scope → END (final_answer already set by domain_scope_node).
-    Otherwise → proceed to intent classification.
+    If a goal planning workflow is active -> route directly to workflow_relevance_node
+    to check if the reply is a slot value.
+    If out of scope -> END.
+    If new goal planning intent -> start fresh slot filling.
+    Otherwise -> context_node (normal flow).
     """
-    if not state.get("domain_supported", True):
-        logger.debug("[Edge] domain_scope → __end__ (out_of_scope)")
-        return "__end__"
-    logger.debug("[Edge] domain_scope → intent_classifier")
-    return "intent_classifier"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-def route_after_intent_classifier(
-    state: FinAssistState,
-) -> Literal["intent_router", "__end__"]:
-    """
-    If multi-intent resolution required clarification → END
-    (the clarification question is in final_answer).
-    Otherwise → proceed to intent routing.
-    """
-    if state.get("multi_intent_type") == "clarification_required":
-        logger.debug("[Edge] intent_classifier → __end__ (clarification_required)")
-        return "__end__"
-    logger.debug("[Edge] intent_classifier → intent_router")
-    return "intent_router"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-def route_after_intent_router(
-    state: FinAssistState,
-) -> Literal["nl2sql", "workflow_relevance", "rag_retrieval"]:
-    """
-    Routes the request to the correct specialised node based on:
-      1. selected_intent
-      2. workflow_active flag (is a HITL workflow already in progress?)
-
-    Decision matrix:
-      personal_transaction                       → nl2sql
-      financial_goal_planning + workflow_active  → workflow_relevance (check continuity)
-      financial_goal_planning + no active workflow → rag_retrieval (start slot filling fresh — workflow_slot_node handles init)
-      financial_knowledge                        → rag_retrieval
-
-    NOTE: When intent=financial_goal_planning and workflow is NOT active, we route to
-    rag_retrieval first, then advisor_node triggers WorkflowAgent.process() which will
-    initialise a new workflow state.  Alternatively we can route directly to workflow_slot_node.
-    We route to workflow_slot_node directly to avoid an unnecessary RAG call for goal planning.
-    """
-    intent          = state.get("selected_intent", "financial_knowledge")
     workflow_active = state.get("workflow_active", False)
+    intent = state.get("intent") or "FINANCIAL_KNOWLEDGE"
 
-    if intent == "personal_transaction":
-        logger.debug("[Edge] intent_router → nl2sql")
-        return "nl2sql"
+    if workflow_active:
+        logger.debug("[Edge] intent -> workflow_relevance_node (active workflow priority)")
+        return "workflow_relevance_node"
 
-    if intent == "financial_goal_planning":
-        if workflow_active:
-            logger.debug("[Edge] intent_router → workflow_relevance (active workflow)")
-            return "workflow_relevance"
-        else:
-            # New goal planning request — go directly to slot filling
-            logger.debug("[Edge] intent_router → workflow_slot (new workflow)")
-            return "workflow_slot"
+    if intent == "OUT_OF_SCOPE":
+        logger.debug("[Edge] intent -> __end__ (out of scope)")
+        return "__end__"
 
-    # Default: financial_knowledge (and any unexpected intent)
-    logger.debug("[Edge] intent_router → rag_retrieval")
-    return "rag_retrieval"
+    if intent == "GOAL_PLANNING":
+        logger.debug("[Edge] intent -> goal_planning_node (new)")
+        return "goal_planning_node"
 
+    logger.debug("[Edge] intent -> context_node")
+    return "context_node"
 
-# ─────────────────────────────────────────────────────────────────────────────
-
-def route_after_intent_router_goal(
-    state: FinAssistState,
-) -> Literal["workflow_slot", "rag_retrieval"]:
-    """
-    Secondary router only used for the financial_goal_planning + no-active-workflow path.
-    (Kept separate so the graph topology stays clean and readable.)
-    """
-    return "workflow_slot"
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 
 def route_after_workflow_relevance(
-    state: FinAssistState,
-) -> Literal["workflow_slot", "intent_router"]:
+    state: AgentState,
+) -> Literal["goal_planning_node", "context_node"]:
     """
-    If the message continues the active workflow → workflow_slot_node (keep filling slots).
-    If the user changed topic → route back to intent_router with the paused workflow state.
-    The intent_router will then pick the correct branch for the new topic.
+    If latest message is related to active goal planning -> goal_planning_node.
+    If unrelated -> context_node (workflow is paused).
     """
-    if state.get("workflow_related"):
-        logger.debug("[Edge] workflow_relevance → workflow_slot")
-        return "workflow_slot"
-    logger.debug("[Edge] workflow_relevance → intent_router (topic changed, workflow paused)")
-    return "intent_router"
+    if state.get("workflow_related", True):
+        logger.debug("[Edge] workflow_relevance -> goal_planning_node")
+        return "goal_planning_node"
+    logger.debug("[Edge] workflow_relevance -> context_node (workflow paused)")
+    return "context_node"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-
-def route_after_workflow_slot(
-    state: FinAssistState,
-) -> Literal["advisor", "__end__"]:
+def route_after_goal_planning(
+    state: AgentState,
+) -> Literal["answer_node", "__end__"]:
     """
-    If workflow_slot_node set final_answer (= still collecting slots) → END.
-    If all slots collected (advisor_ready) → advisor_node for final plan generation.
+    If goal slots are missing (final_answer set to a clarification question) -> END.
+    Otherwise (all slots filled) -> answer_node to generate the plan.
     """
     if state.get("final_answer"):
-        logger.debug("[Edge] workflow_slot → __end__ (awaiting clarification)")
+        logger.debug("[Edge] goal_planning -> __end__ (clarification needed)")
         return "__end__"
-    logger.debug("[Edge] workflow_slot → advisor (all slots filled)")
-    return "advisor"
+    logger.debug("[Edge] goal_planning -> answer_node (completed)")
+    return "answer_node"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-
-def route_after_advisor(
-    state: FinAssistState,
-) -> Literal["nl2sql", "output_guardrail"]:
+def route_after_clarification(
+    state: AgentState,
+) -> Literal["router_node", "__end__"]:
     """
-    If AdvisorAgent emitted ROUTE_TO_NL2SQL_TOKEN → reroute to nl2sql_node.
-    This is a failsafe: the intent classifier routes to financial_knowledge but
-    the LLM detects the question is actually about personal transaction data.
-    Otherwise → output_guardrail for PII masking + secret leak check.
+    If query is too ambiguous -> END.
+    Otherwise -> router_node.
     """
-    if state.get("route_to_nl2sql"):
-        logger.debug("[Edge] advisor → nl2sql (ROUTE_TO_NL2SQL failsafe)")
-        return "nl2sql"
-    logger.debug("[Edge] advisor → output_guardrail")
-    return "output_guardrail"
+    if state.get("clarification_needed"):
+        logger.debug("[Edge] clarification -> __end__ (ambiguous)")
+        return "__end__"
+    logger.debug("[Edge] clarification -> router_node")
+    return "router_node"
+
+
+def route_after_router(
+    state: AgentState,
+) -> Literal["transaction_agent", "comparison_agent", "trend_agent", "anomaly_agent", "rag_node"]:
+    """
+    Routes the execution to the corresponding specialized agent node or RAG node.
+    """
+    selected_agent = state.get("selected_agent") or "knowledge"
+
+    if selected_agent == "transaction":
+        logger.debug("[Edge] router -> transaction_agent")
+        return "transaction_agent"
+    if selected_agent == "comparison":
+        logger.debug("[Edge] router -> comparison_agent")
+        return "comparison_agent"
+    if selected_agent == "trend":
+        logger.debug("[Edge] router -> trend_agent")
+        return "trend_agent"
+    if selected_agent == "anomaly":
+        logger.debug("[Edge] router -> anomaly_agent")
+        return "anomaly_agent"
+
+    logger.debug("[Edge] router -> rag_node")
+    return "rag_node"
+
+
+def route_after_sql_validator(
+    state: AgentState,
+) -> Literal["sql_executor", "answer_node"]:
+    """
+    If the planned SQL AST is valid -> sql_executor.
+    If invalid -> answer_node directly (it will format the validation error).
+    """
+    if state.get("sql_valid", True):
+        logger.debug("[Edge] sql_validator -> sql_executor")
+        return "sql_executor"
+    logger.debug("[Edge] sql_validator -> answer_node (failed validation)")
+    return "answer_node"

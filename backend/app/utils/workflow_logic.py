@@ -5,8 +5,8 @@ import openai
 
 from app.core.config import settings
 from app.utils.prompts import (
-    SLOT_EXTRACTION_SYSTEM, 
-    SLOT_EXTRACTION_USER,
+    GOAL_SLOT_EXTRACTION_SYSTEM, 
+    GOAL_SLOT_EXTRACTION_USER,
     QUESTION_GENERATOR_SYSTEM,
     QUESTION_GENERATOR_USER
 )
@@ -87,10 +87,10 @@ class WorkflowLogic:
             response = client.chat.completions.create(
                 model=settings.active_chat_model,
                 messages=[
-                    {"role": "system", "content": SLOT_EXTRACTION_SYSTEM},
+                    {"role": "system", "content": GOAL_SLOT_EXTRACTION_SYSTEM},
                     {
                         "role": "user",
-                        "content": SLOT_EXTRACTION_USER.format(
+                        "content": GOAL_SLOT_EXTRACTION_USER.format(
                             state_json=state_json,
                             history=history_str,
                             message=user_message
@@ -123,6 +123,9 @@ class WorkflowLogic:
         if isinstance(new_slots, dict):
             for k, v in new_slots.items():
                 if v is not None:
+                    # Ignore placeholder strings that mean missing or unknown values
+                    if isinstance(v, str) and str(v).lower().strip() in ("not provided", "unknown", "none", "n/a", "null", ""):
+                        continue
                     state.setdefault("collected_information", {})[k] = v
                     
         logger.info("[WorkflowLogic] Persisted Slots in state: %s", state["collected_information"])
