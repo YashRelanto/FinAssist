@@ -7,6 +7,10 @@ export interface AnalysisResult {
     totalUnknown: number;
     highAmountAnomalies: number;
   };
+  bankName?: string;
+  accountNumber?: string;
+  accountHolder?: string;
+  ifsc?: string;
 }
 
 export interface ParseError extends Error {
@@ -18,13 +22,17 @@ const HIGH_AMOUNT_THRESHOLD = 5000;
 export const analyzeStatementFile = async (
   file: File,
   categories: Category[],
-  password?: string
+  password?: string,
+  userId?: string
 ): Promise<AnalysisResult> => {
   try {
     const formData = new FormData();
     formData.append('file', file);
     if (password) {
       formData.append('password', password);
+    }
+    if (userId) {
+      formData.append('user_id', userId);
     }
 
     const response = await fetch('http://localhost:8000/api/statement/parse-file', {
@@ -59,32 +67,42 @@ export const analyzeStatementFile = async (
 
     // Now we map the parsed transactions to the frontend structure
     const backendTxs = data.transactions || [];
-    
     const transactions: Omit<Transaction, 'id'>[] = backendTxs.map((t: any) => {
       // Map main category and subcategory from backend or categorize locally
-      // Try to match description to a category
       let matchedCategory = 'Uncategorized';
       let matchedSubCategory: string | undefined = undefined;
 
-      const desc = (t.description || '').toLowerCase();
-      
-      // Simple frontend categorization matching keywords
-      for (const cat of categories) {
-        if (desc.includes(cat.name.toLowerCase())) {
-          matchedCategory = cat.name;
-          if (cat.subCategories && cat.subCategories.length > 0) {
-            matchedSubCategory = cat.subCategories[0].name;
+      if (t.category_name) {
+        const found = categories.find(c => c.name.toLowerCase() === t.category_name.toLowerCase());
+        if (found) {
+          matchedCategory = found.name;
+          if (found.subCategories && found.subCategories.length > 0) {
+            matchedSubCategory = found.subCategories[0].name;
           }
-          break;
         }
-        for (const sub of cat.subCategories || []) {
-          if (desc.includes(sub.name.toLowerCase())) {
+      }
+
+      if (matchedCategory === 'Uncategorized') {
+        const desc = (t.description || '').toLowerCase();
+        
+        // Simple frontend categorization matching keywords
+        for (const cat of categories) {
+          if (desc.includes(cat.name.toLowerCase())) {
             matchedCategory = cat.name;
-            matchedSubCategory = sub.name;
+            if (cat.subCategories && cat.subCategories.length > 0) {
+              matchedSubCategory = cat.subCategories[0].name;
+            }
             break;
           }
+          for (const sub of cat.subCategories || []) {
+            if (desc.includes(sub.name.toLowerCase())) {
+              matchedCategory = cat.name;
+              matchedSubCategory = sub.name;
+              break;
+            }
+          }
+          if (matchedCategory !== 'Uncategorized') break;
         }
-        if (matchedCategory !== 'Uncategorized') break;
       }
 
       // Check transaction type to set correct sign for amount
@@ -115,7 +133,14 @@ export const analyzeStatementFile = async (
       highAmountAnomalies: transactions.filter(t => Math.abs(t.amount) > HIGH_AMOUNT_THRESHOLD).length
     };
 
-    return { transactions, summary };
+    return { 
+      transactions, 
+      summary,
+      bankName: data.bank_name,
+      accountNumber: data.account_number,
+      accountHolder: data.account_holder,
+      ifsc: data.ifsc
+    };
   } catch (err: any) {
     if (err.type) {
       throw err;

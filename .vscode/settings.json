@@ -8,6 +8,6 @@
         ".mule": true
     },
     "git.ignoreLimitWarning": true,
-    "workbench.preferredHighContrastLightColorTheme": "Default Dark+",
+    "workbench.preferredHighContrastLightColorTheme": "Dark+",
     "workbench.preferredLightColorTheme": "Cursor Dark Midnight"
 }

@@ -1,0 +1,301 @@
+ACCOUNT STATEMENT
+Txn Date
+Value Date
+Particulars
+Ref. No.
+Debit
+Credit
+Balance
+01-APR-2026
+ 01-APR-2026
+ B/F...
+ -
+ -
+ -
+ 12,101.93
+31-MAR-2026
+23:05:37
+ 31-MAR-2026
+ UPI-DR-609061952221-
+srinithi1820041okicici-IOBA-25
+ 609061952221
+ 10,000.00
+ 0.00
+ 2,101.93
+03-APR-2026
+16:04:13
+ 03-APR-2026
+ UPI-CR-609332649697-SRINITHI V-ICIC-
+812701500459-U
+ 609332649697
+ 0.00
+ 10,000.00
+ 12,101.93
+11-APR-2026
+13:10:52
+ 11-APR-2026
+ UPI-DR-610114233287-
+srinithi1820041okicici-IOBA-25
+ 610114233287
+ 2,000.00
+ 0.00
+ 10,101.93
+13-APR-2026
+09:35:38
+ 13-APR-2026
+ UPI-DR-646908778742-ZERODHA
+BROKING LIMITED-ICIC-0
+ 646908778742
+ 1,000.00
+ 0.00
+ 9,101.93
+15-APR-2026
+11:27:32
+ 15-APR-2026
+ CASH DEP-SELF-SELF-VALAYAPATTI
+-
+ 0.00
+ 37,000.00
+ 46,101.93
+18-APR-2026
+19:46:38
+ 18-APR-2026
+ UPI-CR-647440964231-SRINITHI  V-
+IOBA-2551010000114
+ 647440964231
+ 0.00
+ 2,000.00
+ 48,101.93
+24-APR-2026
+13:09:52
+ 24-APR-2026
+ UPI-DR-648011586237-ZERODHA
+BROKING LIMITED-ICIC-0
+ 648011586237
+ 1,000.00
+ 0.00
+ 47,101.93
+24-APR-2026
+15:58:40
+ 24-APR-2026
+ CASH DEP-SELF-SELF-VALAYAPATTI
+-
+ 0.00
+ 41,850.00
+ 88,951.93
+25-APR-2026
+09:56:54
+ 25-APR-2026
+ UPI-DR-611543832777-COUSHIK N V-
+KVBL-1205153000001
+ 611543832777
+ 39,550.00
+ 0.00
+ 49,401.93
+25-APR-2026
+09:59:21
+ 25-APR-2026
+ UPI-DR-611514546196-V SRIDEVI-
+HDFC-50100693347789-
+ 611514546196
+ 2,300.00
+ 0.00
+ 47,101.93
+27-APR-2026
+20:52:02
+ 27-APR-2026
+ UPI-DR-611796628350-SURYA K-KVBL-
+1205155000144212-
+ 611796628350
+ 7,000.00
+ 0.00
+ 40,101.93
+ACCOUNT SUMMARY
+Current Balance
+SRINITHI V
+3/290 MARIYAMMAN KOVIL STREET
+VALAYAPATTY po
+NAMAKKAL
+Tamil Nadu
+637020
+41,981.93
+Acc.No.
+: 1205155000138775
+Customer ID : 7148193
+Acc. Type
+: SB - RESIDENT
+St. Date
+: 01-Jun-2026 08.05 PM
+St. Period
+: 01-Apr-2026 to 01-Jun-2026
+Mobile No.
+: 918610212991
+Email Id
+: srinithi182004@gmail.com
+Trans.Type
+: Both
+1
+Note: This is a computer-generated report and does not require signature.
+ACCOUNT STATEMENT
+Txn Date
+Value Date
+Particulars
+Ref. No.
+Debit
+Credit
+Balance
+29-APR-2026
+17:47:09
+ 29-APR-2026
+ UPI-DR-648568764549-T  HEMALATHA-
+SBIN-000000317339
+ 648568764549
+ 3,000.00
+ 0.00
+ 37,101.93
+02-MAY-2026
+10:08:06
+ 02-MAY-2026
+ UPI-DR-648844423496-DASARATHAN
+DHARMAKARTHA-IOBA-
+ 648844423496
+ 2,000.00
+ 0.00
+ 35,101.93
+02-MAY-2026
+11:11:19
+ 02-MAY-2026
+ UPI-DR-648838532714-
+cksureshkongu1984okicici-UBIN-
+ 648838532714
+ 25,000.00
+ 0.00
+ 10,101.93
+02-MAY-2026
+11:56:07
+ 02-MAY-2026
+ UPI-CR-648895950637-SRINITHI V-ICIC-
+812701500459-U
+ 648895950637
+ 0.00
+ 22,000.00
+ 32,101.93
+02-MAY-2026
+22:03:28
+ 02-MAY-2026
+ RD Installment Drawdown - May 2026 -
+1205160000017
+-
+ 6,000.00
+ 0.00
+ 26,101.93
+04-MAY-2026
+17:55:50
+ 04-MAY-2026
+ UPI-CR-649094301445-SRINITHI  V-
+IOBA-2551010000114
+ 649094301445
+ 0.00
+ 380.00
+ 26,481.93
+12-MAY-2026
+09:57:45
+ 12-MAY-2026
+ UPI-DR-613246984733-ZERODHA
+BROKING LIMITED-ICIC-0
+ 613246984733
+ 1,500.00
+ 0.00
+ 24,981.93
+12-MAY-2026
+15:14:29
+ 12-MAY-2026
+ UPI-DR-649873010649-ZERODHA
+BROKING LIMITED-ICIC-0
+ 649873010649
+ 1,000.00
+ 0.00
+ 23,981.93
+26-MAY-2026
+15:42:55
+ 26-MAY-2026
+ CASH DEP-SELF-SELF-VALAYAPATTI
+-
+ 0.00
+ 48,550.00
+ 72,531.93
+27-MAY-2026
+13:23:29
+ 27-MAY-2026
+ UPI-DR-651340090088-COUSHIK N V-
+KVBL-1205153000001
+ 651340090088
+ 12,950.00
+ 0.00
+ 59,581.93
+27-MAY-2026
+13:25:49
+ 27-MAY-2026
+ UPI-DR-651392499987-V SRIDEVI-
+HDFC-50100693347789-
+ 651392499987
+ 35,600.00
+ 0.00
+ 23,981.93
+29-MAY-2026
+15:26:42
+ 29-MAY-2026
+ UPI-DR-651562860655-ZERODHA
+BROKING LIMITED-ICIC-0
+ 651562860655
+ 1,000.00
+ 0.00
+ 22,981.93
+30-MAY-2026
+10:23:25
+ 30-MAY-2026
+ UPI-CR-651693894692-SRINITHI V-ICIC-
+812701500459-U
+ 651693894692
+ 0.00
+ 22,000.00
+ 44,981.93
+01-JUN-2026
+11:39:06
+ 01-JUN-2026
+ UPI-DR-651855670828-ZERODHA
+BROKING LIMITED-HDFC-5
+ 651855670828
+ 3,000.00
+ 0.00
+ 41,981.93
+2
+Note: This is a computer-generated report and does not require signature.
+ACCOUNT STATEMENT
+Statements are sent to customers only where transactions are made in the account during the period of
+statement.
+Unless the constituent notifies the bank immediately of any discrepancy found by him/her in this statement of
+account, it will be taken that he / she has found the account correct.
+We would like to reiterate that as a policy, KVB does not ask you to part with / disclose / revalidate your connect
+password, login id and debit card number through emails or phone calls. Further we would like to reiterate that
+KVB shall not be liable for any losses arising from you sharing / disclosing your loginID, Password and debit card
+number to any one. Please co-operate by forwarding all such suspicious spam e-mails, if received by you to
+eservice@kvbmail.com.
+***************************************************ACRONYMS
+BRN -> Branch Code
+To CLG -> Clearing Debit
+TD -> Term Deposit
+CSW -> Cash Withdrawal
+By CLG -> Clearing Credit
+FTD -> Funds Transfer
+SI -> Standing Instructions
+LN -> Loan
+FD -> Fixed Deposit
+*******************************************************************************************************
+HOME BRANCH :
+ADDRESS :
+VALAYAPATTI
+S.F.No.362/8, New S.F.No.362/8A,, Trichy Main Road,VALAYAPATTI, NAMAKKAL DIST., TAMIL NADU,
+VALAYAPATTI, TAMIL NADU, 637020
+3
+Note: This is a computer-generated report and does not require signature.

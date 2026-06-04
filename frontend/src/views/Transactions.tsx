@@ -146,9 +146,9 @@ export const Transactions: React.FC = () => {
     setIsUploading(true);
     setUploadError(null);
     try {
-      const { transactions } = await analyzeStatementFile(file, categories, password);
-
       const uid = activeUserId(user);
+      const { transactions } = await analyzeStatementFile(file, categories, password, uid || undefined);
+
       if (uid) {
         const ingestRes = await apiFetch('/api/statement/ingest', {
           method: 'POST',

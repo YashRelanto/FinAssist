@@ -7,7 +7,7 @@ from typing import Any
 from app.utils.supabase_client import supabase
 
 ACCOUNT_BASE_COLUMNS = (
-    "account_id,user_id,account_name,account_type,current_balance,created_at"
+    "account_id,user_id,account_name,account_type,current_balance,bank_name,account_holder,account_number,ifsc,created_at"
 )
 
 
