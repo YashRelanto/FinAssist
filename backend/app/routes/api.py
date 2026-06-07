@@ -512,8 +512,10 @@ async def get_accounts(user_id: str):
 @router.delete("/accounts/{account_id}")
 async def delete_account(account_id: str):
     try:
+        # Cascade delete transactions associated with this account first
+        supabase.table("transactions").delete().eq("account_id", account_id).execute()
         supabase.table("accounts").delete().eq("account_id", account_id).execute()
-        return {"success": True, "message": "Account deleted successfully"}
+        return {"success": True, "message": "Account and associated transactions deleted successfully"}
     except Exception as e:
         print(f"Error deleting account: {e}")
         raise HTTPException(status_code=500, detail=str(e))

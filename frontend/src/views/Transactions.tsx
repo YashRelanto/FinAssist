@@ -26,6 +26,7 @@ export const Transactions: React.FC = () => {
     loadAccounts,
     loadDbCategories,
   } = useAppContext();
+  const [isLoading, setIsLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | undefined>(undefined);
@@ -43,7 +44,10 @@ export const Transactions: React.FC = () => {
 
   React.useEffect(() => {
     if (authReady && user?.isAuthenticated && activeUserId(user)) {
-      loadTransactions();
+      setIsLoading(true);
+      loadTransactions().finally(() => {
+        setIsLoading(false);
+      });
       loadAccounts();
       loadDbCategories();
     }
@@ -210,7 +214,7 @@ export const Transactions: React.FC = () => {
     );
   }), [transactions, search, selectedAccount, selectedCategory, selectedType, analysisPeriod]);
 
-  if (!transactions.length && authReady && user?.isAuthenticated) {
+  if (isLoading && authReady && user?.isAuthenticated) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>

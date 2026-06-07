@@ -30,7 +30,7 @@ interface AppContextType {
   addTransactions: (ts: Omit<Transaction, 'id'>[]) => void;
   updateTransaction: (id: string, t: Partial<Transaction>, onComplete?: (success: boolean) => void) => void;
   deleteTransaction: (id: string) => void;
-  loadTransactions: () => void;
+  loadTransactions: () => Promise<void>;
   loadAccounts: () => void;
   loadDbCategories: () => void;
   analysisPeriod: AnalysisPeriod;
@@ -386,17 +386,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => window.removeEventListener("hashchange", handleHashAuth);
   }, []);
 
-  const loadTransactions = useCallback(() => {
+  const loadTransactions = useCallback((): Promise<void> => {
     if (!isAuthed || !uid) {
       setTransactions([]);
-      return;
+      return Promise.resolve();
     }
 
     const now = Date.now();
-    if (now - lastLoadedRef.current.transactions < TTL.transactionsMs) return;
-    if (inflightRef.current.transactions) return;
+    if (now - lastLoadedRef.current.transactions < TTL.transactionsMs) {
+      return Promise.resolve();
+    }
+    if (inflightRef.current.transactions) {
+      return inflightRef.current.transactions;
+    }
 
-    inflightRef.current.transactions = apiFetch(
+    const promise = apiFetch(
       `/api/transactions?user_id=${encodeURIComponent(uid)}`
     )
       .then((res) => {
@@ -415,6 +419,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .finally(() => {
         inflightRef.current.transactions = undefined;
       });
+
+    inflightRef.current.transactions = promise;
+    return promise;
   }, [isAuthed, uid]);
 
   const loadAccounts = useCallback(() => {

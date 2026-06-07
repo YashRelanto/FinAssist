@@ -101,7 +101,7 @@ CREATE TABLE public.transactions (
   running_balance numeric,
   CONSTRAINT transactions_pkey PRIMARY KEY (transaction_id),
   CONSTRAINT transactions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(user_id),
-  CONSTRAINT transactions_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(account_id),
+  CONSTRAINT transactions_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(account_id) ON DELETE CASCADE,
   CONSTRAINT fk_transactions_category FOREIGN KEY (category_id) REFERENCES public.categories(category_id)
 );
 CREATE TABLE public.users (
