@@ -1,8 +1,6 @@
 import React from 'react';
 
 import { useAppContext } from '../context/AppContext';
-import { activeUserId } from '../lib/activeUserId';
-import { apiFetch } from '../lib/api';
 
 import { SummaryCards } from '../components/Dashboard/SummaryCards';
 import { FinancialPerformanceChart } from '../components/Dashboard/FinancialPerformanceChart';
@@ -18,80 +16,41 @@ import { ForecastPredictionCard } from '../components/Dashboard/ForecastPredicti
 import { AccountModal } from '../components/AccountModal';
 
 export const Dashboard: React.FC = () => {
-  const { user } = useAppContext();
-
-  const [dashboardData, setDashboardData] = React.useState<any>(null);
-  const [loading, setLoading] = React.useState(true);
+  const { user, dashboardSummary, loadDashboardSummary } = useAppContext();
+  const [loading, setLoading] = React.useState(false);
   const [isAccountModalOpen, setIsAccountModalOpen] = React.useState(false);
 
-  const fetchDashboardData = async (options?: { silent?: boolean }) => {
-    const uid = activeUserId(user);
-    if (!uid) return;
-    try {
-      if (!options?.silent) {
-        setLoading(true);
+  const fetchDashboardData = React.useCallback(
+    async (options?: { silent?: boolean; force?: boolean }) => {
+      try {
+        if (!options?.silent) setLoading(true);
+        await loadDashboardSummary({ force: options?.force });
+      } finally {
+        if (!options?.silent) setLoading(false);
       }
-
-      const response = await apiFetch(
-        `/api/dashboard-summary?user_id=${encodeURIComponent(uid)}`
-      );
-
-      const data = await response.json();
-
-      if (data.success) {
-        setDashboardData(data);
-      } else {
-        console.error('Dashboard summary failed:', data.detail ?? data);
-      }
-    } catch (error) {
-      console.error(
-        'Failed to connect to backend dashboard API',
-        error
-      );
-    } finally {
-      if (!options?.silent) {
-        setLoading(false);
-      }
-    }
-  };
+    },
+    [loadDashboardSummary],
+  );
 
   const handleAccountCreated = (account: Record<string, unknown>) => {
-    setDashboardData((prev) => {
-      if (!prev) {
-        return {
-          success: true,
-          accounts: [account],
-          summary: {},
-          chart_data: [],
-          recent_transactions: [],
-          expense_breakdown_month: [],
-          budget_utilization: [],
-        };
-      }
-      const existing = (prev.accounts ?? []) as Record<string, unknown>[];
-      const accountId = account.account_id as string | undefined;
-      if (accountId && existing.some((a) => a.account_id === accountId)) {
-        return prev;
-      }
-      return { ...prev, accounts: [...existing, account] };
-    });
-    void fetchDashboardData({ silent: true });
+    // Dashboard is centralized now; just force refresh.
+    void fetchDashboardData({ silent: true, force: true });
   };
 
   React.useEffect(() => {
-    if (user?.isAuthenticated && activeUserId(user)) {
+    if (user?.isAuthenticated) {
       fetchDashboardData();
     }
-  }, [user?.isAuthenticated, user?.userId, user?.id]);
+  }, [user?.isAuthenticated, fetchDashboardData]);
 
   React.useEffect(() => {
     if (!user?.isAuthenticated) return;
-    const onFocus = () => fetchDashboardData();
+    const onFocus = () => fetchDashboardData({ silent: true });
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, [user?.isAuthenticated, user?.userId, user?.id]);
+  }, [user?.isAuthenticated, fetchDashboardData]);
 
-  if (loading && !dashboardData) {
+  if ((loading || !dashboardSummary) && user?.isAuthenticated) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
@@ -99,11 +58,16 @@ export const Dashboard: React.FC = () => {
     );
   }
 
+  const dashboardData = dashboardSummary;
+
   return (
     <div className="space-y-8 pb-10">
       
       {/* Summary Cards */}
-      <SummaryCards data={dashboardData?.summary} />
+      <SummaryCards
+        data={dashboardData?.summary}
+        periodLabel={dashboardData?.period_label}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         <ForecastPredictionCard />
@@ -169,7 +133,7 @@ export const Dashboard: React.FC = () => {
         
         {/* Quick Add Form */}
         <QuickAddForm
-          onSuccess={fetchDashboardData}
+          onSuccess={() => fetchDashboardData({ force: true })}
           accounts={dashboardData?.accounts}
         />
 

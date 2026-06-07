@@ -10,9 +10,11 @@ interface SummaryCardsProps {
     net_savings: number;
     savings_rate: number;
   };
+  periodLabel?: string;
 }
 
-export const SummaryCards: React.FC<SummaryCardsProps> = ({ data }) => {
+export const SummaryCards: React.FC<SummaryCardsProps> = ({ data, periodLabel }) => {
+  const periodHint = periodLabel ?? 'Selected period';
   const netSavings = data?.net_savings ?? 0;
   const savingsRate = data?.savings_rate ?? 0;
 
@@ -27,15 +29,15 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({ data }) => {
     {
       label: 'Monthly Income',
       value: `+${formatCurrency(data?.monthly_income || 0)}`,
-      trend: 'This month',
+      trend: periodHint,
       up: null,
-      desc: 'Calendar month',
+      desc: 'Calendar months',
       color: 'text-secondary',
     },
     {
-      label: 'Monthly Expenses',
+      label: 'Period Expenses',
       value: `-${formatCurrency(data?.monthly_expenses || 0)}`,
-      trend: 'This month',
+      trend: periodHint,
       up: false as boolean | null,
       desc: 'Excl. transfers',
       color: 'text-error',

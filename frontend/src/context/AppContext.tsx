@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Transaction, Goal, Category, Report, HeatmapData, UserProfile, Budget } from '../types';
 import { format, eachDayOfInterval, startOfYear, endOfYear } from 'date-fns';
 import {
@@ -10,17 +10,40 @@ import {
 } from '../lib/authSession';
 import { apiFetch } from '../lib/api';
 import { activeUserId } from '../lib/activeUserId';
+import {
+  type AnalysisPeriod,
+  DEFAULT_ANALYSIS_PERIOD,
+  loadStoredAnalysisPeriod,
+  storeAnalysisPeriod,
+} from '../lib/analysisPeriod';
 
 interface AppContextType {
   user: UserProfile;
   updateUser: (u: Partial<UserProfile>) => void;
   
   transactions: Transaction[];
+  accounts: any[];
+  dbCategories: string[];
+  dashboardSummary: any | null;
+  budgetGoalsSummary: any | null;
   addTransaction: (t: Omit<Transaction, 'id'>) => void;
   addTransactions: (ts: Omit<Transaction, 'id'>[]) => void;
   updateTransaction: (id: string, t: Partial<Transaction>, onComplete?: (success: boolean) => void) => void;
   deleteTransaction: (id: string) => void;
   loadTransactions: () => void;
+  loadAccounts: () => void;
+  loadDbCategories: () => void;
+  analysisPeriod: AnalysisPeriod;
+  setAnalysisPeriod: (period: AnalysisPeriod) => void;
+  loadDashboardSummary: (options?: { force?: boolean }) => Promise<void>;
+  loadBudgetGoalsSummary: (options?: { force?: boolean }) => Promise<void>;
+  loadForecast: (params: {
+    period?: AnalysisPeriod;
+    accountId?: string;
+    categoryId?: string;
+    merchant?: string;
+    force?: boolean;
+  }) => Promise<any | null>;
   budgets: Budget[];
   addBudget: (b: Omit<Budget, 'id'>) => void;
   updateBudget: (id: string, b: Partial<Budget>) => void;
@@ -58,6 +81,17 @@ interface AppContextType {
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
+
+const TTL = {
+  transactionsMs: 30_000,
+  accountsMs: 60_000,
+  budgetsMs: 60_000,
+  goalsMs: 60_000,
+  dbCategoriesMs: 5 * 60_000,
+  dashboardSummaryMs: 30_000,
+  budgetGoalsSummaryMs: 30_000,
+  forecastMs: 30_000,
+};
 
 const initialUser: UserProfile = {
   id: '',
@@ -186,10 +220,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [user, setUser] = useState<UserProfile>(initialUser);
   const [authReady, setAuthReady] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [dbCategories, setDbCategories] = useState<string[]>([]);
+  const [dashboardSummary, setDashboardSummary] = useState<any | null>(null);
+  const [budgetGoalsSummary, setBudgetGoalsSummary] = useState<any | null>(null);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [categories, setCategories] = useState<Category[]>(initialCategories);
   const [currentPage, setCurrentPage] = useState('dashboard');
+  const [analysisPeriod, setAnalysisPeriodState] = useState<AnalysisPeriod>(
+    () => loadStoredAnalysisPeriod(),
+  );
   const [pendingDate, setPendingDate] = useState<string | null>(null);
   const [reports, setReports] = useState<Report[]>([
     { id: '1', title: 'Monthly Summary', date: 'Sept 2023', size: '2.4 MB', type: 'PDF' },
@@ -224,6 +265,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return newUser;
     });
   };
+
+  const uid = useMemo(() => activeUserId(user), [user]);
+  const isAuthed = !!(authReady && user.isAuthenticated && uid);
+
+  const lastLoadedRef = useRef({
+    transactions: 0,
+    accounts: 0,
+    budgets: 0,
+    goals: 0,
+    dbCategories: 0,
+    dashboardSummary: 0,
+    budgetGoalsSummary: 0,
+  });
+
+  const inflightRef = useRef<{
+    transactions?: Promise<void>;
+    accounts?: Promise<void>;
+    budgets?: Promise<void>;
+    goals?: Promise<void>;
+    dbCategories?: Promise<void>;
+    dashboardSummary?: Promise<void>;
+    budgetGoalsSummary?: Promise<void>;
+    forecast?: Map<string, Promise<any | null>>;
+  }>({ forecast: new Map() });
+
+  const forecastCacheRef = useRef<
+    Map<
+      string,
+      {
+        ts: number;
+        data: any;
+      }
+    >
+  >(new Map());
+
+  const setAnalysisPeriod = useCallback((period: AnalysisPeriod) => {
+    setAnalysisPeriodState(period);
+    storeAnalysisPeriod(period);
+    lastLoadedRef.current.dashboardSummary = 0;
+    lastLoadedRef.current.budgetGoalsSummary = 0;
+    forecastCacheRef.current.clear();
+  }, []);
 
   // Restore persisted auth session on reload
   useEffect(() => {
@@ -304,56 +387,133 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const loadTransactions = useCallback(() => {
-    const uid = activeUserId(user);
-    if (!uid) {
+    if (!isAuthed || !uid) {
       setTransactions([]);
       return;
     }
 
-    apiFetch(`/api/transactions?user_id=${encodeURIComponent(uid)}`)
-      .then(res => {
+    const now = Date.now();
+    if (now - lastLoadedRef.current.transactions < TTL.transactionsMs) return;
+    if (inflightRef.current.transactions) return;
+
+    inflightRef.current.transactions = apiFetch(
+      `/api/transactions?user_id=${encodeURIComponent(uid)}`
+    )
+      .then((res) => {
         if (!res.ok) throw new Error('Could not load transactions from database');
         return res.json();
       })
-      .then(data => {
+      .then((data) => {
         const rows = Array.isArray(data?.data) ? data.data : [];
         setTransactions(rows);
+        lastLoadedRef.current.transactions = Date.now();
       })
-      .catch(err => {
+      .catch((err) => {
         console.warn('Failed to load transactions from database:', err);
         setTransactions([]);
+      })
+      .finally(() => {
+        inflightRef.current.transactions = undefined;
       });
-  }, [user]);
+  }, [isAuthed, uid]);
+
+  const loadAccounts = useCallback(() => {
+    if (!isAuthed || !uid) {
+      setAccounts([]);
+      return;
+    }
+    const now = Date.now();
+    if (now - lastLoadedRef.current.accounts < TTL.accountsMs) return;
+    if (inflightRef.current.accounts) return;
+
+    inflightRef.current.accounts = apiFetch(
+      `/api/accounts?user_id=${encodeURIComponent(uid)}`
+    )
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.data)) {
+          setAccounts(data.data);
+        } else {
+          setAccounts([]);
+        }
+        lastLoadedRef.current.accounts = Date.now();
+      })
+      .catch((err) => {
+        console.warn('Failed to load accounts:', err);
+        setAccounts([]);
+      })
+      .finally(() => {
+        inflightRef.current.accounts = undefined;
+      });
+  }, [isAuthed, uid]);
+
+  const loadDbCategories = useCallback(() => {
+    if (!authReady) return;
+    const now = Date.now();
+    if (now - lastLoadedRef.current.dbCategories < TTL.dbCategoriesMs) return;
+    if (inflightRef.current.dbCategories) return;
+
+    inflightRef.current.dbCategories = apiFetch('/api/categories')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && Array.isArray(data.data)) {
+          setDbCategories(data.data);
+        } else {
+          setDbCategories([]);
+        }
+        lastLoadedRef.current.dbCategories = Date.now();
+      })
+      .catch((err) => {
+        console.warn('Failed to load categories:', err);
+      })
+      .finally(() => {
+        inflightRef.current.dbCategories = undefined;
+      });
+  }, [authReady]);
 
   const loadBudgets = useCallback(() => {
-    const uid = activeUserId(user);
-    if (!uid) {
+    if (!isAuthed || !uid) {
       setBudgets([]);
       return;
     }
 
-    apiFetch(`/api/budgets?user_id=${encodeURIComponent(uid)}`)
-      .then(res => res.json())
-      .then(data => {
+    const now = Date.now();
+    if (now - lastLoadedRef.current.budgets < TTL.budgetsMs) return;
+    if (inflightRef.current.budgets) return;
+
+    inflightRef.current.budgets = apiFetch(
+      `/api/budgets?user_id=${encodeURIComponent(uid)}`
+    )
+      .then((res) => res.json())
+      .then((data) => {
         if (data.success && Array.isArray(data.data)) {
           setBudgets(data.data);
         } else {
           setBudgets([]);
         }
+        lastLoadedRef.current.budgets = Date.now();
       })
-      .catch(err => console.error('Failed to load budgets:', err));
-  }, [user]);
+      .catch((err) => console.error('Failed to load budgets:', err))
+      .finally(() => {
+        inflightRef.current.budgets = undefined;
+      });
+  }, [isAuthed, uid]);
 
   const loadGoals = useCallback(() => {
-    const uid = activeUserId(user);
-    if (!uid) {
+    if (!isAuthed || !uid) {
       setGoals([]);
       return;
     }
 
-    apiFetch(`/api/goals?user_id=${encodeURIComponent(uid)}`)
-      .then(res => res.json())
-      .then(data => {
+    const now = Date.now();
+    if (now - lastLoadedRef.current.goals < TTL.goalsMs) return;
+    if (inflightRef.current.goals) return;
+
+    inflightRef.current.goals = apiFetch(
+      `/api/goals?user_id=${encodeURIComponent(uid)}`
+    )
+      .then((res) => res.json())
+      .then((data) => {
         if (data.success && Array.isArray(data.data)) {
           const icons = ['Target', 'ShieldCheck', 'PlaneTakeoff', 'Laptop'];
           const colors = ['bg-primary', 'bg-secondary', 'bg-tertiary', 'bg-outline'];
@@ -366,15 +526,156 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else {
           setGoals([]);
         }
+        lastLoadedRef.current.goals = Date.now();
       })
-      .catch(err => console.error('Failed to load goals:', err));
-  }, [user]);
+      .catch((err) => console.error('Failed to load goals:', err))
+      .finally(() => {
+        inflightRef.current.goals = undefined;
+      });
+  }, [isAuthed, uid]);
 
   const refreshUserData = useCallback(() => {
     loadTransactions();
+    loadAccounts();
     loadBudgets();
     loadGoals();
-  }, [loadTransactions, loadBudgets, loadGoals]);
+  }, [loadTransactions, loadAccounts, loadBudgets, loadGoals]);
+
+  const loadDashboardSummary = useCallback(
+    async (options?: { force?: boolean }) => {
+      if (!isAuthed || !uid) {
+        setDashboardSummary(null);
+        return;
+      }
+
+      const now = Date.now();
+      if (!options?.force) {
+        if (now - lastLoadedRef.current.dashboardSummary < TTL.dashboardSummaryMs) return;
+        if (inflightRef.current.dashboardSummary) return inflightRef.current.dashboardSummary;
+      }
+
+      inflightRef.current.dashboardSummary = apiFetch(
+        `/api/dashboard-summary?user_id=${encodeURIComponent(uid)}&period=${encodeURIComponent(analysisPeriod)}`,
+      )
+        .then((res) => res.json())
+        .then((data) => {
+          if (data?.success) {
+            setDashboardSummary(data);
+            lastLoadedRef.current.dashboardSummary = Date.now();
+          }
+        })
+        .catch((err) => {
+          console.warn('Failed to load dashboard summary:', err);
+        })
+        .finally(() => {
+          inflightRef.current.dashboardSummary = undefined;
+        });
+
+      return inflightRef.current.dashboardSummary;
+    },
+    [isAuthed, uid, analysisPeriod],
+  );
+
+  const loadBudgetGoalsSummary = useCallback(
+    async (options?: { force?: boolean }) => {
+      if (!isAuthed || !uid) {
+        setBudgetGoalsSummary(null);
+        return;
+      }
+      const now = Date.now();
+      if (!options?.force) {
+        if (
+          now - lastLoadedRef.current.budgetGoalsSummary < TTL.budgetGoalsSummaryMs
+        )
+          return;
+        if (inflightRef.current.budgetGoalsSummary) {
+          return inflightRef.current.budgetGoalsSummary;
+        }
+      }
+
+      inflightRef.current.budgetGoalsSummary = apiFetch(
+        `/api/budget-goals-summary?user_id=${encodeURIComponent(uid)}`
+      )
+        .then((res) => res.json())
+        .then((data) => {
+          if (data?.success) {
+            setBudgetGoalsSummary(data);
+            lastLoadedRef.current.budgetGoalsSummary = Date.now();
+          }
+        })
+        .catch((err) => {
+          console.warn('Failed to load budget goals summary:', err);
+        })
+        .finally(() => {
+          inflightRef.current.budgetGoalsSummary = undefined;
+        });
+
+      return inflightRef.current.budgetGoalsSummary;
+    },
+    [isAuthed, uid],
+  );
+
+  const loadForecast = useCallback(
+    async (params: {
+      period?: AnalysisPeriod;
+      accountId?: string;
+      categoryId?: string;
+      merchant?: string;
+      force?: boolean;
+    }): Promise<any | null> => {
+      if (!isAuthed || !uid) return null;
+      const period = params.period ?? analysisPeriod;
+
+      const key = JSON.stringify({
+        uid,
+        period,
+        accountId: params.accountId || '',
+        categoryId: params.categoryId || '',
+        merchant: params.merchant || '',
+      });
+
+      const now = Date.now();
+      const cached = forecastCacheRef.current.get(key);
+      if (!params.force && cached && now - cached.ts < TTL.forecastMs) {
+        return cached.data;
+      }
+
+      const inflightMap = inflightRef.current.forecast!;
+      const existing = inflightMap.get(key);
+      if (existing) return existing;
+
+      const query = new URLSearchParams({
+        user_id: uid,
+        period,
+      });
+      if (params.accountId) query.set('account_id', params.accountId);
+      if (params.categoryId) query.set('category_id', params.categoryId);
+      if (params.merchant) query.set('merchant', params.merchant);
+
+      const p = apiFetch(`/api/forecast?${query.toString()}`)
+        .then((res) => res.json())
+        .then((data) => {
+          forecastCacheRef.current.set(key, { ts: Date.now(), data });
+          return data as any;
+        })
+        .catch((err) => {
+          console.warn('Failed to load forecast:', err);
+          return null;
+        })
+        .finally(() => {
+          inflightMap.delete(key);
+        });
+
+      inflightMap.set(key, p);
+      return p;
+    },
+    [isAuthed, uid, analysisPeriod],
+  );
+
+  useEffect(() => {
+    if (!isAuthed) return;
+    void loadDashboardSummary({ force: true });
+  }, [analysisPeriod, isAuthed, loadDashboardSummary]);
 
   // Load from database once auth session is restored
   useEffect(() => {
@@ -383,8 +684,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       refreshUserData();
     } else {
       setTransactions([]);
+      setAccounts([]);
       setGoals([]);
       setBudgets([]);
+      setDashboardSummary(null);
+      setBudgetGoalsSummary(null);
     }
   }, [authReady, user.isAuthenticated, user.userId, user.id, refreshUserData]);
 
@@ -392,14 +696,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (!authReady || !user.isAuthenticated) return;
 
-    const onFocus = () => refreshUserData();
+    const onFocus = () => {
+      const now = Date.now();
+      // Only refresh if our caches are stale enough (prevents "every focus feels like reload").
+      const anyStale =
+        now - lastLoadedRef.current.transactions > TTL.transactionsMs ||
+        now - lastLoadedRef.current.accounts > TTL.accountsMs ||
+        now - lastLoadedRef.current.budgets > TTL.budgetsMs ||
+        now - lastLoadedRef.current.goals > TTL.goalsMs;
+      if (anyStale) refreshUserData();
+    };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [authReady, user.isAuthenticated, refreshUserData]);
 
   const addTransaction = (t: Omit<Transaction, 'id'>) => {
-    const uid = activeUserId(user);
     if (uid) {
+      // Optimistic UI update (instant list refresh).
+      const optimistic: Transaction = {
+        ...(t as any),
+        id: `optimistic-${Date.now()}`,
+      };
+      setTransactions((prev) => [optimistic, ...prev]);
+      lastLoadedRef.current.transactions = Date.now();
+
       apiFetch('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -417,14 +737,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           transaction_date: t.date,
         }),
       })
-        .then(res => res.json())
-        .then(() => loadTransactions())
-        .catch(err => console.error('Database save failed:', err));
+        .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+        .then(({ ok }) => {
+          if (!ok) throw new Error('Database save failed');
+          // Ensure canonical IDs / ordering from backend.
+          lastLoadedRef.current.transactions = 0;
+          loadTransactions();
+          lastLoadedRef.current.dashboardSummary = 0;
+          void loadDashboardSummary({ force: true });
+          lastLoadedRef.current.budgetGoalsSummary = 0;
+          void loadBudgetGoalsSummary({ force: true });
+        })
+        .catch((err) => {
+          console.error('Database save failed:', err);
+          // Rollback optimistic insert on failure.
+          setTransactions((prev) => prev.filter((x) => x.id !== optimistic.id));
+        });
       return;
     }
   };
 
   const addTransactions = (_ts: Omit<Transaction, 'id'>[]) => {
+    lastLoadedRef.current.transactions = 0;
     loadTransactions();
   };
 
@@ -482,19 +816,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteTransaction = (id: string) => {
-    const uid = activeUserId(user);
     if (!uid) return;
 
     apiFetch(`/api/transactions/${id}`, { method: 'DELETE' })
       .then(res => res.json())
       .then(data => {
-        if (data.success) loadTransactions();
+        if (data.success) {
+          setTransactions((prev) => prev.filter((t) => t.id !== id));
+          lastLoadedRef.current.transactions = 0;
+          loadTransactions();
+          lastLoadedRef.current.dashboardSummary = 0;
+          void loadDashboardSummary({ force: true });
+          lastLoadedRef.current.budgetGoalsSummary = 0;
+          void loadBudgetGoalsSummary({ force: true });
+        }
       })
       .catch(err => console.error('Failed to delete transaction:', err));
   };
 
   const addBudget = (b: Omit<Budget, 'id'>) => {
-    const uid = activeUserId(user);
     if (uid) {
       apiFetch('/api/budgets', {
         method: 'POST',
@@ -511,8 +851,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         })
       })
       .then(res => res.json())
-      .then(saved => {
+      .then(() => {
+        lastLoadedRef.current.budgets = 0;
         loadBudgets();
+        lastLoadedRef.current.budgetGoalsSummary = 0;
+        void loadBudgetGoalsSummary({ force: true });
+        lastLoadedRef.current.dashboardSummary = 0;
+        void loadDashboardSummary({ force: true });
       })
       .catch(err => console.error("Failed to add budget:", err));
     }
@@ -534,8 +879,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     })
     .then(res => res.json())
-    .then(saved => {
+    .then(() => {
+      lastLoadedRef.current.budgets = 0;
       loadBudgets();
+      lastLoadedRef.current.budgetGoalsSummary = 0;
+      void loadBudgetGoalsSummary({ force: true });
+      lastLoadedRef.current.dashboardSummary = 0;
+      void loadDashboardSummary({ force: true });
     })
     .catch(err => console.error("Failed to update budget:", err));
   };
@@ -545,14 +895,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       method: 'DELETE'
     })
     .then(res => res.json())
-    .then(saved => {
+    .then(() => {
+      lastLoadedRef.current.budgets = 0;
       loadBudgets();
+      lastLoadedRef.current.budgetGoalsSummary = 0;
+      void loadBudgetGoalsSummary({ force: true });
+      lastLoadedRef.current.dashboardSummary = 0;
+      void loadDashboardSummary({ force: true });
     })
     .catch(err => console.error("Failed to delete budget:", err));
   };
 
   const addGoal = (g: Omit<Goal, 'id'>) => {
-    const uid = activeUserId(user);
     if (uid) {
       apiFetch('/api/goals', {
         method: 'POST',
@@ -568,8 +922,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         })
       })
       .then(res => res.json())
-      .then(saved => {
+      .then(() => {
+        lastLoadedRef.current.goals = 0;
         loadGoals();
+        lastLoadedRef.current.budgetGoalsSummary = 0;
+        void loadBudgetGoalsSummary({ force: true });
       })
       .catch(err => console.error("Failed to add goal:", err));
     }
@@ -590,8 +947,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     })
     .then(res => res.json())
-    .then(saved => {
+    .then(() => {
+      lastLoadedRef.current.goals = 0;
       loadGoals();
+      lastLoadedRef.current.budgetGoalsSummary = 0;
+      void loadBudgetGoalsSummary({ force: true });
     })
     .catch(err => console.error("Failed to update goal:", err));
   };
@@ -601,8 +961,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       method: 'DELETE'
     })
     .then(res => res.json())
-    .then(saved => {
+    .then(() => {
+      lastLoadedRef.current.goals = 0;
       loadGoals();
+      lastLoadedRef.current.budgetGoalsSummary = 0;
+      void loadBudgetGoalsSummary({ force: true });
     })
     .catch(err => console.error("Failed to delete goal:", err));
   };
@@ -702,7 +1065,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider value={{
       user, updateUser,
-      transactions, addTransaction, addTransactions, updateTransaction, deleteTransaction, loadTransactions,
+      transactions,
+      accounts,
+      dbCategories,
+      dashboardSummary,
+      budgetGoalsSummary,
+      analysisPeriod,
+      setAnalysisPeriod,
+      addTransaction, addTransactions, updateTransaction, deleteTransaction, loadTransactions,
+      loadAccounts,
+      loadDbCategories,
+      loadDashboardSummary,
+      loadBudgetGoalsSummary,
+      loadForecast,
       budgets, addBudget, updateBudget, deleteBudget, loadBudgets, loadGoals,
       goals, addGoal, updateGoal, deleteGoal,
       categories, addCategory, updateCategory, deleteCategory, addSubCategory, deleteSubCategory,

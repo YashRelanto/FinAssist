@@ -37,8 +37,14 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
     setIsAnalyzing(true);
     setUploadError(null);
     try {
-      const result = await analyzeStatementFile(file, categories, password);
+      const result = await analyzeStatementFile(file, categories, password, user?.id);
       setAnalysisResult(result);
+      if (result.bankName) {
+        const shortNum = result.accountNumber && result.accountNumber !== 'UNKNOWN' && result.accountNumber !== 'XXXXXX'
+          ? ` *${result.accountNumber.slice(-4)}`
+          : '';
+        setAccountName(`${result.bankName}${shortNum}`);
+      }
       setPasswordModal({ open: false, wrongPassword: false });
     } catch (err: any) {
       if (err?.type === 'password_required') {
@@ -73,6 +79,10 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
         body: JSON.stringify({
           user_id: uid,
           account_name: accountName,
+          bank_name: analysisResult.bankName,
+          account_number: analysisResult.accountNumber,
+          account_holder: analysisResult.accountHolder,
+          ifsc: analysisResult.ifsc,
           transactions: analysisResult.transactions.map((t) => ({
             transaction_date: t.date,
             amount: Math.abs(t.amount),

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Home,
   Utensils,
@@ -22,12 +22,7 @@ import { useAppContext } from '../context/AppContext';
 import { GoalModal } from '../components/GoalModal';
 import { BudgetModal } from '../components/BudgetModal';
 import { Budget } from '../types';
-import { activeUserId } from '../lib/activeUserId';
-import {
-  fetchBudgetGoalsSummary,
-  GoalWithProgress,
-  SavingsTrajectory,
-} from '../lib/budgetGoalsApi';
+import { GoalWithProgress, SavingsTrajectory } from '../lib/budgetGoalsApi';
 import type { BudgetUtilizationItem } from '../components/Dashboard/BudgetUtilization';
 
 const getCategoryIcon = (category: string) => {
@@ -77,9 +72,9 @@ export const BudgetGoals: React.FC = () => {
     budgets,
     addBudget,
     deleteBudget,
+    budgetGoalsSummary,
+    loadBudgetGoalsSummary,
   } = useAppContext();
-
-  const userId = activeUserId(user);
 
   const [goalModalOpen, setGoalModalOpen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<GoalWithProgress | undefined>(
@@ -91,56 +86,51 @@ export const BudgetGoals: React.FC = () => {
     undefined
   );
 
-  const [loading, setLoading] = useState(true);
-  const [budgetUtilization, setBudgetUtilization] = useState<
-    BudgetUtilizationItem[]
-  >([]);
-  const [goalItems, setGoalItems] = useState<GoalWithProgress[]>([]);
-  const [trajectory, setTrajectory] =
-    useState<SavingsTrajectory>(defaultTrajectory);
-
-  const refreshSummary = useCallback(async () => {
-    if (!userId) {
-      setBudgetUtilization([]);
-      setGoalItems([]);
-      setTrajectory(defaultTrajectory);
-      setLoading(false);
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const data = await fetchBudgetGoalsSummary(userId);
-      setBudgetUtilization(data.budget_utilization ?? []);
-      setGoalItems(data.goals ?? []);
-      setTrajectory(data.trajectory ?? defaultTrajectory);
-    } catch (error) {
-      console.error('Failed to load budget & goals summary', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [userId]);
+  const [loading, setLoading] = useState(false);
+  const refreshSummary = useCallback(
+    async (options?: { force?: boolean }) => {
+      try {
+        setLoading(true);
+        await loadBudgetGoalsSummary({ force: options?.force });
+      } finally {
+        setLoading(false);
+      }
+    },
+    [loadBudgetGoalsSummary],
+  );
 
   useEffect(() => {
     refreshSummary();
   }, [refreshSummary]);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!user?.isAuthenticated) return;
     const onFocus = () => refreshSummary();
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, [userId, refreshSummary]);
+  }, [user?.isAuthenticated, refreshSummary]);
 
   const closeGoalModal = () => {
     setGoalModalOpen(false);
-    refreshSummary();
+    refreshSummary({ force: true });
   };
 
   const closeBudgetModal = () => {
     setBudgetModalOpen(false);
-    refreshSummary();
+    refreshSummary({ force: true });
   };
+
+  const budgetUtilization = useMemo(
+    () =>
+      (budgetGoalsSummary?.budget_utilization ?? []) as BudgetUtilizationItem[],
+    [budgetGoalsSummary],
+  );
+  const goalItems = useMemo(
+    () => (budgetGoalsSummary?.goals ?? []) as GoalWithProgress[],
+    [budgetGoalsSummary],
+  );
+  const trajectory = (budgetGoalsSummary?.trajectory ??
+    defaultTrajectory) as SavingsTrajectory;
 
   const budgetItems = budgetUtilization.map((item) => ({
     id: item.id,
@@ -236,7 +226,7 @@ export const BudgetGoals: React.FC = () => {
     defaultBudgets.forEach((b) => addBudget(b));
   };
 
-  if (loading && goalItems.length === 0 && budgetItems.length === 0) {
+  if ((loading || !budgetGoalsSummary) && user?.isAuthenticated) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary" />
@@ -305,7 +295,7 @@ export const BudgetGoals: React.FC = () => {
                         onClick={() => {
                           if (confirm('Delete this goal?')) {
                             deleteGoal(goal.id);
-                            refreshSummary();
+                          refreshSummary({ force: true });
                           }
                         }}
                         className="p-1.5 text-outline hover:text-error hover:bg-error-container/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
@@ -491,7 +481,7 @@ export const BudgetGoals: React.FC = () => {
                       onClick={() => {
                         if (confirm('Delete this budget?')) {
                           deleteBudget(item.id);
-                          refreshSummary();
+                          refreshSummary({ force: true });
                         }
                       }}
                       className="p-2 text-outline hover:text-error bg-surface-container-high hover:bg-error/10 rounded-lg transition-all"

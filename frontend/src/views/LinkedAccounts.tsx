@@ -11,7 +11,8 @@ import {
   Loader2, 
   AlertTriangle,
   History,
-  Lock
+  Lock,
+  X
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { cn, formatCurrency, CURRENCY_SYMBOL } from '../lib/utils';
@@ -27,6 +28,8 @@ export const LinkedAccounts: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [selectedAccount, setSelectedAccount] = useState<any | null>(null);
+  const [editTarget, setEditTarget] = useState<any | null>(null);
 
   const fetchAccounts = async () => {
     const uid = activeUserId(user);
@@ -163,7 +166,8 @@ export const LinkedAccounts: React.FC = () => {
             return (
               <div 
                 key={acc.account_id} 
-                className="bg-surface-container-lowest p-6 rounded-[28px] border border-outline-variant/30 soft-shadow group hover:border-primary transition-all flex flex-col justify-between min-h-[190px] duration-300 relative overflow-hidden"
+                onClick={() => setSelectedAccount(acc)}
+                className="bg-surface-container-lowest p-6 rounded-[28px] border border-outline-variant/30 soft-shadow group hover:border-primary transition-all flex flex-col justify-between min-h-[190px] duration-300 relative overflow-hidden cursor-pointer hover:shadow-lg hover:scale-[1.01]"
               >
                 <div>
                   <div className="flex justify-between items-start mb-4">
@@ -172,7 +176,7 @@ export const LinkedAccounts: React.FC = () => {
                     </div>
                     
                     <button 
-                      onClick={() => setDeleteTarget(acc)}
+                      onClick={(e) => { e.stopPropagation(); setDeleteTarget(acc); }}
                       className="p-2 bg-surface-container-low hover:bg-error-container/10 hover:text-error text-outline/60 rounded-xl transition-all active:scale-90"
                       title="Delete Bank Link"
                     >
@@ -233,7 +237,7 @@ export const LinkedAccounts: React.FC = () => {
               </button>
               <button
                 disabled={isDeleting}
-                onClick={() => handleDelete(deleteTarget.account_id)}
+                 onClick={() => handleDelete(deleteTarget.account_id)}
                 className="flex-1 py-3.5 bg-error text-white font-extrabold text-xs rounded-2xl shadow-lg shadow-error/20 hover:brightness-110 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {isDeleting ? (
@@ -250,13 +254,100 @@ export const LinkedAccounts: React.FC = () => {
         </div>
       )}
 
+      {/* Account Details Modal */}
+      {selectedAccount && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm transition-all duration-300">
+          <div className="bg-surface-container-lowest w-full max-w-lg rounded-[28px] shadow-2xl overflow-hidden border border-outline-variant/30 flex flex-col transform transition-all scale-100">
+            <div className="px-8 py-5 border-b border-outline-variant/20 flex justify-between items-center bg-surface-container-low">
+              <div>
+                <h3 className="text-xl font-black text-on-surface tracking-tight">Account Details</h3>
+                <p className="text-[10px] text-outline font-bold uppercase tracking-wider mt-0.5">Secure ledger connection properties</p>
+              </div>
+              <button 
+                onClick={() => setSelectedAccount(null)} 
+                className="p-2 hover:bg-surface-container-high rounded-full text-outline hover:text-on-surface transition-all active:scale-90"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-8 space-y-6">
+              <div className="flex items-center gap-4">
+                <div className={cn("p-4 rounded-2xl", getAccountStyle(selectedAccount.account_type).bg, getAccountStyle(selectedAccount.account_type).color)}>
+                  {React.createElement(getAccountIcon(selectedAccount.account_type), { className: "w-8 h-8" })}
+                </div>
+                <div>
+                  <span className="text-[9px] font-black text-outline uppercase tracking-widest leading-none">{selectedAccount.account_type?.replace('_', ' ')}</span>
+                  <h4 className="font-extrabold text-on-surface text-lg leading-tight mt-0.5">{selectedAccount.account_name}</h4>
+                </div>
+              </div>
+
+              <div className="border border-outline-variant/30 rounded-2xl p-5 bg-surface-container-low space-y-4">
+                <div className="grid grid-cols-2 gap-4 text-xs">
+                  <div>
+                    <span className="text-[9px] font-black text-outline uppercase tracking-widest block mb-0.5">Current Balance</span>
+                    <span className="font-extrabold text-on-surface text-sm">{formatCurrency(parseFloat(selectedAccount.current_balance))}</span>
+                  </div>
+                  {selectedAccount.account_type === 'credit_card' && (
+                    <div>
+                      <span className="text-[9px] font-black text-outline uppercase tracking-widest block mb-0.5">Credit Limit</span>
+                      <span className="font-extrabold text-on-surface text-sm">{formatCurrency(parseFloat(selectedAccount.credit_limit || 0))}</span>
+                    </div>
+                  )}
+                  <div>
+                    <span className="text-[9px] font-black text-outline uppercase tracking-widest block mb-0.5">Bank Name</span>
+                    <span className="font-bold text-on-surface-variant">{selectedAccount.bank_name || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-black text-outline uppercase tracking-widest block mb-0.5">Account Holder</span>
+                    <span className="font-bold text-on-surface-variant">{selectedAccount.account_holder || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-black text-outline uppercase tracking-widest block mb-0.5">Account Number</span>
+                    <span className="font-bold text-on-surface-variant">{selectedAccount.account_number || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] font-black text-outline uppercase tracking-widest block mb-0.5">IFSC / Routing Code</span>
+                    <span className="font-bold text-on-surface-variant">{selectedAccount.ifsc || 'N/A'}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-outline-variant/20 flex gap-4">
+                <button
+                  onClick={() => setSelectedAccount(null)}
+                  className="flex-1 py-3.5 bg-surface-container-low text-on-surface font-bold rounded-2xl hover:bg-surface-container-high transition-all active:scale-[0.98] text-xs"
+                >
+                  Close
+                </button>
+                <button
+                  onClick={() => {
+                    setEditTarget(selectedAccount);
+                    setSelectedAccount(null);
+                  }}
+                  className="flex-1 py-3.5 bg-primary text-white font-bold rounded-2xl shadow-lg shadow-primary/20 hover:brightness-110 active:scale-[0.98] transition-all text-xs flex items-center justify-center gap-2"
+                >
+                  Edit Details
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <AccountModal 
-        isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
+        isOpen={isModalOpen || !!editTarget} 
+        onClose={() => {
+          setIsModalOpen(false);
+          setEditTarget(null);
+        }} 
+        editAccount={editTarget}
         onSuccess={(account) => {
           if (account?.account_id) {
             setAccounts((prev) => {
-              if (prev.some((a) => a.account_id === account.account_id)) return prev;
+              if (prev.some((a) => a.account_id === account.account_id)) {
+                return prev.map(a => a.account_id === account.account_id ? account : a);
+              }
               return [...prev, account];
             });
           }

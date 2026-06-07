@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
+
+from app.utils.analysis_period import (
+    filter_rows_by_date,
+    resolve_analysis_window,
+)
 
 INCOME_TYPE = "income"
 EXPENSE_TYPE = "expense"
@@ -340,6 +345,80 @@ def build_budget_goals_payload(
     }
 
 
+def compute_summary_for_window(
+    accounts: list[dict[str, Any]],
+    transactions: list[dict[str, Any]],
+    *,
+    window: dict[str, Any],
+    profile_income: float = 0.0,
+) -> dict[str, float]:
+    """Income/expense/net for the selected calendar analysis window."""
+    rows = transactions
+    income = 0.0
+    expense = 0.0
+    for row in filter_rows_by_date(
+        rows,
+        start_date=window.get("start_date"),
+        end_date=window.get("end_date"),
+    ):
+        tx_type = (row.get("transaction_type") or "").lower()
+        if tx_type == TRANSFER_TYPE:
+            continue
+        amount = transaction_amount_value(row.get("amount"), tx_type)
+        if tx_type == INCOME_TYPE:
+            income += amount
+        elif tx_type == EXPENSE_TYPE:
+            expense += amount
+
+    if profile_income > 0.0 and window.get("period") == "1m":
+        income = profile_income
+
+    net = income - expense
+    savings_rate = round((net / income) * 100, 1) if income > 0 else 0.0
+    total_balance = 0.0
+    for acc in accounts:
+        if (acc.get("account_type") or "").lower() == "credit_card":
+            continue
+        total_balance += float(acc.get("current_balance") or 0)
+    return {
+        "total_balance": total_balance,
+        "monthly_income": round(income, 2),
+        "monthly_expenses": round(expense, 2),
+        "net_savings": round(net, 2),
+        "savings_rate": savings_rate,
+    }
+
+
+def build_chart_data_for_window(
+    monthly_stats: dict[str, dict[str, float]],
+    *,
+    window: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Chart bars for each calendar month in the analysis window."""
+    if not monthly_stats:
+        return []
+    start = window.get("start_date")
+    end = window.get("end_date") or date.today().isoformat()
+    months = sorted(k for k in monthly_stats if (not start or k >= start[:7]) and k <= end[:7])
+    if window.get("period") == "all":
+        months = sorted(monthly_stats.keys())
+    chart: list[dict[str, Any]] = []
+    for month in months[-12:]:
+        stats = monthly_stats.get(month, {"income": 0.0, "expense": 0.0})
+        income = stats["income"]
+        expense = stats["expense"]
+        chart.append(
+            {
+                "name": datetime.strptime(month, "%Y-%m").strftime("%b %Y"),
+                "month": month,
+                "income": income,
+                "expense": expense,
+                "net": income - expense,
+            }
+        )
+    return chart
+
+
 def build_dashboard_payload(
     *,
     accounts: list[dict[str, Any]],
@@ -348,23 +427,28 @@ def build_dashboard_payload(
     budgets: list[dict[str, Any]],
     reference: datetime | None = None,
     profile_income: float = 0.0,
+    period: str = "1m",
 ) -> dict[str, Any]:
     ref = reference or datetime.now()
+    window = resolve_analysis_window(period, reference=ref.date())
     monthly_stats = aggregate_monthly_stats(transactions)
-    current_month = ref.strftime("%Y-%m")
-    month_start = f"{current_month}-01"
-    month_end = ref.strftime("%Y-%m-%d")
 
     return {
         "success": True,
-        "summary": compute_summary(accounts, monthly_stats, reference=ref, profile_income=profile_income),
-        "chart_data": build_chart_data(monthly_stats, reference=ref),
+        **window,
+        "summary": compute_summary_for_window(
+            accounts,
+            transactions,
+            window=window,
+            profile_income=profile_income,
+        ),
+        "chart_data": build_chart_data_for_window(monthly_stats, window=window),
         "accounts": accounts,
         "recent_transactions": format_recent_transactions(recent_rows),
         "expense_breakdown_month": aggregate_expense_by_category(
             transactions,
-            start_date=month_start,
-            end_date=month_end,
+            start_date=window.get("start_date"),
+            end_date=window.get("end_date"),
         ),
         "budget_utilization": compute_budget_utilization(
             budgets, transactions, reference=ref

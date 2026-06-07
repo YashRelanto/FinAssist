@@ -235,10 +235,16 @@ async def api_oauth_login(req: OAuthLoginRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/dashboard-summary")
-async def get_dashboard_summary(user_id: str):
+async def get_dashboard_summary(
+    user_id: str,
+    period: str = "1m",
+):
     if not user_id or not user_id.strip():
         raise HTTPException(status_code=400, detail="user_id is required")
     try:
+        from app.utils.analysis_period import normalize_period
+
+        period_key = normalize_period(period)
         accounts = fetch_user_accounts(user_id)
 
         trans_response = (
@@ -285,6 +291,7 @@ async def get_dashboard_summary(user_id: str):
             recent_rows=recent_res.data or [],
             budgets=budget_res.data or [],
             profile_income=profile_income,
+            period=period_key,
         )
     except HTTPException:
         raise
@@ -435,6 +442,10 @@ class AccountCreate(BaseModel):
     account_type: str
     current_balance: float = 0.0
     credit_limit: float | None = None
+    bank_name: str | None = None
+    account_holder: str | None = None
+    account_number: str | None = None
+    ifsc: str | None = None
 
 @router.post("/accounts")
 async def create_account(req: AccountCreate):
@@ -450,12 +461,45 @@ async def create_account(req: AccountCreate):
         }
         if req.credit_limit is not None and req.account_type == "credit_card":
             row["credit_limit"] = req.credit_limit
+        if req.bank_name is not None:
+            row["bank_name"] = req.bank_name
+        if req.account_holder is not None:
+            row["account_holder"] = req.account_holder
+        if req.account_number is not None:
+            row["account_number"] = req.account_number
+        if req.ifsc is not None:
+            row["ifsc"] = req.ifsc
 
         created = insert_account(row)
         return {"success": True, "message": "Account created successfully", "data": created}
     except Exception as e:
         print(f"Error creating account: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+@router.put("/accounts/{account_id}")
+async def update_account(account_id: str, req: AccountCreate):
+    try:
+        row = {
+            "account_name": req.account_name,
+            "account_type": req.account_type,
+            "current_balance": req.current_balance,
+            "bank_name": req.bank_name,
+            "account_holder": req.account_holder,
+            "account_number": req.account_number,
+            "ifsc": req.ifsc
+        }
+        if req.credit_limit is not None and req.account_type == "credit_card":
+            row["credit_limit"] = req.credit_limit
+        else:
+            row["credit_limit"] = None
+
+        res = supabase.table("accounts").update(row).eq("account_id", account_id).execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Account not found or update failed")
+        return {"success": True, "message": "Account updated successfully", "data": res.data[0]}
+    except Exception as e:
+        print(f"Error updating account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/accounts")

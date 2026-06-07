@@ -313,3 +313,121 @@ def prophet_holdout_mape(weekly: pd.DataFrame) -> float | None:
     model.fit(train_df)
     pred = prophet_predict_weeks(model, train, 1)[0]
     return min(safe_mape([hold_y], [pred]), 1.0)
+
+
+# ─────────────────────────────────────────────────────────────
+# Daily-granularity Prophet helpers
+# These are used when models are trained on daily data (the
+# recommended approach — see prophet_training_service.py).
+# ─────────────────────────────────────────────────────────────
+
+MIN_DAYS_FOR_PROPHET_USER = 56  # 8 weeks of daily expense data
+
+
+def expenses_to_daily(expenses: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate expense rows to daily totals with zero-filled date gaps."""
+    if expenses.empty:
+        return pd.DataFrame(columns=["date", "daily_expense"])
+    df = expenses.copy()
+    df["transaction_date"] = pd.to_datetime(df["transaction_date"])
+    df["amount"] = df["amount"].astype(float).abs()
+    agg = (
+        df.groupby(df["transaction_date"].dt.normalize())["amount"]
+        .sum()
+        .reset_index()
+        .rename(columns={"transaction_date": "date", "amount": "daily_expense"})
+    )
+    full_range = pd.date_range(agg["date"].min(), agg["date"].max(), freq="D")
+    daily = agg.set_index("date").reindex(full_range, fill_value=0.0).reset_index()
+    daily.columns = ["date", "daily_expense"]
+    return daily.sort_values("date").reset_index(drop=True)
+
+
+def create_prophet_model_daily(day_count: int):
+    """
+    Prophet config tuned for *daily* expense data.
+    weekly_seasonality=True lets Prophet learn Mon–Sun spending rhythms,
+    which is what makes weekend predictions higher than weekday ones.
+    """
+    from prophet import Prophet
+
+    return Prophet(
+        growth="linear" if day_count >= 90 else "flat",
+        weekly_seasonality=True,        # Captures Mon–Sun day-of-week effects
+        yearly_seasonality=day_count >= 365,
+        daily_seasonality=False,
+        seasonality_mode="additive",
+        changepoint_prior_scale=0.05,
+        seasonality_prior_scale=10.0,
+    )
+
+
+def prophet_future_frame_daily(last_date: pd.Timestamp, steps: int) -> pd.DataFrame:
+    """Generate `steps` consecutive daily future dates starting after last_date."""
+    dates = [last_date + timedelta(days=i + 1) for i in range(steps)]
+    return pd.DataFrame({"ds": dates})
+
+
+def sanitize_daily_predictions(raw: np.ndarray, daily: pd.DataFrame) -> list[float]:
+    """Floor negative / non-finite daily predictions to the recent daily mean."""
+    floor = max(float(daily["daily_expense"].tail(28).mean()), 0.0)
+    preds: list[float] = []
+    for v in raw:
+        y = float(v)
+        if not np.isfinite(y) or y < 0:
+            y = floor
+        preds.append(max(0.0, y))
+    return preds
+
+
+def dow_spending_ratios(expenses: pd.DataFrame, lookback_weeks: int = 8) -> list[float]:
+    """
+    Return a 7-element list of daily spend fractions [Mon … Sun] that sum to 1.0.
+    Used to distribute weekly totals when only a weekly-trained model is available
+    (backward-compatibility fallback).
+    Defaults to a weekend-weighted pattern when there is insufficient data.
+    """
+    # Weekend-weighted default: Sat/Sun ≈ 1.5× weekday weight
+    default_raw = [1.0, 1.0, 1.0, 1.0, 1.0, 1.5, 1.5]
+    default_total = sum(default_raw)
+    default = [r / default_total for r in default_raw]
+
+    if expenses.empty:
+        return default
+
+    df = expenses.copy()
+    df["transaction_date"] = pd.to_datetime(df["transaction_date"])
+    df["amount"] = df["amount"].astype(float).abs()
+    cutoff = df["transaction_date"].max() - timedelta(weeks=lookback_weeks)
+    df = df[df["transaction_date"] >= cutoff]
+    if df.empty:
+        return default
+
+    df["dow"] = df["transaction_date"].dt.dayofweek  # 0 = Mon … 6 = Sun
+    by_dow = df.groupby("dow")["amount"].sum().reindex(range(7), fill_value=0.0)
+    total = float(by_dow.sum())
+    if total <= 0:
+        return default
+    return (by_dow / total).tolist()
+
+
+def prophet_holdout_mape_daily(daily: pd.DataFrame) -> float | None:
+    """7-day hold-out MAPE for a daily-trained Prophet model."""
+    if len(daily) < MIN_DAYS_FOR_PROPHET_USER + 7:
+        return None
+    d = daily.sort_values("date").reset_index(drop=True)
+    hold_total = float(d["daily_expense"].iloc[-7:].sum())
+    if hold_total <= 0:
+        return None
+    train = d.iloc[:-7]
+    train_df = pd.DataFrame({
+        "ds": train["date"],
+        "y": train["daily_expense"].clip(lower=0.0),
+    })
+    model = create_prophet_model_daily(len(train_df))
+    model.fit(train_df)
+    future = prophet_future_frame_daily(pd.Timestamp(train["date"].iloc[-1]), 7)
+    forecast = model.predict(future)
+    pred_preds = sanitize_daily_predictions(forecast["yhat"].values, train)
+    pred_total = sum(pred_preds)
+    return min(safe_mape([hold_total], [pred_total]), 1.0)

@@ -206,6 +206,36 @@ def update_transaction_record(
     if not update_res.data:
         raise HTTPException(status_code=500, detail="Failed to update transaction")
 
+    # Upsert a user category override for future transactions of this merchant
+    try:
+        from app.services.statement_processor.merchant_normalizer import MerchantNormalizer
+        norm_merchant = MerchantNormalizer.normalize_merchant(merchant_name)
+        
+        # Check if override already exists
+        exist_res = supabase_db.table("user_category_overrides")\
+            .select("id")\
+            .eq("user_id", user_id)\
+            .eq("merchant_name", norm_merchant.upper())\
+            .execute()
+            
+        if exist_res.data:
+            supabase_db.table("user_category_overrides")\
+                .update({"override_category_id": category_id})\
+                .eq("user_id", user_id)\
+                .eq("merchant_name", norm_merchant.upper())\
+                .execute()
+        else:
+            supabase_db.table("user_category_overrides")\
+                .insert({
+                    "user_id": user_id,
+                    "merchant_name": norm_merchant.upper(),
+                    "override_category_id": category_id
+                })\
+                .execute()
+        print(f"[DEBUG] [Override] Upserted user category override: merchant={norm_merchant.upper()} -> category_id={category_id}")
+    except Exception as override_err:
+        print(f"[WARNING] [Override] Failed to upsert user category override: {override_err}")
+
     supabase_db.table("accounts").update({"current_balance": new_bal}).eq(
         "account_id", new_account_id
     ).eq("user_id", user_id).execute()
@@ -281,6 +311,37 @@ def create_transaction_record(
         )
 
     row = insert_res.data[0]
+
+    # Upsert a user category override for future transactions of this merchant
+    try:
+        from app.services.statement_processor.merchant_normalizer import MerchantNormalizer
+        norm_merchant = MerchantNormalizer.normalize_merchant(merchant_name)
+        
+        # Check if override already exists
+        exist_res = supabase_db.table("user_category_overrides")\
+            .select("id")\
+            .eq("user_id", user_id)\
+            .eq("merchant_name", norm_merchant.upper())\
+            .execute()
+            
+        if exist_res.data:
+            supabase_db.table("user_category_overrides")\
+                .update({"override_category_id": category_id})\
+                .eq("user_id", user_id)\
+                .eq("merchant_name", norm_merchant.upper())\
+                .execute()
+        else:
+            supabase_db.table("user_category_overrides")\
+                .insert({
+                    "user_id": user_id,
+                    "merchant_name": norm_merchant.upper(),
+                    "override_category_id": category_id
+                })\
+                .execute()
+        print(f"[DEBUG] [Override] Upserted user category override: merchant={norm_merchant.upper()} -> category_id={category_id}")
+    except Exception as override_err:
+        print(f"[WARNING] [Override] Failed to upsert user category override: {override_err}")
+
     return {
         "transaction": row,
         "account_id": resolved_account_id,

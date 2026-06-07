@@ -9,6 +9,7 @@ interface AccountModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess?: (account: Record<string, unknown>) => void;
+  editAccount?: any;
 }
 
 const accountTypes = [
@@ -19,28 +20,49 @@ const accountTypes = [
   { value: 'cash', label: 'Cash Wallet', icon: DollarSign },
 ];
 
-export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onSuccess }) => {
+export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onSuccess, editAccount }) => {
   const { user } = useAppContext();
   const [formData, setFormData] = useState({
     account_name: '',
     account_type: 'checking',
     current_balance: 0,
     credit_limit: 0,
+    bank_name: '',
+    account_holder: '',
+    account_number: '',
+    ifsc: '',
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
-      setFormData({
-        account_name: '',
-        account_type: 'checking',
-        current_balance: 0,
-        credit_limit: 0,
-      });
+      if (editAccount) {
+        setFormData({
+          account_name: editAccount.account_name || '',
+          account_type: editAccount.account_type || 'checking',
+          current_balance: parseFloat(editAccount.current_balance) || 0,
+          credit_limit: parseFloat(editAccount.credit_limit) || 0,
+          bank_name: editAccount.bank_name || '',
+          account_holder: editAccount.account_holder || '',
+          account_number: editAccount.account_number || '',
+          ifsc: editAccount.ifsc || '',
+        });
+      } else {
+        setFormData({
+          account_name: '',
+          account_type: 'checking',
+          current_balance: 0,
+          credit_limit: 0,
+          bank_name: '',
+          account_holder: '',
+          account_number: '',
+          ifsc: '',
+        });
+      }
       setError(null);
     }
-  }, [isOpen]);
+  }, [isOpen, editAccount]);
 
   if (!isOpen) return null;
 
@@ -57,8 +79,11 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
         throw new Error('You must be signed in to link an account.');
       }
 
-      const response = await apiFetch('/api/accounts', {
-        method: 'POST',
+      const url = editAccount ? `/api/accounts/${editAccount.account_id}` : '/api/accounts';
+      const method = editAccount ? 'PUT' : 'POST';
+
+      const response = await apiFetch(url, {
+        method: method,
         headers: {
           'Content-Type': 'application/json',
         },
@@ -67,6 +92,10 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
           account_name: formData.account_name,
           account_type: formData.account_type,
           current_balance: formData.current_balance,
+          bank_name: formData.bank_name || undefined,
+          account_holder: formData.account_holder || undefined,
+          account_number: formData.account_number || undefined,
+          ifsc: formData.ifsc || undefined,
           ...(formData.account_type === 'credit_card'
             ? { credit_limit: formData.credit_limit }
             : {}),
@@ -75,7 +104,7 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
 
       const data = await response.json();
       if (!response.ok || !data.success) {
-        throw new Error(data.detail || 'Failed to link account');
+        throw new Error(data.detail || 'Failed to save account');
       }
 
       if (onSuccess && data.data) {
@@ -95,8 +124,12 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
       <div className="bg-surface-container-lowest w-full max-w-lg rounded-[28px] shadow-2xl overflow-hidden border border-outline-variant/30 flex flex-col transform transition-all scale-100">
         <div className="px-8 py-5 border-b border-outline-variant/20 flex justify-between items-center bg-surface-container-low">
           <div>
-            <h3 className="text-xl font-black text-on-surface tracking-tight">Link Bank Account</h3>
-            <p className="text-[10px] text-outline font-bold uppercase tracking-wider mt-0.5">Secure, real-time manual ledger integration</p>
+            <h3 className="text-xl font-black text-on-surface tracking-tight">
+              {editAccount ? 'Edit Bank Account' : 'Link Bank Account'}
+            </h3>
+            <p className="text-[10px] text-outline font-bold uppercase tracking-wider mt-0.5">
+              {editAccount ? 'Update secure ledger metadata & parameters' : 'Secure, real-time manual ledger integration'}
+            </p>
           </div>
           <button 
             onClick={onClose} 
@@ -205,6 +238,56 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
                 </div>
               </div>
             )}
+
+            <div className="pt-2 border-t border-outline-variant/10">
+              <span className="block text-[10px] font-black text-primary uppercase tracking-widest mb-4 px-1">Optional Bank Metadata</span>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[9px] font-black text-outline uppercase tracking-widest mb-1.5 px-1">Bank Name</label>
+                  <input 
+                    type="text" 
+                    value={formData.bank_name}
+                    onChange={(e) => setFormData({...formData, bank_name: e.target.value})}
+                    placeholder="e.g. Chase Bank, HDFC" 
+                    className="w-full px-4 py-3 bg-surface-container-low rounded-xl border border-outline-variant/50 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all text-xs font-bold text-on-surface placeholder:text-outline/40" 
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[9px] font-black text-outline uppercase tracking-widest mb-1.5 px-1">Account Holder</label>
+                  <input 
+                    type="text" 
+                    value={formData.account_holder}
+                    onChange={(e) => setFormData({...formData, account_holder: e.target.value})}
+                    placeholder="Holder Name" 
+                    className="w-full px-4 py-3 bg-surface-container-low rounded-xl border border-outline-variant/50 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all text-xs font-bold text-on-surface placeholder:text-outline/40" 
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[9px] font-black text-outline uppercase tracking-widest mb-1.5 px-1">Account Number</label>
+                  <input 
+                    type="text" 
+                    value={formData.account_number}
+                    onChange={(e) => setFormData({...formData, account_number: e.target.value})}
+                    placeholder="Account Number" 
+                    className="w-full px-4 py-3 bg-surface-container-low rounded-xl border border-outline-variant/50 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all text-xs font-bold text-on-surface placeholder:text-outline/40" 
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[9px] font-black text-outline uppercase tracking-widest mb-1.5 px-1">IFSC / Routing Code</label>
+                  <input 
+                    type="text" 
+                    value={formData.ifsc}
+                    onChange={(e) => setFormData({...formData, ifsc: e.target.value})}
+                    placeholder="IFSC / Routing Code" 
+                    className="w-full px-4 py-3 bg-surface-container-low rounded-xl border border-outline-variant/50 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all text-xs font-bold text-on-surface placeholder:text-outline/40" 
+                  />
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="pt-4 border-t border-outline-variant/20 flex gap-4">
@@ -223,10 +306,10 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
               {isSubmitting ? (
                 <>
                   <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>Linking...</span>
+                  <span>{editAccount ? 'Saving...' : 'Linking...'}</span>
                 </>
               ) : (
-                'Link Account'
+                editAccount ? 'Save Changes' : 'Link Account'
               )}
             </button>
           </div>

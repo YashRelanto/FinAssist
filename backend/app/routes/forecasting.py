@@ -1,3 +1,5 @@
+from datetime import date, timedelta
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.services.forecast_service import (
@@ -5,6 +7,7 @@ from app.services.forecast_service import (
     get_model_status,
     reload_models,
 )
+from app.utils.analysis_period import DEFAULT_PERIOD, normalize_period
 from app.utils.supabase_client import supabase
 
 router = APIRouter(prefix="/api")
@@ -16,17 +19,39 @@ async def get_forecast(
     account_id: str | None = None,
     category_id: str | None = None,
     merchant: str | None = None,
-    days: int = Query(default=30, ge=7, le=90),
+    period: str = Query(default=DEFAULT_PERIOD, description="1m, 3m, 5m, or all"),
 ):
     try:
-        trans_res = (
+        period_key = normalize_period(period)
+        # Prophet training + comparisons need deep history; UI metrics use calendar months.
+        lookback_days = 730 if period_key != "all" else 3650
+        start_date = (date.today() - timedelta(days=lookback_days)).isoformat()
+
+        tx_query = (
             supabase.table("transactions")
-            .select("*")
+            .select(
+                "transaction_id,transaction_date,amount,transaction_type,"
+                "merchant_name,description,account_id,category_id"
+            )
             .eq("user_id", user_id)
+            .gte("transaction_date", start_date)
             .order("transaction_date")
+        )
+        if account_id:
+            tx_query = tx_query.eq("account_id", account_id)
+        if category_id:
+            tx_query = tx_query.eq("category_id", category_id)
+        if merchant:
+            # Best-effort DB-side filter; forecast_service will also apply a contains filter.
+            tx_query = tx_query.ilike("merchant_name", f"%{merchant}%")
+
+        trans_res = tx_query.execute()
+
+        cat_res = (
+            supabase.table("categories")
+            .select("category_id,main_category,sub_category")
             .execute()
         )
-        cat_res = supabase.table("categories").select("*").execute()
 
         result = generate_forecast(
             trans_res.data or [],
@@ -35,13 +60,13 @@ async def get_forecast(
             account_id=account_id,
             category_id=category_id,
             merchant=merchant,
-            days_analyzed=days,
+            period=period_key,
         )
         result["filters"] = {
             "account_id": account_id,
             "category_id": category_id,
             "merchant": merchant,
-            "days": days,
+            "period": period_key,
         }
         return result
     except Exception as exc:

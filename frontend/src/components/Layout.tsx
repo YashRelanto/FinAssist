@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { Dashboard } from '../views/Dashboard';
@@ -16,12 +16,30 @@ import { Login } from '../views/Login';
 import { LinkedAccounts } from '../views/LinkedAccounts';
 import { EditProfile } from '../views/EditProfile';
 import { MessageSquare } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion } from 'motion/react';
 import { useAppContext } from '../context/AppContext';
 
 export const Layout: React.FC = () => {
   const { currentPage, setCurrentPage, user, authReady } = useAppContext();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Must run on every render (before any early return) — Rules of Hooks.
+  const pages = useMemo(
+    () => [
+      { id: 'dashboard', node: <Dashboard /> },
+      { id: 'forecasting', node: <Forecasting /> },
+      { id: 'transactions', node: <Transactions /> },
+      { id: 'ai-assistant', node: <AIAssistant /> },
+      { id: 'budget-goals', node: <BudgetGoals /> },
+      { id: 'investments', node: <Investments /> },
+      { id: 'reports', node: <Reports /> },
+      { id: 'settings', node: <Settings /> },
+      { id: 'linked-accounts', node: <LinkedAccounts /> },
+      { id: 'edit-profile', node: <EditProfile /> },
+      { id: 'admin', node: <AdminPanel /> },
+    ],
+    [],
+  );
 
   if (!authReady) {
     return (
@@ -39,23 +57,6 @@ export const Layout: React.FC = () => {
     return <Onboarding />;
   }
 
-  const renderContent = () => {
-    switch (currentPage) {
-      case 'dashboard': return <Dashboard />;
-      case 'forecasting': return <Forecasting />;
-      case 'transactions': return <Transactions />;
-      case 'ai-assistant': return <AIAssistant />;
-      case 'budget-goals': return <BudgetGoals />;
-      case 'investments': return <Investments />;
-      case 'reports': return <Reports />;
-      case 'settings': return <Settings />;
-      case 'linked-accounts': return <LinkedAccounts />;
-      case 'edit-profile': return <EditProfile />;
-      case 'admin': return <AdminPanel />;
-      default: return <Dashboard />;
-    }
-  };
-
   return (
     <div className="min-h-screen bg-surface">
       <Sidebar 
@@ -68,17 +69,20 @@ export const Layout: React.FC = () => {
       
       <main className="lg:ml-[280px] pt-16 min-h-screen">
         <div className="p-4 lg:p-10 max-w-[1440px] mx-auto">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={currentPage}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.2 }}
-            >
-              {renderContent()}
-            </motion.div>
-          </AnimatePresence>
+          {pages.map((page) => {
+            const active = page.id === currentPage;
+            return (
+              <motion.div
+                key={page.id}
+                initial={false}
+                animate={active ? { opacity: 1, y: 0 } : { opacity: 0, y: 0 }}
+                transition={{ duration: 0.15 }}
+                style={{ display: active ? 'block' : 'none' }}
+              >
+                {page.node}
+              </motion.div>
+            );
+          })}
         </div>
       </main>
 
