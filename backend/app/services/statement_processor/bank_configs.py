@@ -144,5 +144,39 @@ BANK_CONFIGS: Dict[str, Dict[str, Any]] = {
             "credit_idx": -2,
             "balance_idx": -1
         }
+    },
+    "KOTAK": {
+        "bank_name": "Kotak Mahindra Bank",
+        "signatures": [
+            r"kotak mahindra bank",
+            r"kotak bank",
+            r"kotak"
+        ],
+        "ifsc_prefixes": ["KKBK"],
+        "account_number_patterns": [
+            r"\b(?:account\s+no|account\s+number|account\s+no\.?)\b\s*[\-:：]?\s*([0-9]{9,18})\b"
+        ],
+        "account_holder_patterns": [
+            r"([A-Z \t\.]{3,30})\s{2,}.*?\n.*?\n\s*(?:W/O|C/O|S/O|D/O|S/D/W\s+OF)",
+            r"\b(?:customer\s+name|name|account\s+holder)\b\s*[\-:：]?\s*([A-Za-z\s\.]{3,40})"
+        ],
+        "table_start_patterns": [
+            r"Date\s+Narration\s+Chq/Ref\s*No",
+            r"Withdrawal\s*\(Dr\)/\s*Deposit\s*\(Cr\)"
+        ],
+        "table_end_patterns": [
+            r"This\s+is\s+a\s+computer\s+generated\s+statement",
+            r"STATEMENT\s+SUMMARY",
+            r"Brought\s+Forward",
+            r"Page\s+Total"
+        ],
+        "date_format": "%d-%m-%Y",
+        "parser_profile": "fixed_table",
+        "columns": {
+            "date_idx": 0,
+            "amount_idx": -2,
+            "type_idx": -2,
+            "balance_idx": -1
+        }
     }
 }

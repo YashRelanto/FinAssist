@@ -89,7 +89,7 @@ class AccountExtractor:
         if account_holder == "UNKNOWN" and text_lines:
             # Fallback to the first line or line after logo
             for line in text_lines[:6]:
-                has_invalid = any(kw in line.lower() for kw in ["statement", "summary", "page", "account"])
+                has_invalid = any(kw in line.lower() for kw in ["statement", "summary", "page", "account", "bank", "kotak"])
                 matched_alpha = re.match(r"^[A-Za-z\s\.\']{3,35}$", line)
                 if has_invalid:
                     continue

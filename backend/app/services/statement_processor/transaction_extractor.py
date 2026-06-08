@@ -49,7 +49,9 @@ class TransactionExtractor:
             return None
         cleaned = amount_str.strip()
         cleaned = re.sub(r"[₹$Rs\s]", "", cleaned)
-        cleaned = re.sub(r"(CR|DR|cr|dr)$", "", cleaned).strip()
+        # Strip outer/inner parentheses or brackets if present around DR/CR (e.g. (Dr), [Cr])
+        cleaned = re.sub(r"[\(\)\[\]]", "", cleaned)
+        cleaned = re.sub(r"(CR|DR|cr|dr)$", "", cleaned, flags=re.IGNORECASE).strip()
         if not cleaned or cleaned in ["-", "."]:
             return None
         # Handle Indian comma-decimal formats (e.g. 22,00 -> 22.00) vs standard thousands commas
