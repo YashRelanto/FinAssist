@@ -1,7 +1,6 @@
 import React from 'react';
 import { 
   LayoutDashboard, 
-  BarChart2, 
   Receipt, 
   PiggyBank, 
   TrendingUp, 
@@ -11,11 +10,9 @@ import {
   Shield,
   LogOut,
   ChevronRight,
-  TrendingUp as TrendingIcon,
-  Target,
   Zap
 } from 'lucide-react';
-import { cn, formatCurrency } from '../lib/utils';
+import { cn } from '../lib/utils';
 import { useAppContext } from '../context/AppContext';
 
 interface SidebarProps {

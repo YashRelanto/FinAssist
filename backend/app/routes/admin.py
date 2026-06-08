@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.admin_auth import require_admin
@@ -15,7 +15,6 @@ from app.services.model_training_service import (
     list_jobs,
     list_train_runs,
     run_training_sync,
-    save_uploaded_dataset,
     start_training_job,
 )
 
@@ -68,31 +67,6 @@ async def admin_performance(_user=Depends(require_admin)):
 @router.get("/datasets")
 async def admin_list_datasets(_user=Depends(require_admin)):
     return {"success": True, "datasets": list_datasets()}
-
-
-@router.post("/dataset/upload")
-async def admin_upload_dataset(
-    transactions: UploadFile = File(..., description="transactions.csv"),
-    categories: UploadFile | None = File(None, description="Optional categories.csv"),
-    _user=Depends(require_admin),
-):
-    if not transactions.filename or not transactions.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="transactions file must be a .csv")
-
-    tx_bytes = await transactions.read()
-    cat_bytes = None
-    cat_name = None
-    if categories and categories.filename:
-        if not categories.filename.lower().endswith(".csv"):
-            raise HTTPException(status_code=400, detail="categories file must be a .csv")
-        cat_bytes = await categories.read()
-        cat_name = categories.filename
-
-    try:
-        meta = save_uploaded_dataset(tx_bytes, transactions.filename, cat_bytes, cat_name)
-        return {"success": True, "dataset": meta}
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/train-from-db")

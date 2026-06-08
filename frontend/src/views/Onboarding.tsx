@@ -20,7 +20,7 @@ import {
 import { useAppContext } from '../context/AppContext';
 import { cn, formatCurrency, CURRENCY_SYMBOL } from '../lib/utils';
 
-import { analyzeStatementFile, AnalysisResult, ParseError } from '../lib/statementParser';
+import { analyzeStatementFile } from '../lib/statementParser';
 import { PdfPasswordModal } from '../components/PdfPasswordModal';
 import { apiFetch } from '../lib/api';
 import { activeUserId } from '../lib/activeUserId';

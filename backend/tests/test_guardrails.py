@@ -2,7 +2,6 @@ import unittest
 
 from app.guardrails.input_guard import InputGuard
 from app.guardrails.pii_masking import PIIMasker
-from app.guardrails.authorization import AuthorizationGuard
 from app.guardrails.output_guard import OutputGuard
 
 
@@ -62,17 +61,6 @@ class TestGuardrails(unittest.TestCase):
         self.assertIn("******3210", masked)
         self.assertIn("****9012", masked)
         self.assertIn("***MASKED***", masked)
-        
-    def test_sql_context_authorization(self):
-        """Test SQL query user context verification."""
-        bad_sql = "SELECT * FROM transactions"
-        self.assertFalse(AuthorizationGuard.validate_query_context("user123", bad_sql))
-        
-        good_sql = "SELECT * FROM transactions WHERE user_id = 'user123'"
-        self.assertTrue(AuthorizationGuard.validate_query_context("user123", good_sql))
-        
-        dangerous_sql = "SELECT * FROM transactions WHERE user_id = 'user123' OR user_id <> 'user123'"
-        self.assertFalse(AuthorizationGuard.validate_query_context("user123", dangerous_sql))
         
     def test_output_secret_leakage(self):
         """Test output guardrails detect secret key or SQL leakage."""

@@ -1,4 +1,4 @@
-"""Tests for Prophet-oriented daily seeding in seed_user_from_raw.py."""
+"""Tests for yearly user seeding in seed_user_from_raw.py."""
 
 from __future__ import annotations
 
@@ -17,31 +17,47 @@ assert _spec.loader is not None
 _spec.loader.exec_module(_mod)
 
 
-def test_daily_expense_target_weekend_vs_weekday():
-    saturday = date(2025, 6, 7)
-    monday = date(2025, 6, 9)
-    weekend_amounts = [_mod._daily_expense_target(saturday + timedelta(days=7 * i)) for i in range(8)]
-    weekday_amounts = [_mod._daily_expense_target(monday + timedelta(days=i)) for i in range(5)]
-    assert all(_mod.WEEKEND_DAILY_RANGE[0] <= a <= _mod.WEEKEND_DAILY_RANGE[1] for a in weekend_amounts)
-    assert all(_mod.WEEKDAY_DAILY_RANGE[0] <= a <= _mod.WEEKDAY_DAILY_RANGE[1] for a in weekday_amounts)
-    assert min(weekend_amounts) > max(weekday_amounts)
+def test_pick_expense_amount_tiers():
+    rng = __import__("random").Random(42)
+    amounts = [_mod._pick_expense_amount(rng) for _ in range(1000)]
+    small = sum(1 for a in amounts if 10 <= a <= 2000)
+    medium = sum(1 for a in amounts if 2000 < a <= 5000)
+    large = sum(1 for a in amounts if 5000 < a <= 10000)
+    assert small >= 600
+    assert medium >= 50
+    assert large >= 10
 
 
-def test_build_prophet_daily_transactions_covers_each_day():
-    start, end = _mod._history_date_range(end_at=date(2025, 6, 30), days=60)
-    rows = _mod._build_prophet_daily_transactions(
+def test_build_yearly_expenses_stays_under_salary_per_month():
+    end = date(2025, 6, 30)
+    start, _ = _mod._history_date_range(end_at=end, days=365)
+    rows = _mod._build_yearly_expense_transactions(
         user_id="u1",
         account_id="a1",
-        categories=[{"category_id": "c1", "main_category": "Food & Drinks", "sub_category": "General"}],
+        categories=[
+            {"category_id": "c1", "main_category": "Food & Drinks", "sub_category": "General"},
+            {"category_id": "c2", "main_category": "Shopping", "sub_category": "General"},
+            {"category_id": "c3", "main_category": "Transportation", "sub_category": "General"},
+            {"category_id": "c4", "main_category": "Life & Entertainment", "sub_category": "General"},
+        ],
         fallback_expense_cat="c1",
         end_at=end,
-        days=60,
+        days=365,
     )
-    df = pd.DataFrame(rows)
-    daily = df.groupby("transaction_date")["amount"].sum()
-    assert len(daily) == 60
-    assert daily.index.min() == start.isoformat()
-    assert daily.index.max() == end.isoformat()
+    income_rows = _mod._build_monthly_income_transactions(
+        user_id="u1",
+        account_id="a1",
+        income_category_id="c1",
+        start=start,
+        end=end,
+    )
+    df = pd.DataFrame(rows + income_rows)
+    df["month"] = pd.to_datetime(df["transaction_date"]).dt.to_period("M")
+    for month, group in df.groupby("month"):
+        inc = float(group.loc[group["transaction_type"] == "income", "amount"].sum())
+        exp = float(group.loc[group["transaction_type"] == "expense", "amount"].sum())
+        if inc > 0:
+            assert exp < inc, f"Month {month} overspent"
 
 
 def test_small_expenses_are_common():
@@ -49,7 +65,7 @@ def test_small_expenses_are_common():
         _mod._realistic_expense_amount("Food & Drinks::Cafes & Coffee", f"k{i}")
         for i in range(200)
     ]
-    small = sum(1 for a in amounts if a <= 250)
+    small = sum(1 for a in amounts if a <= 2000)
     assert small >= 100
 
 
@@ -58,7 +74,7 @@ def test_rare_large_expenses_exist():
         _mod._realistic_expense_amount("Shopping::General", f"r{i}")
         for i in range(500)
     ]
-    assert any(a >= 10000 for a in amounts)
+    assert any(a >= 5000 for a in amounts)
 
 
 def test_ensure_net_savings_boosts_income():
@@ -72,3 +88,16 @@ def test_ensure_net_savings_boosts_income():
     income = float(out.loc[out["transaction_type"] == "income", "amount"].sum())
     expense = float(out.loc[out["transaction_type"] == "expense", "amount"].sum())
     assert income > expense
+
+
+def test_monthly_salary_is_fixed():
+    rows = _mod._build_monthly_income_transactions(
+        user_id="u1",
+        account_id="a1",
+        income_category_id="c1",
+        start=date(2025, 1, 1),
+        end=date(2025, 12, 31),
+    )
+    amounts = [r["amount"] for r in rows]
+    assert len(amounts) == 12
+    assert all(a == _mod.MONTHLY_SALARY for a in amounts)

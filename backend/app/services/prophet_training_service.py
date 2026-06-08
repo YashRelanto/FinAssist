@@ -14,6 +14,8 @@ import pandas as pd
 
 from app.services.forecast_features import (
     MIN_MONTHS_FOR_PROPHET_USER,
+    MONTHLY_REGRESSOR_COLUMNS,
+    build_prophet_monthly_frame,
     create_prophet_model_monthly,
     drop_incomplete_current_month,
     expenses_to_monthly,
@@ -128,17 +130,17 @@ def train_prophet_bundle_from_transactions(
         emit(f"Hold-out test MAPE: {mape:.3f}")
 
     m = monthly.sort_values("month_start").reset_index(drop=True)
-    train_df = pd.DataFrame(
-        {
-            "ds": m["month_start"],
-            "y": m["monthly_expense"].clip(lower=1.0),
-        }
-    )
-    model = create_prophet_model_monthly(len(train_df))
+    train_df = build_prophet_monthly_frame(m)
+    if len(train_df) < 2:
+        raise ValueError(
+            "Need at least 2 months with valid monthly regressor history after feature engineering",
+        )
+    model = create_prophet_model_monthly(len(train_df), use_regressors=True)
     model.fit(train_df)
     emit(
-        f"Trained global monthly Prophet on {complete_month_count} complete month(s) "
-        f"({month_count} calendar months incl. MTD) from {training_users} user(s)",
+        f"Trained global monthly Prophet on {len(train_df)} regressor-ready month(s) "
+        f"({complete_month_count} complete calendar months incl. MTD) "
+        f"from {training_users} user(s)",
     )
 
     trained_at = datetime.now(timezone.utc).isoformat()
@@ -150,6 +152,7 @@ def train_prophet_bundle_from_transactions(
         "model_type": "prophet",
         "scope": "global",
         "granularity": "monthly",
+        "regressor_columns": list(MONTHLY_REGRESSOR_COLUMNS),
         "model": model,
         "global_monthly": global_monthly,
         "test_mape": mape,
@@ -207,6 +210,7 @@ def write_manifest(bundle: dict[str, Any], path: Path = PRODUCTION_MANIFEST_PATH
         "global_months": len(bundle.get("global_monthly") or []),
         "complete_months": bundle.get("complete_months"),
         "calendar_months": bundle.get("calendar_months"),
+        "regressor_columns": bundle.get("regressor_columns", []),
         "bundle_path": str(PRODUCTION_BUNDLE_PATH),
     }
     from app.core.config import settings

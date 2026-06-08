@@ -1,11 +1,10 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Activity,
   AlertTriangle,
   BarChart2,
   ChevronRight,
-  CloudUpload,
   Cpu,
   Database,
   PlayCircle,
@@ -285,75 +284,19 @@ function DatasetsSection() {
   const [datasets, setDatasets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [uploading, setUploading] = useState(false);
-  const [uploadMsg, setUploadMsg] = useState('');
-  const txRef = useRef<HTMLInputElement>(null);
-  const catRef = useRef<HTMLInputElement>(null);
 
-  const load = () =>
+  useEffect(() => {
     adminGet('/datasets')
       .then((d) => setDatasets(d.datasets ?? []))
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-
-  useEffect(() => { load(); }, []);
-
-  const handleUpload = async () => {
-    const txFile = txRef.current?.files?.[0];
-    if (!txFile) { setUploadMsg('Select a transactions CSV first.'); return; }
-    setUploading(true);
-    setUploadMsg('');
-    try {
-      const form = new FormData();
-      form.append('transactions', txFile);
-      if (catRef.current?.files?.[0]) form.append('categories', catRef.current.files[0]);
-      const r = await fetch(`${API_BASE}/dataset/upload`, {
-        method: 'POST',
-        headers: adminHeaders(),
-        body: form,
-      });
-      if (!r.ok) throw new Error(await r.text());
-      setUploadMsg('✅ Dataset uploaded successfully!');
-      load();
-    } catch (e: any) {
-      setUploadMsg(`❌ ${e.message}`);
-    } finally {
-      setUploading(false);
-    }
-  };
+  }, []);
 
   if (loading) return <LoadingSpinner />;
   if (error) return <ErrorBox msg={error} />;
 
   return (
     <div className="space-y-6">
-      {/* Upload */}
-      <div className="bg-surface-variant rounded-2xl p-6 space-y-4">
-        <h3 className="text-sm font-semibold text-on-surface flex items-center gap-2">
-          <CloudUpload className="w-4 h-4 text-primary" /> Upload New Dataset
-        </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <label className="block">
-            <span className="text-xs text-on-surface-variant mb-1 block">transactions.csv *</span>
-            <input ref={txRef} type="file" accept=".csv" className="block w-full text-sm text-on-surface-variant file:mr-3 file:py-1.5 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-primary file:text-white hover:file:bg-primary/80 cursor-pointer" />
-          </label>
-          <label className="block">
-            <span className="text-xs text-on-surface-variant mb-1 block">categories.csv (optional)</span>
-            <input ref={catRef} type="file" accept=".csv" className="block w-full text-sm text-on-surface-variant file:mr-3 file:py-1.5 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-surface file:text-on-surface hover:file:bg-surface/80 cursor-pointer" />
-          </label>
-        </div>
-        <button
-          onClick={handleUpload}
-          disabled={uploading}
-          className="inline-flex items-center gap-2 px-5 py-2 bg-primary text-white rounded-xl text-sm font-medium hover:bg-primary/90 disabled:opacity-60 transition"
-        >
-          {uploading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CloudUpload className="w-4 h-4" />}
-          {uploading ? 'Uploading…' : 'Upload'}
-        </button>
-        {uploadMsg && <p className="text-sm mt-1">{uploadMsg}</p>}
-      </div>
-
-      {/* List */}
       <div className="bg-surface-variant rounded-2xl overflow-hidden">
         <table className="w-full text-sm">
           <thead>

@@ -338,7 +338,6 @@ def run_training_sync() -> dict[str, Any]:
     return result
 
 
-# Stubs for admin routes that referenced CSV datasets
 STAGING_DIR = STAGING_BUNDLE_PATH.parent
 
 
@@ -352,10 +351,6 @@ def list_datasets() -> list[dict[str, Any]]:
             "is_default": True,
         }
     ]
-
-
-def save_uploaded_dataset(*_args, **_kwargs) -> dict[str, Any]:
-    raise ValueError("CSV upload training is disabled. Models train from the database only.")
 
 
 def deploy_staging_models(

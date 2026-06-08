@@ -3,12 +3,9 @@ import os
 # ── Load .env from the project root or backend directory (works regardless of CWD) ─────────────────
 _ROOT_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _ENV_FILE = os.path.join(_ROOT_DIR, ".env")
-_BACKEND_ENV_FILE = os.path.join(_ROOT_DIR, "backend", ".env")
 
 try:
     from dotenv import load_dotenv
-    if os.path.exists(_BACKEND_ENV_FILE):
-        load_dotenv(dotenv_path=_BACKEND_ENV_FILE, override=False)
     if os.path.exists(_ENV_FILE):
         load_dotenv(dotenv_path=_ENV_FILE, override=False)
 except ImportError:

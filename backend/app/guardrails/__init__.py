@@ -1,1 +1,1 @@
-"""FinAssist security guardrails (input, output, authorization, PII masking)."""
+"""FinAssist security guardrails (input, output, PII masking)."""

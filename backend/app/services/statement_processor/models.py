@@ -1,6 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional
-from datetime import datetime
+from pydantic import BaseModel
+from typing import Optional
 
 class ParsedTransaction(BaseModel):
     transaction_date: str          # Format: YYYY-MM-DD
@@ -20,10 +19,3 @@ class AccountMetadata(BaseModel):
     ifsc: str
     statement_period: Optional[str] = None
 
-class JobProgress(BaseModel):
-    job_id: str
-    statement_id: str
-    status: str                    # PENDING, PROCESSING, COMPLETED, FAILED
-    progress: int                  # 0 to 100
-    error_message: Optional[str] = None
-    updated_at: datetime

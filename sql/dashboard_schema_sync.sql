@@ -1,4 +1,0 @@
--- Reference: live Supabase schema expectations for dashboard metrics (FinAssistAI).
--- transactions.amount: positive magnitude; transaction_type drives sign in UI.
--- transaction_type: income | expense | transfer (transfers excluded from dashboard totals).
--- budgets: budget_id, user_id, category_id, amount, period, start_date, end_date, alert_threshold.

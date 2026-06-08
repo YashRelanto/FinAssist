@@ -27,7 +27,6 @@ interface AppContextType {
   dashboardSummary: any | null;
   budgetGoalsSummary: any | null;
   addTransaction: (t: Omit<Transaction, 'id'>) => void;
-  addTransactions: (ts: Omit<Transaction, 'id'>[]) => void;
   updateTransaction: (id: string, t: Partial<Transaction>, onComplete?: (success: boolean) => void) => void;
   deleteTransaction: (id: string) => void;
   loadTransactions: () => Promise<void>;
@@ -60,14 +59,8 @@ interface AppContextType {
   deleteGoal: (id: string) => void;
   
   categories: Category[];
-  addCategory: (name: string, icon: string, subCategories?: string[]) => void;
-  updateCategory: (id: string, name: string) => void;
-  deleteCategory: (id: string) => void;
-  addSubCategory: (categoryId: string, name: string) => void;
-  deleteSubCategory: (categoryId: string, subId: string) => void;
   
   reports: Report[];
-  addReport: (r: Report) => void;
   uploadReport: (file: File) => void;
   
   heatmapData: HeatmapData[];
@@ -231,7 +224,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [accountHubAnalysisLoading, setAccountHubAnalysisLoading] = useState(false);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
-  const [categories, setCategories] = useState<Category[]>(initialCategories);
+  const categories = initialCategories;
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [analysisPeriod, setAnalysisPeriodState] = useState<AnalysisPeriod>(
     () => loadStoredAnalysisPeriod(),
@@ -827,11 +820,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const addTransactions = (_ts: Omit<Transaction, 'id'>[]) => {
-    lastLoadedRef.current.transactions = 0;
-    loadTransactions();
-  };
-
   const updateTransaction = (
     id: string,
     t: Partial<Transaction>,
@@ -1040,36 +1028,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     .catch(err => console.error("Failed to delete goal:", err));
   };
 
-  const addCategory = (name: string, icon: string, initialSubCategories: string[] = []) => {
-    const newId = `cat-${Math.random().toString(36).substr(2, 9)}`;
-    const subs = initialSubCategories.map(s => ({ id: `sub-${Math.random().toString(36).substr(2, 9)}`, name: s }));
-    setCategories(prev => [...prev, { id: newId, name, icon, subCategories: subs }]);
-  };
-
-  const updateCategory = (id: string, name: string) => {
-    setCategories(prev => prev.map(c => c.id === id ? { ...c, name } : c));
-  };
-
-  const deleteCategory = (id: string) => {
-    setCategories(prev => prev.filter(c => c.id !== id));
-  };
-
-  const addSubCategory = (categoryId: string, name: string) => {
-    setCategories(prev => prev.map(cat => 
-      cat.id === categoryId 
-        ? { ...cat, subCategories: [...cat.subCategories, { id: `sub-${Math.random()}`, name }] } 
-        : cat
-    ));
-  };
-
-  const deleteSubCategory = (categoryId: string, subId: string) => {
-    setCategories(prev => prev.map(cat => 
-      cat.id === categoryId 
-        ? { ...cat, subCategories: cat.subCategories.filter(s => s.id !== subId) } 
-        : cat
-    ));
-  };
-
   const navigateToAddTransaction = (date: string) => {
     setPendingDate(date);
     setCurrentPage('transactions');
@@ -1090,8 +1048,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentPage('dashboard');
   };
 
-  const addReport = (r: Report) => setReports(prev => [r, ...prev]);
-  
   const uploadReport = async (file: File) => {
     const newReport: Report = {
       id: Math.random().toString(36).substr(2, 9),
@@ -1100,7 +1056,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       size: `${(file.size / 1024 / 1024).toFixed(1)} MB`,
       type: file.name.endsWith('.csv') ? 'CSV' : 'PDF'
     };
-    addReport(newReport);
+    setReports(prev => [newReport, ...prev]);
 
     if (user.userId) {
       const formData = new FormData();
@@ -1145,7 +1101,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       budgetGoalsSummary,
       analysisPeriod,
       setAnalysisPeriod,
-      addTransaction, addTransactions, updateTransaction, deleteTransaction, loadTransactions,
+      addTransaction, updateTransaction, deleteTransaction, loadTransactions,
       loadAccounts,
       loadDbCategories,
       loadDashboardSummary,
@@ -1156,8 +1112,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       loadAccountHubAnalysis,
       budgets, addBudget, updateBudget, deleteBudget, loadBudgets, loadGoals,
       goals, addGoal, updateGoal, deleteGoal,
-      categories, addCategory, updateCategory, deleteCategory, addSubCategory, deleteSubCategory,
-      reports, addReport, uploadReport,
+      categories,
+      reports, uploadReport,
       heatmapData,
       navigateToAddTransaction, pendingDate, resetPendingDate,
       signOut,

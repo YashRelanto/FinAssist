@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Seed a Supabase user with daily expense history tuned for the monthly Prophet model.
+Seed a Supabase user with one year of realistic expense + salary history.
 
-Each calendar day gets expense rows whose daily total follows real behaviour:
-weekdays ~100–250 INR, weekends ~2,000–5,000 INR. History spans at least six calendar
-months (>= MIN_MONTHS_FOR_PROPHET_USER) ending near today so nightly training can fit
-monthly seasonality.
+Spending is concentrated on Food & Drinks, Shopping, Transportation (travel), and
+Life & Entertainment. Most transactions are 10–2,000 INR; fewer land in 2,000–5,000
+and 5,000–10,000. Salary credits 42,000 INR once per month; monthly expenses stay
+below income so net savings are positive every month.
 
 Usage:
   PYTHONPATH=backend python backend/scripts/seed_user_from_raw.py
@@ -31,26 +31,36 @@ from app.services.forecast_features import MIN_MONTHS_FOR_PROPHET_USER  # noqa: 
 from app.utils.supabase_client import supabase  # noqa: E402
 
 DEFAULT_EMAIL = "suyash.bhadouria@relanto.ai"
-MIN_SAVINGS_RATIO = 0.18  # income should exceed expenses by at least ~18%
+MIN_SAVINGS_RATIO = 0.08  # monthly expenses stay at least 8% below salary
 
-# Monthly Prophet training aggregates daily rows into calendar months (see expenses_to_monthly).
-PROPHET_HISTORY_DAYS = max(MIN_MONTHS_FOR_PROPHET_USER * 31, 183)
-WEEKDAY_DAILY_RANGE = (100, 250)
-WEEKEND_DAILY_RANGE = (2000, 5000)
-MONTHLY_SALARY = 85000.0
+# One full calendar year ending near today (Prophet needs >= MIN_MONTHS_FOR_PROPHET_USER).
+PROPHET_HISTORY_DAYS = 365
+MONTHLY_SALARY = 42000.0
+MONTHLY_EXPENSE_RANGE = (26_000, 36_000)  # always below salary → positive savings each month
 
-# Realistic INR tiers for seeded demo data
-SMALL_EXPENSE = [
-    10, 12, 15, 20, 25, 30, 35, 45, 55, 65, 75, 80, 99, 100, 120, 150, 180, 200, 220, 250,
-]
-MEDIUM_EXPENSE = [
-    300, 350, 400, 450, 500, 550, 650, 750, 800, 900, 1000, 1200, 1500, 1800, 2000, 2500, 3500, 5000,
-]
-LARGE_EXPENSE = [6000, 7500, 8000, 10000, 12000, 15000]
-RARE_EXPENSE = [20000, 21000, 25000]
+PRIMARY_EXPENSE_MAINS = (
+    "Food & Drinks",
+    "Shopping",
+    "Transportation",
+    "Life & Entertainment",
+)
+PRIMARY_CATEGORY_WEIGHTS = (0.35, 0.25, 0.15, 0.25)
 
-SALARY_INCOME = [65000, 72000, 78000, 85000, 92000, 98000]
-OTHER_INCOME = [500, 750, 1000, 1500, 2500, 3500, 5000, 8000]
+MERCHANTS_BY_MAIN: dict[str, list[str]] = {
+    "Food & Drinks": [
+        "Swiggy", "Zomato", "Starbucks", "Cafe Coffee Day", "Domino's", "Local Dhaba",
+        "BigBasket", "Blinkit", "Zepto", "Barbeque Nation",
+    ],
+    "Shopping": [
+        "Amazon", "Flipkart", "Myntra", "Ajio", "Reliance Trends", "Westside", "Croma",
+    ],
+    "Transportation": [
+        "Uber", "Ola", "Rapido", "IRCTC", "MakeMyTrip", "RedBus", "IndiGo", "HP Petrol",
+    ],
+    "Life & Entertainment": [
+        "BookMyShow", "Netflix", "Spotify", "PVR Cinemas", "INOX", "Steam", "Bowling Alley",
+    ],
+}
 
 MAIN_ALIASES = {
     "Financial Expenses": "Financial Expense",
@@ -152,52 +162,23 @@ def _rng_for_row(seed_key: str) -> random.Random:
     return random.Random(hash(seed_key) & 0xFFFFFFFF)
 
 
-def _realistic_expense_amount(tag: str | None, seed_key: str) -> float:
-    """Map each expense to small day-to-day amounts with occasional large payments."""
-    rng = _rng_for_row(seed_key)
-    tag_l = (tag or "").lower()
-
-    if "housing::rent" in tag_l or tag_l.endswith("::rent"):
-        return float(rng.choice([12000, 15000, 18000, 20000, 21000]))
-    if "credit card bill" in tag_l or "loan emi" in tag_l:
-        return float(rng.choice([5000, 6500, 8000, 10000, 12000, 15000]))
-    if "mutual fund" in tag_l or "sip" in tag_l or "ppf" in tag_l or "nps" in tag_l:
-        return float(rng.choice([1000, 1500, 2000, 2500, 3000, 5000]))
-    if "subscriptions" in tag_l:
-        return float(rng.choice([99, 129, 149, 199, 299, 499, 649, 999]))
-    if any(k in tag_l for k in ("cafe", "coffee", "snack", "bakery", "bar")):
-        return float(rng.choice([10, 20, 35, 55, 80, 100, 120, 150, 250]))
-    if any(k in tag_l for k in ("fuel", "metro", "bus", "taxi", "ride", "transport")):
-        return float(rng.choice([20, 45, 55, 100, 150, 250, 350, 650]))
-    if "grocery" in tag_l or "food & drinks::general" in tag_l:
-        return float(rng.choice([150, 250, 350, 450, 550, 650, 800, 1000]))
-    if "electronics" in tag_l or "electronic" in tag_l:
-        return float(rng.choice([500, 650, 1000, 1500, 2500, 5000, 10000]))
-
+def _pick_expense_amount(rng: random.Random) -> float:
+    """Most spends 10–2,000; some 2,000–5,000; fewest 5,000–10,000."""
     roll = rng.random()
-    if roll < 0.03:
-        return float(rng.choice(RARE_EXPENSE))
-    if roll < 0.15:
-        return float(rng.choice(LARGE_EXPENSE))
-    if roll < 0.40:
-        return float(rng.choice(MEDIUM_EXPENSE))
-    return float(rng.choice(SMALL_EXPENSE))
+    if roll < 0.72:
+        # Skew toward everyday coffee, food, and ride-hailing amounts.
+        amount = int(rng.expovariate(1 / 280)) + 10
+        amount = min(max(amount, 10), 2000)
+    elif roll < 0.93:
+        amount = rng.randint(2001, 5000)
+    else:
+        amount = rng.randint(5001, 10000)
+    return float(amount)
 
 
-def _realistic_income_amount(tag: str | None, seed_key: str) -> float:
-    rng = _rng_for_row(f"{seed_key}:income")
-    tag_l = (tag or "").lower()
-    if "salary" in tag_l or "wage" in tag_l or "invoice" in tag_l:
-        return float(rng.choice(SALARY_INCOME))
-    if "refund" in tag_l or "cashback" in tag_l:
-        return float(rng.choice([100, 150, 250, 500, 750, 1000]))
-    return float(rng.choice(OTHER_INCOME))
-
-
-def _realistic_amount(txn_type: str, tag: str | None, seed_key: str) -> float:
-    if txn_type == "income":
-        return _realistic_income_amount(tag, seed_key)
-    return _realistic_expense_amount(tag, seed_key)
+def _realistic_expense_amount(tag: str | None, seed_key: str) -> float:
+    """Deterministic expense amount from seed key (used in tests)."""
+    return _pick_expense_amount(_rng_for_row(seed_key))
 
 
 def _ensure_net_savings(tx_df: pd.DataFrame, *, min_ratio: float = MIN_SAVINGS_RATIO) -> pd.DataFrame:
@@ -243,61 +224,129 @@ def _rng_for_day(day: date, *, salt: str = "daily") -> random.Random:
     return random.Random(hash((day.isoformat(), salt)) & 0xFFFFFFFF)
 
 
-def _daily_expense_target(day: date) -> float:
-    """Per-day expense total: low on Mon–Fri, high on Sat–Sun (Prophet weekly seasonality)."""
-    rng = _rng_for_day(day)
-    lo, hi = WEEKEND_DAILY_RANGE if day.weekday() >= 5 else WEEKDAY_DAILY_RANGE
-    return float(rng.randint(lo, hi))
+def _categories_by_main(categories: list[dict]) -> dict[str, list[str]]:
+    by_main: dict[str, list[str]] = {}
+    for row in categories:
+        by_main.setdefault(row["main_category"], []).append(row["category_id"])
+    return by_main
 
 
-def _split_daily_amount(total: float, day: date) -> list[float]:
-    """Split a daily total into 1–3 expense rows (still sums to the daily target)."""
-    rng = _rng_for_day(day, salt="split")
-    total = round(total, 2)
-    if total <= 0:
-        return []
-    n_parts = rng.randint(1, 3)
-    if n_parts == 1:
-        return [total]
-    weights = [rng.random() for _ in range(n_parts)]
-    weight_sum = sum(weights)
-    parts = [round(total * w / weight_sum, 2) for w in weights]
-    drift = round(total - sum(parts), 2)
-    parts[-1] = round(parts[-1] + drift, 2)
-    return [p for p in parts if p > 0]
+def _pick_expense_category(
+    day: date,
+    categories: list[dict],
+    by_main: dict[str, list[str]],
+    fallback_id: str,
+    *,
+    salt: str = "cat",
+) -> tuple[str, str]:
+    """Return (category_id, main_category) weighted toward primary spend categories."""
+    rng = _rng_for_day(day, salt=salt)
+    if rng.random() < 0.95:
+        main = rng.choices(list(PRIMARY_EXPENSE_MAINS), weights=list(PRIMARY_CATEGORY_WEIGHTS))[0]
+        pool = by_main.get(main, [])
+        if pool:
+            return rng.choice(pool), main
+    others = [c for c in categories if c["main_category"] not in PRIMARY_EXPENSE_MAINS]
+    if others:
+        pick = rng.choice(others)
+        return pick["category_id"], pick["main_category"]
+    return fallback_id, "Food & Drinks"
 
 
-def _pick_expense_category(day: date, categories: list[dict], fallback_id: str) -> str:
-    """Weekend → leisure/shopping; weekday → food & transport-style categories."""
-    rng = _rng_for_day(day, salt="cat")
-    weekend = day.weekday() >= 5
-    preferred_mains = (
-        ["Entertainment", "Shopping", "Food & Drinks"]
-        if weekend
-        else ["Food & Drinks", "Transportation", "Communication/PC"]
-    )
-    for main in preferred_mains:
-        matches = [c["category_id"] for c in categories if c["main_category"] == main]
-        if matches:
-            return rng.choice(matches)
-    return fallback_id
+def _merchant_for_category(main: str, day: date, part_index: int) -> str:
+    rng = _rng_for_day(day, salt=f"merchant:{main}:{part_index}")
+    pool = MERCHANTS_BY_MAIN.get(main, ["Local Store"])
+    return rng.choice(pool)
 
 
-def _merchant_for_day(day: date, part_index: int) -> str:
-    rng = _rng_for_day(day, salt=f"merchant:{part_index}")
-    if day.weekday() >= 5:
-        return rng.choice(
-            ["Weekend Restaurant", "Mall Shopping", "Entertainment Venue", "Travel Booking", "Hotel Stay"],
-        )
-    return rng.choice(
-        ["Grocery Store", "Cafe", "Metro Card", "Fuel Station", "Quick Bite", "Pharmacy"],
-    )
+def _txn_count_for_day(day: date) -> int:
+    rng = _rng_for_day(day, salt="txn-count")
+    return rng.randint(3, 7) if day.weekday() >= 5 else rng.randint(2, 4)
+
+
+def _month_bounds(year: int, month: int, start: date, end: date) -> tuple[date, date]:
+    month_start = date(year, month, 1)
+    if month == 12:
+        month_end = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        month_end = date(year, month + 1, 1) - timedelta(days=1)
+    return max(month_start, start), min(month_end, end)
 
 
 def _history_date_range(*, end_at: date | None = None, days: int = PROPHET_HISTORY_DAYS) -> tuple[date, date]:
     end = end_at or date.today()
     start = end - timedelta(days=days - 1)
     return start, end
+
+
+def _build_yearly_expense_transactions(
+    *,
+    user_id: str,
+    account_id: str,
+    categories: list[dict],
+    fallback_expense_cat: str,
+    end_at: date | None = None,
+    days: int = PROPHET_HISTORY_DAYS,
+) -> list[dict]:
+    """Build one year of expenses with monthly caps so income always exceeds spending."""
+    start, end = _history_date_range(end_at=end_at, days=days)
+    by_main = _categories_by_main(categories)
+    rows: list[dict] = []
+
+    cursor = date(start.year, start.month, 1)
+    while cursor <= end:
+        m_start, m_end = _month_bounds(cursor.year, cursor.month, start, end)
+        if m_start > m_end:
+            if cursor.month == 12:
+                cursor = date(cursor.year + 1, 1, 1)
+            else:
+                cursor = date(cursor.year, cursor.month + 1, 1)
+            continue
+
+        month_rng = random.Random(hash((cursor.year, cursor.month, "month")) & 0xFFFFFFFF)
+        month_target = float(month_rng.randint(*MONTHLY_EXPENSE_RANGE))
+        month_spent = 0.0
+        day = m_start
+        txn_idx = 0
+
+        while day <= m_end:
+            for _ in range(_txn_count_for_day(day)):
+                if month_spent >= month_target:
+                    break
+                remaining = month_target - month_spent
+                amount_rng = _rng_for_day(day, salt=f"amt:{txn_idx}")
+                amount = _pick_expense_amount(amount_rng)
+                if amount > remaining:
+                    amount = max(10.0, round(remaining, 2))
+                if amount <= 0:
+                    break
+
+                cat_id, main = _pick_expense_category(
+                    day, categories, by_main, fallback_expense_cat, salt=f"cat:{txn_idx}",
+                )
+                rows.append(
+                    {
+                        "transaction_id": str(uuid.uuid4()),
+                        "user_id": user_id,
+                        "account_id": account_id,
+                        "category_id": cat_id,
+                        "transaction_date": day.strftime("%Y-%m-%d"),
+                        "amount": round(amount, 2),
+                        "transaction_type": "expense",
+                        "merchant_name": _merchant_for_category(main, day, txn_idx)[:200],
+                        "description": f"{main} — {day.strftime('%a %d %b')}"[:500],
+                    },
+                )
+                month_spent += amount
+                txn_idx += 1
+            day += timedelta(days=1)
+
+        if cursor.month == 12:
+            cursor = date(cursor.year + 1, 1, 1)
+        else:
+            cursor = date(cursor.year, cursor.month + 1, 1)
+
+    return rows
 
 
 def _build_prophet_daily_transactions(
@@ -309,29 +358,15 @@ def _build_prophet_daily_transactions(
     end_at: date | None = None,
     days: int = PROPHET_HISTORY_DAYS,
 ) -> list[dict]:
-    """One expense row set per calendar day so expenses_to_daily() has full daily coverage."""
-    start, end = _history_date_range(end_at=end_at, days=days)
-    rows: list[dict] = []
-    current = start
-    while current <= end:
-        daily_total = _daily_expense_target(current)
-        cat_id = _pick_expense_category(current, categories, fallback_expense_cat)
-        for idx, amount in enumerate(_split_daily_amount(daily_total, current)):
-            rows.append(
-                {
-                    "transaction_id": str(uuid.uuid4()),
-                    "user_id": user_id,
-                    "account_id": account_id,
-                    "category_id": cat_id,
-                    "transaction_date": current.strftime("%Y-%m-%d"),
-                    "amount": amount,
-                    "transaction_type": "expense",
-                    "merchant_name": _merchant_for_day(current, idx)[:200],
-                    "description": f"Daily spend ({current.strftime('%a')})"[:500],
-                },
-            )
-        current += timedelta(days=1)
-    return rows
+    """Alias kept for tests — delegates to yearly builder."""
+    return _build_yearly_expense_transactions(
+        user_id=user_id,
+        account_id=account_id,
+        categories=categories,
+        fallback_expense_cat=fallback_expense_cat,
+        end_at=end_at,
+        days=days,
+    )
 
 
 def _build_monthly_income_transactions(
@@ -342,24 +377,31 @@ def _build_monthly_income_transactions(
     start: date,
     end: date,
 ) -> list[dict]:
-    """Salary on the 1st of each month within the expense history window."""
+    """Salary once per calendar month (1st, or first tracked day for a partial opening month)."""
     rows: list[dict] = []
     month_cursor = date(start.year, start.month, 1)
     while month_cursor <= end:
-        if month_cursor >= start:
+        if month_cursor.month == 12:
+            month_end = date(month_cursor.year + 1, 1, 1) - timedelta(days=1)
+        else:
+            month_end = date(month_cursor.year, month_cursor.month + 1, 1) - timedelta(days=1)
+
+        if month_end >= start and month_cursor <= end:
+            pay_day = month_cursor if month_cursor >= start else start
             rows.append(
                 {
                     "transaction_id": str(uuid.uuid4()),
                     "user_id": user_id,
                     "account_id": account_id,
                     "category_id": income_category_id,
-                    "transaction_date": month_cursor.strftime("%Y-%m-%d"),
+                    "transaction_date": pay_day.strftime("%Y-%m-%d"),
                     "amount": MONTHLY_SALARY,
                     "transaction_type": "income",
                     "merchant_name": "Employer Payroll",
                     "description": "Monthly salary",
                 },
             )
+
         if month_cursor.month == 12:
             month_cursor = date(month_cursor.year + 1, 1, 1)
         else:
@@ -491,12 +533,11 @@ def seed_user(
 
     hist_start, hist_end = _history_date_range(days=history_days)
     print(
-        f"Generating {history_days} days of daily expenses "
-        f"({hist_start} .. {hist_end}): weekdays {WEEKDAY_DAILY_RANGE}, weekends {WEEKEND_DAILY_RANGE}",
+        f"Generating {history_days} days of expenses ({hist_start} .. {hist_end}) — "
+        f"salary {MONTHLY_SALARY:,.0f}/month, spend {MONTHLY_EXPENSE_RANGE[0]:,}–{MONTHLY_EXPENSE_RANGE[1]:,}/month",
     )
 
-    # All daily expense totals land on savings so expenses_to_daily() matches weekday/weekend tiers.
-    expense_rows = _build_prophet_daily_transactions(
+    expense_rows = _build_yearly_expense_transactions(
         user_id=target_user_id,
         account_id=savings_id,
         categories=categories,
@@ -551,6 +592,14 @@ def seed_user(
         f"Amount profile: income={income_total:,.2f} expenses={expense_total:,.2f} "
         f"net_savings={net_savings:,.2f} ({savings_rate:.1f}%)"
     )
+
+    tx_df["_month"] = pd.to_datetime(tx_df["transaction_date"]).dt.to_period("M")
+    for month, group in tx_df.groupby("_month"):
+        inc = float(group.loc[group["transaction_type"] == "income", "amount"].sum())
+        exp = float(group.loc[group["transaction_type"] == "expense", "amount"].sum())
+        if inc > 0 and exp >= inc:
+            raise RuntimeError(f"Month {month} expenses ({exp:,.2f}) exceed income ({inc:,.2f})")
+    tx_df = tx_df.drop(columns=["_month"])
 
     records = tx_df.astype(object).where(pd.notnull(tx_df), None).to_dict(orient="records")
     batch_size = 200

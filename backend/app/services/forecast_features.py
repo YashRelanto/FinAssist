@@ -8,29 +8,9 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-FEATURE_COLUMNS = [
-    "lag_1",
-    "lag_2",
-    "lag_3",
-    "lag_4",
-    "rolling_mean_4",
-    "rolling_mean_8",
-    "rolling_std_4",
-    "trend_4",
-    "level_ratio",
-    "week_of_year",
-    "month",
-    "week_sin",
-    "week_cos",
-]
-
 MIN_WEEKS_FOR_FORECAST = 8
-MIN_WEEKS_FOR_PROPHET_USER = 8
-PROPHET_HOLDOUT_MIN_WEEKS = 9
 MIN_MONTHS_FOR_FORECAST = 6
 MIN_MONTHS_FOR_PROPHET_USER = 6
-# Hold-out needs one month beyond the training fit window (same as MIN_MONTHS_FOR_PROPHET_USER).
-PROPHET_HOLDOUT_MIN_MONTHS = MIN_MONTHS_FOR_PROPHET_USER
 
 
 def expenses_to_weekly(expenses: pd.DataFrame) -> pd.DataFrame:
@@ -54,97 +34,6 @@ def expenses_to_weekly(expenses: pd.DataFrame) -> pd.DataFrame:
         .reset_index(drop=True)
     )
     return weekly
-
-
-def _level_ratio_series(weekly_expense: pd.Series) -> pd.Series:
-    baseline = weekly_expense.shift(1).rolling(8, min_periods=3).mean().clip(lower=1.0)
-    return (weekly_expense.shift(1) / baseline).clip(0.1, 5.0)
-
-
-def build_supervised_weekly(weekly: pd.DataFrame) -> pd.DataFrame:
-    """One row per week with lags and target = next week's expense."""
-    if len(weekly) < MIN_WEEKS_FOR_FORECAST:
-        return pd.DataFrame()
-
-    w = weekly.copy().sort_values("week_start").reset_index(drop=True)
-    w["lag_1"] = w["weekly_expense"].shift(1)
-    w["lag_2"] = w["weekly_expense"].shift(2)
-    w["lag_3"] = w["weekly_expense"].shift(3)
-    w["lag_4"] = w["weekly_expense"].shift(4)
-    w["rolling_mean_4"] = w["weekly_expense"].shift(1).rolling(4, min_periods=2).mean()
-    w["rolling_mean_8"] = w["weekly_expense"].shift(1).rolling(8, min_periods=3).mean()
-    w["rolling_std_4"] = w["weekly_expense"].shift(1).rolling(4, min_periods=2).std()
-    w["trend_4"] = w["weekly_expense"].shift(1).diff(3) / 3.0
-    w["level_ratio"] = _level_ratio_series(w["weekly_expense"])
-    w["week_of_year"] = w["week_start"].dt.isocalendar().week.astype(int)
-    w["month"] = w["week_start"].dt.month
-    w["week_sin"] = np.sin(2 * np.pi * w["week_of_year"] / 52.0)
-    w["week_cos"] = np.cos(2 * np.pi * w["week_of_year"] / 52.0)
-    w["target"] = w["weekly_expense"].shift(-1)
-    w = w.dropna(subset=FEATURE_COLUMNS + ["target"]).reset_index(drop=True)
-    return w
-
-
-def latest_feature_row(weekly: pd.DataFrame) -> pd.DataFrame | None:
-    """Feature vector for the week after the last observed week."""
-    if len(weekly) < 5:
-        return None
-
-    w = weekly.copy().sort_values("week_start").reset_index(drop=True)
-    expenses = w["weekly_expense"].values
-    next_start = w["week_start"].iloc[-1] + timedelta(days=7)
-    week_of_year = int(next_start.isocalendar().week)
-    month = int(next_start.month)
-
-    rolling_mean_8 = float(np.mean(expenses[-min(8, len(expenses)) :]))
-    rolling_mean_4 = float(np.mean(expenses[-4:]))
-    row = {
-        "lag_1": expenses[-1],
-        "lag_2": expenses[-2],
-        "lag_3": expenses[-3],
-        "lag_4": expenses[-4],
-        "rolling_mean_4": rolling_mean_4,
-        "rolling_mean_8": rolling_mean_8,
-        "rolling_std_4": float(np.std(expenses[-4:], ddof=0)),
-        "trend_4": float((expenses[-1] - expenses[-4]) / 3.0) if len(expenses) >= 4 else 0.0,
-        "level_ratio": float(np.clip(expenses[-1] / max(rolling_mean_8, 1.0), 0.1, 5.0)),
-        "week_of_year": week_of_year,
-        "month": month,
-        "week_sin": float(np.sin(2 * np.pi * week_of_year / 52.0)),
-        "week_cos": float(np.cos(2 * np.pi * week_of_year / 52.0)),
-    }
-    return pd.DataFrame([row])
-
-
-def feature_matrix(rows: pd.DataFrame) -> np.ndarray:
-    return rows[FEATURE_COLUMNS].astype(float).values
-
-
-def build_training_frame(
-    transactions: pd.DataFrame,
-    categories: pd.DataFrame,
-) -> pd.DataFrame:
-    """Global training set: all users' weekly expense → next-week target."""
-    if transactions.empty:
-        return pd.DataFrame()
-
-    tx = transactions.merge(categories, on="category_id", how="left")
-    tx = tx[tx["transaction_type"] == "expense"].copy()
-    if tx.empty:
-        return pd.DataFrame()
-
-    frames: list[pd.DataFrame] = []
-    for user_id, group in tx.groupby("user_id"):
-        weekly = expenses_to_weekly(group)
-        supervised = build_supervised_weekly(weekly)
-        if supervised.empty:
-            continue
-        supervised["user_id"] = user_id
-        frames.append(supervised)
-
-    if not frames:
-        return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
 
 
 def daily_expense_series(expenses: pd.DataFrame, days: int = 35) -> list[dict]:
@@ -248,21 +137,6 @@ def category_weekly_breakdown(
     return chart
 
 
-def create_prophet_model(week_count: int):
-    """Prophet config tuned for short weekly expense series."""
-    from prophet import Prophet
-
-    return Prophet(
-        growth="flat" if week_count < 26 else "linear",
-        weekly_seasonality=True,
-        yearly_seasonality=week_count >= 52,
-        daily_seasonality=False,
-        seasonality_mode="multiplicative",
-        changepoint_prior_scale=0.05,
-        seasonality_prior_scale=10.0,
-    )
-
-
 def prophet_future_frame(weekly: pd.DataFrame, steps: int) -> pd.DataFrame:
     w = weekly.sort_values("week_start").reset_index(drop=True)
     last = pd.Timestamp(w["week_start"].iloc[-1])
@@ -301,32 +175,9 @@ def safe_mape(y_true: Iterable[float], y_pred: Iterable[float]) -> float:
     return float(np.mean(np.abs(yt - yp) / denom))
 
 
-def prophet_holdout_mape(weekly: pd.DataFrame) -> float | None:
-    """One-step hold-out MAPE using the same date alignment as inference."""
-    if len(weekly) < PROPHET_HOLDOUT_MIN_WEEKS:
-        return None
-    w = weekly.sort_values("week_start").reset_index(drop=True)
-    hold_y = float(w["weekly_expense"].iloc[-1])
-    if hold_y <= 0:
-        return None
-    train = w.iloc[:-1]
-    train_df = pd.DataFrame(
-        {"ds": train["week_start"], "y": train["weekly_expense"].clip(lower=1.0)},
-    )
-    model = create_prophet_model(len(train_df))
-    model.fit(train_df)
-    pred = prophet_predict_weeks(model, train, 1)[0]
-    return min(safe_mape([hold_y], [pred]), 1.0)
-
-
 # ─────────────────────────────────────────────────────────────
-# Daily-granularity Prophet helpers
-# These are used when models are trained on daily data (the
-# recommended approach — see prophet_training_service.py).
+# Daily-granularity helpers (inference fallbacks for legacy bundles)
 # ─────────────────────────────────────────────────────────────
-
-MIN_DAYS_FOR_PROPHET_USER = 56  # 8 weeks of daily expense data
-
 
 def expenses_to_daily(expenses: pd.DataFrame) -> pd.DataFrame:
     """Aggregate expense rows to daily totals with zero-filled date gaps."""
@@ -345,25 +196,6 @@ def expenses_to_daily(expenses: pd.DataFrame) -> pd.DataFrame:
     daily = agg.set_index("date").reindex(full_range, fill_value=0.0).reset_index()
     daily.columns = ["date", "daily_expense"]
     return daily.sort_values("date").reset_index(drop=True)
-
-
-def create_prophet_model_daily(day_count: int):
-    """
-    Prophet config tuned for *daily* expense data.
-    weekly_seasonality=True lets Prophet learn Mon–Sun spending rhythms,
-    which is what makes weekend predictions higher than weekday ones.
-    """
-    from prophet import Prophet
-
-    return Prophet(
-        growth="linear" if day_count >= 90 else "flat",
-        weekly_seasonality=True,        # Captures Mon–Sun day-of-week effects
-        yearly_seasonality=day_count >= 365,
-        daily_seasonality=False,
-        seasonality_mode="additive",
-        changepoint_prior_scale=0.05,
-        seasonality_prior_scale=10.0,
-    )
 
 
 def prophet_future_frame_daily(last_date: pd.Timestamp, steps: int) -> pd.DataFrame:
@@ -415,31 +247,22 @@ def dow_spending_ratios(expenses: pd.DataFrame, lookback_weeks: int = 8) -> list
     return (by_dow / total).tolist()
 
 
-def prophet_holdout_mape_daily(daily: pd.DataFrame) -> float | None:
-    """7-day hold-out MAPE for a daily-trained Prophet model."""
-    if len(daily) < MIN_DAYS_FOR_PROPHET_USER + 7:
-        return None
-    d = daily.sort_values("date").reset_index(drop=True)
-    hold_total = float(d["daily_expense"].iloc[-7:].sum())
-    if hold_total <= 0:
-        return None
-    train = d.iloc[:-7]
-    train_df = pd.DataFrame({
-        "ds": train["date"],
-        "y": train["daily_expense"].clip(lower=0.0),
-    })
-    model = create_prophet_model_daily(len(train_df))
-    model.fit(train_df)
-    future = prophet_future_frame_daily(pd.Timestamp(train["date"].iloc[-1]), 7)
-    forecast = model.predict(future)
-    pred_preds = sanitize_daily_predictions(forecast["yhat"].values, train)
-    pred_total = sum(pred_preds)
-    return min(safe_mape([hold_total], [pred_total]), 1.0)
-
-
 # ─────────────────────────────────────────────────────────────
 # Monthly-granularity Prophet helpers (primary training path)
 # ─────────────────────────────────────────────────────────────
+
+MONTHLY_REGRESSOR_COLUMNS = [
+    "lag_1",
+    "lag_2",
+    "lag_3",
+    "rolling_mean_3",
+    "rolling_mean_6",
+    "rolling_std_3",
+    "trend_3",
+    "level_ratio",
+    "month_sin",
+    "month_cos",
+]
 
 
 def expenses_to_monthly(expenses: pd.DataFrame) -> pd.DataFrame:
@@ -483,11 +306,88 @@ def drop_incomplete_current_month(
     return m.reset_index(drop=True)
 
 
-def create_prophet_model_monthly(month_count: int):
+def attach_monthly_regressors(monthly: pd.DataFrame) -> pd.DataFrame:
+    """
+    Monthly autoregressive + calendar features for Prophet regressors.
+
+    Each row uses only expenses from prior months so training does not leak the
+    current month's target into its regressors. Short histories back-fill lags
+    from the earliest available months (same rule as inference).
+    """
+    m = monthly.copy().sort_values("month_start").reset_index(drop=True)
+    reg_rows: list[dict[str, float]] = []
+    for i in range(len(m)):
+        if i == 0:
+            reg_rows.append({col: np.nan for col in MONTHLY_REGRESSOR_COLUMNS})
+            continue
+        hist = m.iloc[:i][["month_start", "monthly_expense"]]
+        target_ds = pd.Timestamp(m["month_start"].iloc[i])
+        reg_rows.append(monthly_regressor_row(hist, target_ds))
+    reg_df = pd.DataFrame(reg_rows)
+    return pd.concat([m.reset_index(drop=True), reg_df], axis=1)
+
+
+def build_prophet_monthly_frame(monthly: pd.DataFrame) -> pd.DataFrame:
+    """Prophet training frame: ds, y, and monthly regressor columns."""
+    m = attach_monthly_regressors(monthly)
+    frame = pd.DataFrame(
+        {
+            "ds": m["month_start"],
+            "y": m["monthly_expense"].clip(lower=1.0),
+        }
+    )
+    for col in MONTHLY_REGRESSOR_COLUMNS:
+        frame[col] = m[col]
+    return frame.dropna(subset=MONTHLY_REGRESSOR_COLUMNS).reset_index(drop=True)
+
+
+def monthly_regressor_row(history: pd.DataFrame, target_ds: pd.Timestamp) -> dict[str, float]:
+    """Regressor values for one future month using observed history only."""
+    h = history.sort_values("month_start").reset_index(drop=True)
+    e = h["monthly_expense"].astype(float).values
+    n = len(e)
+    if n < 1:
+        raise ValueError("monthly history required for regressor row")
+
+    lag_1 = float(e[-1])
+    lag_2 = float(e[-2]) if n >= 2 else lag_1
+    lag_3 = float(e[-3]) if n >= 3 else lag_2
+    tail3 = e[-min(3, n) :]
+    tail6 = e[-min(6, n) :]
+    rolling_mean_3 = float(np.mean(tail3))
+    rolling_mean_6 = float(np.mean(tail6))
+    rolling_std_3 = float(np.std(tail3, ddof=0)) if len(tail3) >= 2 else 0.0
+    trend_3 = float((e[-1] - e[-4]) / 3.0) if n >= 4 else 0.0
+    level_ratio = float(np.clip(lag_1 / max(rolling_mean_6, 1.0), 0.1, 5.0))
+    month_num = int(pd.Timestamp(target_ds).month)
+    return {
+        "lag_1": lag_1,
+        "lag_2": lag_2,
+        "lag_3": lag_3,
+        "rolling_mean_3": rolling_mean_3,
+        "rolling_mean_6": rolling_mean_6,
+        "rolling_std_3": rolling_std_3,
+        "trend_3": trend_3,
+        "level_ratio": level_ratio,
+        "month_sin": float(np.sin(2 * np.pi * month_num / 12.0)),
+        "month_cos": float(np.cos(2 * np.pi * month_num / 12.0)),
+    }
+
+
+def model_uses_monthly_regressors(model) -> bool:
+    return bool(getattr(model, "extra_regressors", None))
+
+
+def create_prophet_model_monthly(
+    month_count: int,
+    *,
+    use_regressors: bool = True,
+    regressor_columns: list[str] | None = None,
+):
     """Prophet config tuned for calendar-month expense totals."""
     from prophet import Prophet
 
-    return Prophet(
+    model = Prophet(
         growth="linear" if month_count >= 12 else "flat",
         weekly_seasonality=False,
         yearly_seasonality=month_count >= 12,
@@ -496,6 +396,10 @@ def create_prophet_model_monthly(month_count: int):
         changepoint_prior_scale=0.05,
         seasonality_prior_scale=10.0,
     )
+    if use_regressors:
+        for col in regressor_columns or MONTHLY_REGRESSOR_COLUMNS:
+            model.add_regressor(col, standardize=True)
+    return model
 
 
 def prophet_future_frame_monthly(monthly: pd.DataFrame, steps: int) -> pd.DataFrame:
@@ -504,6 +408,20 @@ def prophet_future_frame_monthly(monthly: pd.DataFrame, steps: int) -> pd.DataFr
     last = pd.Timestamp(m["month_start"].iloc[-1])
     dates = [last + pd.DateOffset(months=i + 1) for i in range(steps)]
     return pd.DataFrame({"ds": dates})
+
+
+def prophet_future_frame_monthly_with_regressors(
+    monthly: pd.DataFrame,
+    steps: int,
+) -> pd.DataFrame:
+    """Future Prophet rows with ds + monthly regressors for the next `steps` months."""
+    m = monthly.sort_values("month_start").reset_index(drop=True)
+    last = pd.Timestamp(m["month_start"].iloc[-1])
+    rows: list[dict[str, float | pd.Timestamp]] = []
+    for i in range(steps):
+        target_ds = last + pd.DateOffset(months=i + 1)
+        rows.append({"ds": target_ds, **monthly_regressor_row(m, target_ds)})
+    return pd.DataFrame(rows)
 
 
 def sanitize_monthly_predictions(raw: np.ndarray, monthly: pd.DataFrame) -> list[float]:
@@ -518,10 +436,40 @@ def sanitize_monthly_predictions(raw: np.ndarray, monthly: pd.DataFrame) -> list
     return preds
 
 
-def prophet_predict_months(model, monthly: pd.DataFrame, steps: int) -> list[float]:
-    future = prophet_future_frame_monthly(monthly, steps)
-    forecast = model.predict(future)
-    return sanitize_monthly_predictions(forecast["yhat"].values, monthly)
+def prophet_predict_months(
+    model,
+    monthly: pd.DataFrame,
+    steps: int,
+    *,
+    use_regressors: bool | None = None,
+) -> list[float]:
+    if use_regressors is None:
+        use_regressors = model_uses_monthly_regressors(model)
+
+    history = monthly.sort_values("month_start").reset_index(drop=True)
+    preds: list[float] = []
+    for _ in range(steps):
+        if use_regressors:
+            future = prophet_future_frame_monthly_with_regressors(history, 1)
+        else:
+            future = prophet_future_frame_monthly(history, 1)
+        forecast = model.predict(future)
+        pred = sanitize_monthly_predictions(forecast["yhat"].values, history)[0]
+        preds.append(pred)
+        next_month = pd.Timestamp(history["month_start"].iloc[-1]) + pd.DateOffset(months=1)
+        history = pd.concat(
+            [
+                history,
+                pd.DataFrame(
+                    {
+                        "month_start": [next_month],
+                        "monthly_expense": [pred],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        )
+    return preds
 
 
 def prophet_holdout_mape_monthly(
@@ -541,10 +489,10 @@ def prophet_holdout_mape_monthly(
     if train.empty:
         return None
     try:
-        train_df = pd.DataFrame(
-            {"ds": train["month_start"], "y": train["monthly_expense"].clip(lower=1.0)},
-        )
-        model = create_prophet_model_monthly(len(train_df))
+        train_df = build_prophet_monthly_frame(train)
+        if train_df.empty:
+            return None
+        model = create_prophet_model_monthly(len(train_df), use_regressors=True)
         model.fit(train_df)
         pred = prophet_predict_months(model, train, 1)[0]
         return min(safe_mape([hold_y], [pred]), 1.0)

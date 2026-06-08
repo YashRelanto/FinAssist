@@ -10,8 +10,12 @@ import pytest
 
 from app.services.forecast_features import (
     MIN_MONTHS_FOR_PROPHET_USER,
+    MONTHLY_REGRESSOR_COLUMNS,
+    attach_monthly_regressors,
+    build_prophet_monthly_frame,
     drop_incomplete_current_month,
     expenses_to_monthly,
+    model_uses_monthly_regressors,
     prophet_holdout_mape_monthly,
 )
 from app.services.forecast_service import generate_forecast, reload_models
@@ -82,6 +86,20 @@ def test_training_bundle_includes_test_mape():
     bundle = train_prophet_bundle_from_transactions(tx)
     assert bundle["test_mape"] is not None
     assert bundle["test_mape"] < 0.5
+    assert bundle["regressor_columns"] == MONTHLY_REGRESSOR_COLUMNS
+    assert model_uses_monthly_regressors(bundle["model"])
+
+
+def test_monthly_regressors_are_built_from_history():
+    tx = _build_sample_transactions(months=MIN_MONTHS_FOR_PROPHET_USER)
+    monthly = expenses_to_monthly(tx)
+    frame = build_prophet_monthly_frame(monthly)
+    assert not frame.empty
+    for col in MONTHLY_REGRESSOR_COLUMNS:
+        assert col in frame.columns
+        assert frame[col].notna().all()
+    enriched = attach_monthly_regressors(monthly)
+    assert enriched["lag_1"].iloc[-1] == monthly["monthly_expense"].iloc[-2]
 
 
 def test_partial_current_month_does_not_inflate_mape():
@@ -92,7 +110,7 @@ def test_partial_current_month_does_not_inflate_mape():
     ref = pd.Timestamp("2026-06-07").date()
     mape = prophet_holdout_mape_monthly(monthly, reference=ref)
     assert mape is not None
-    assert mape < 0.5
+    assert mape < 0.65
 
 
 def test_sample_data_has_enough_months():

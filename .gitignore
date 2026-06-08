@@ -12,9 +12,12 @@ build/
 .venv/
 # ── FinAssist runtime-generated artifacts (do NOT commit) ─────────────────────
 models/staging/
+models/runs/
 models/production/*.joblib
 models/jobs/
+data/new data/
 backend/chroma_db/
+backend/security_events.json
 backend/sessions.json
 sessions.json
 sessions - Copy.json

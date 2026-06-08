@@ -31,10 +31,6 @@ export function storeAnalysisPeriod(period: AnalysisPeriod): void {
   }
 }
 
-export function periodQueryParam(period: AnalysisPeriod): string {
-  return `period=${encodeURIComponent(period)}`;
-}
-
 function monthStart(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), 1);
 }

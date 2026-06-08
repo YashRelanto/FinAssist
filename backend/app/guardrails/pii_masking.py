@@ -1,5 +1,4 @@
 import re
-from typing import Dict, Any, List
 
 class PIIMasker:
     """
@@ -61,33 +60,3 @@ class PIIMasker:
             text = PIIMasker.mask_string(text, pii_type)
         return text
     
-    @staticmethod
-    def mask_transaction_data(transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Mask PII inside raw transaction dictionary list before loading into LLM context.
-        """
-        masked = []
-        for txn in transactions:
-            txn_copy = txn.copy()
-            
-            # Mask transaction descriptions / raw narration
-            for field in ["raw_description", "description", "narration"]:
-                if field in txn_copy and isinstance(txn_copy[field], str):
-                    txn_copy[field] = PIIMasker.mask_all(txn_copy[field])
-            
-            # Mask account numbers
-            if "account_number" in txn_copy:
-                txn_copy["account_number"] = PIIMasker.mask_string(
-                    str(txn_copy["account_number"]),
-                    "account_number"
-                )
-            
-            # Delete extremely sensitive reference keys entirely
-            sensitive_fields = ["bank_txn_ref", "ifsc_code", "ref_num", "ifsc"]
-            for field in sensitive_fields:
-                if field in txn_copy:
-                    del txn_copy[field]
-            
-            masked.append(txn_copy)
-        
-        return masked

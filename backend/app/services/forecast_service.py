@@ -21,7 +21,7 @@ from app.services.forecast_features import (
     expenses_to_monthly,
     expenses_to_weekly,
     prophet_future_frame_daily,
-    prophet_future_frame_monthly,
+    model_uses_monthly_regressors,
     prophet_predict_months,
     prophet_predict_weeks,
     safe_mape,
@@ -321,9 +321,12 @@ def _get_monthly_prediction(
         bundle = _load_prophet_bundle()
         assert bundle is not None
         global_monthly = _global_monthly_from_bundle(bundle)
-        future = prophet_future_frame_monthly(global_monthly, 1)
-        fc = model.predict(future)
-        global_preds = sanitize_monthly_predictions(fc["yhat"].values, global_monthly)
+        global_preds = prophet_predict_months(
+            model,
+            global_monthly,
+            1,
+            use_regressors=model_uses_monthly_regressors(model),
+        )
         return _scale_global_prediction_to_user(
             float(global_preds[0]),
             user_monthly,
@@ -331,9 +334,12 @@ def _get_monthly_prediction(
         )
 
     if _is_monthly_bundle() and not _is_global_bundle():
-        future = prophet_future_frame_monthly(user_monthly, 1)
-        fc = model.predict(future)
-        preds = sanitize_monthly_predictions(fc["yhat"].values, user_monthly)
+        preds = prophet_predict_months(
+            model,
+            user_monthly,
+            1,
+            use_regressors=model_uses_monthly_regressors(model),
+        )
         return float(preds[0])
 
     last_day = calendar.monthrange(target_month_start.year, target_month_start.month)[1]
