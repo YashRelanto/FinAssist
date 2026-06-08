@@ -2,7 +2,7 @@
 ChromaDB persistent client wrapper for the FinAssist vector knowledge base.
 
 Provides a module-level singleton `chroma_db` that is imported by:
-  - app.utils.chatbot_engine  (search)
+  - app.graph.nodes.rag_node  (search)
   - app.utils.scrapers        (add_documents)
 
 Storage location: backend/chroma_db/   (auto-created on first run)

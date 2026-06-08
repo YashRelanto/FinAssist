@@ -9,7 +9,9 @@ from app.services.user_profile_service import (
 from app.services.dashboard_metrics_service import (
     build_budget_goals_payload,
     build_dashboard_payload,
+    compute_net_savings,
     normalize_category_name,
+    resolve_budget_period_dates,
 )
 from app.services.account_hub_analysis_service import generate_account_hub_analysis
 from app.services.accounts_service import fetch_user_accounts, insert_account
@@ -572,7 +574,8 @@ async def get_budget_goals_summary(user_id: str):
         trans_response = (
             supabase.table("transactions")
             .select(
-                "transaction_id, amount, transaction_type, transaction_date, category_id"
+                "transaction_id, amount, transaction_type, transaction_date, category_id, "
+                "categories(main_category, sub_category)"
             )
             .eq("user_id", uid)
             .gte("transaction_date", min_tx_date)
@@ -633,16 +636,13 @@ async def create_budget(req: BudgetCreate):
                 .execute()
                 
         category_id = cat_res.data[0]["category_id"] if cat_res.data else None
-        
-        start_date = req.start_date
-        if not start_date:
-            start_date = datetime.now().strftime("%Y-%m-%d")
-            
-        end_date = req.end_date
-        if not end_date:
-            from datetime import timedelta
-            end_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-            
+
+        start_date, end_date = resolve_budget_period_dates(
+            req.period,
+            start_date=req.start_date,
+            end_date=req.end_date,
+        )
+
         insert_data = {
             "user_id": req.user_id,
             "category_id": category_id,
@@ -672,16 +672,13 @@ async def update_budget(budget_id: str, req: BudgetCreate):
             .execute()
             
         category_id = cat_res.data[0]["category_id"] if cat_res.data else None
-        
-        start_date = req.start_date
-        if not start_date:
-            start_date = datetime.now().strftime("%Y-%m-%d")
-            
-        end_date = req.end_date
-        if not end_date:
-            from datetime import timedelta
-            end_date = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
-            
+
+        start_date, end_date = resolve_budget_period_dates(
+            req.period,
+            start_date=req.start_date,
+            end_date=req.end_date,
+        )
+
         update_data = {
             "budget_name": req.budget_name,
             "amount": req.amount,
@@ -734,12 +731,22 @@ async def get_goals(user_id: str):
 @router.post("/goals")
 async def create_goal(req: GoalCreate):
     try:
+        current_amount = float(req.current_amount or 0)
+        if current_amount <= 0:
+            tx_res = (
+                supabase.table("transactions")
+                .select("amount, transaction_type")
+                .eq("user_id", req.user_id)
+                .execute()
+            )
+            current_amount = compute_net_savings(tx_res.data or [])
+
         insert_data = {
             "user_id": req.user_id,
             "goal_name": req.goal_name,
             "description": req.description,
             "target_amount": req.target_amount,
-            "current_amount": req.current_amount,
+            "current_amount": current_amount,
             "target_date": req.target_date,
             "status": req.status
         }

@@ -18,6 +18,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { cn, formatCurrency } from '../lib/utils';
+import { defaultBudgetPeriodDates } from '../lib/budgetPeriod';
 import { useAppContext } from '../context/AppContext';
 import { GoalModal } from '../components/GoalModal';
 import { BudgetModal } from '../components/BudgetModal';
@@ -176,16 +177,15 @@ export const BudgetGoals: React.FC = () => {
   };
 
   const handleAutoGenerateBudgets = () => {
+    const monthDates = defaultBudgetPeriodDates('monthly');
     const defaultBudgets = [
       {
         categoryName: 'Housing',
         budgetName: 'Housing & Utilities',
         amount: user.fixedRent || 2000,
         period: 'monthly',
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date(new Date().setMonth(new Date().getMonth() + 1))
-          .toISOString()
-          .split('T')[0],
+        startDate: monthDates.startDate,
+        endDate: monthDates.endDate,
         alertThreshold: 90,
       },
       {
@@ -193,10 +193,8 @@ export const BudgetGoals: React.FC = () => {
         budgetName: 'Dining & Food Outing',
         amount: 800,
         period: 'monthly',
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date(new Date().setMonth(new Date().getMonth() + 1))
-          .toISOString()
-          .split('T')[0],
+        startDate: monthDates.startDate,
+        endDate: monthDates.endDate,
         alertThreshold: 85,
       },
       {
@@ -204,10 +202,8 @@ export const BudgetGoals: React.FC = () => {
         budgetName: 'Transportation Commute',
         amount: 450,
         period: 'monthly',
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date(new Date().setMonth(new Date().getMonth() + 1))
-          .toISOString()
-          .split('T')[0],
+        startDate: monthDates.startDate,
+        endDate: monthDates.endDate,
         alertThreshold: 80,
       },
       {
@@ -215,10 +211,8 @@ export const BudgetGoals: React.FC = () => {
         budgetName: 'Groceries Shopping',
         amount: 600,
         period: 'monthly',
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date(new Date().setMonth(new Date().getMonth() + 1))
-          .toISOString()
-          .split('T')[0],
+        startDate: monthDates.startDate,
+        endDate: monthDates.endDate,
         alertThreshold: 80,
       },
     ];

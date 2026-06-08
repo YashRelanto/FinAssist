@@ -82,7 +82,7 @@ async def get_forecast_models():
         "models": [
             {
                 "id": "prophet",
-                "label": "Prophet (per user)",
+                "label": "Prophet (global)",
                 "loaded": status["loaded"],
                 "accuracy_pct": status["accuracy_pct"],
                 "trained_users": status["trained_users"],

@@ -42,7 +42,10 @@ def get_production_performance() -> dict[str, Any]:
                 "path": str(PRODUCTION_BUNDLE_PATH),
                 "size_mb": round(stat.st_size / (1024 * 1024), 2),
                 "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-                "trained_users": len(bundle.get("per_user", {})),
+                "trained_users": bundle.get("training_users")
+                or bundle.get("trained_users")
+                or len(bundle.get("per_user", {})),
+                "scope": bundle.get("scope", "global"),
                 "test_mape": bundle.get("test_mape"),
                 "trained_at": bundle.get("trained_at"),
             }

@@ -8,20 +8,12 @@ import { useAppContext } from '../../context/AppContext';
 
 import { cn, formatCurrency } from '../../lib/utils';
 
-interface DailyPrediction {
-  date: string;
-  day: string;
-  amount: number;
-  is_weekend: boolean;
-}
-
 interface PredictedMonth {
   month: string;
   label: string;
   month_start: string;
   month_end: string;
   amount: number;
-  daily_breakdown?: DailyPrediction[];
 }
 
 interface ForecastSummary {
@@ -34,6 +26,9 @@ interface ForecastSummary {
   budget_alert?: boolean;
   budget_alert_message?: string | null;
   message?: string;
+  user_model_available?: boolean;
+  history_months?: number;
+  min_months_required?: number;
 }
 
 export const ForecastPredictionCard: React.FC = () => {
@@ -41,11 +36,11 @@ export const ForecastPredictionCard: React.FC = () => {
   const [forecast, setForecast] = React.useState<ForecastSummary | null>(null);
   const [loading, setLoading] = React.useState(true);
 
-  const fetchForecast = React.useCallback(async () => {
+  const fetchForecast = React.useCallback(async (options?: { force?: boolean }) => {
     if (!user?.isAuthenticated) return;
     try {
       setLoading(true);
-      const data = await loadForecast({ period: analysisPeriod, force: true });
+      const data = await loadForecast({ period: analysisPeriod, force: options?.force });
       setForecast(data as ForecastSummary | null);
     } catch (e) {
       console.error('Failed to load dashboard forecast', e);
@@ -79,7 +74,7 @@ export const ForecastPredictionCard: React.FC = () => {
 
         <motion.button
           type="button"
-          onClick={fetchForecast}
+          onClick={() => fetchForecast({ force: true })}
           className="p-2 rounded-xl border border-outline-variant/50 hover:bg-surface-container-low transition-colors self-end sm:self-auto"
           aria-label="Refresh forecast"
         >
@@ -101,7 +96,7 @@ export const ForecastPredictionCard: React.FC = () => {
           </motion.p>
           {nextMonth ? (
             <motion.div className="bg-surface-container rounded-2xl p-4 border border-outline-variant/20">
-              <motion.div className="flex items-center justify-between mb-3">
+              <motion.div className="flex items-center justify-between">
                 <motion.div>
                   <motion.p className="text-sm font-black text-on-surface">{nextMonth.label}</motion.p>
                   <motion.p className="text-[9px] font-bold text-outline">
@@ -112,38 +107,6 @@ export const ForecastPredictionCard: React.FC = () => {
                   {formatCurrency(nextMonth.amount)}
                 </motion.p>
               </motion.div>
-              {nextMonth.daily_breakdown && nextMonth.daily_breakdown.length > 0 && (
-                <motion.div className="grid grid-cols-7 gap-0.5">
-                  {nextMonth.daily_breakdown.map((day) => (
-                    <motion.div
-                      key={day.date}
-                      className={cn(
-                        'rounded-md p-1 text-center',
-                        day.is_weekend
-                          ? 'bg-secondary/15 border border-secondary/20'
-                          : 'bg-surface-container-low',
-                      )}
-                      title={`${day.date}: ${formatCurrency(day.amount)}`}
-                    >
-                      <motion.p
-                        className={cn(
-                          'text-[8px] font-black uppercase mb-0.5',
-                          day.is_weekend ? 'text-secondary' : 'text-outline',
-                        )}
-                      >
-                        {day.day}
-                      </motion.p>
-                      <motion.p className="text-[8px] font-bold text-on-surface leading-none">
-                        {day.amount > 999
-                          ? `${(day.amount / 1000).toFixed(1)}k`
-                          : day.amount > 0
-                            ? Math.round(day.amount).toLocaleString()
-                            : '—'}
-                      </motion.p>
-                    </motion.div>
-                  ))}
-                </motion.div>
-              )}
             </motion.div>
           ) : (
             <motion.p className="text-2xl font-black text-on-surface">—</motion.p>
@@ -163,11 +126,11 @@ export const ForecastPredictionCard: React.FC = () => {
               vs {formatCurrency(prevSpend)} in comparison period
             </motion.p>
           )}
-          {forecast?.budget_alert && forecast.budget_alert_message && (
-            <motion.p className="text-xs font-bold text-error mt-3">{forecast.budget_alert_message}</motion.p>
-          )}
-          {!forecast?.success && forecast?.message && (
+          {!nextMonth && forecast?.message && (
             <motion.p className="text-xs font-bold text-outline mt-3">{forecast.message}</motion.p>
+          )}
+          {nextMonth && forecast?.budget_alert && forecast.budget_alert_message && (
+            <motion.p className="text-xs font-bold text-error mt-3">{forecast.budget_alert_message}</motion.p>
           )}
         </motion.div>
       )}

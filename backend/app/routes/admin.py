@@ -97,7 +97,7 @@ async def admin_upload_dataset(
 
 @router.post("/train-from-db")
 async def admin_train_from_db_sync(_user=Depends(require_admin)):
-    """Train per-user Prophet models from Supabase and promote to production (blocking)."""
+    """Train global Prophet model from Supabase and promote to production (blocking)."""
     try:
         result = run_training_sync()
         return {"success": True, **result}

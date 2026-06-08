@@ -48,10 +48,9 @@ export const Transactions: React.FC = () => {
       loadTransactions().finally(() => {
         setIsLoading(false);
       });
-      loadAccounts();
       loadDbCategories();
     }
-  }, [authReady, user?.isAuthenticated, user?.userId, user?.id, loadTransactions, loadAccounts, loadDbCategories]);
+  }, [authReady, user?.isAuthenticated, user?.userId, user?.id, loadTransactions, loadDbCategories]);
 
   const handleUpdateCategory = async (trans: any, newMainCat: string) => {
     try {

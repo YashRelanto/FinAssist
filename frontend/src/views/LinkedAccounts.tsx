@@ -16,14 +16,10 @@ import {
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { cn, formatCurrency, CURRENCY_SYMBOL } from '../lib/utils';
-import { activeUserId } from '../lib/activeUserId';
-import { apiFetch } from '../lib/api';
 import { AccountModal } from '../components/AccountModal';
 
 export const LinkedAccounts: React.FC = () => {
-  const { user, setCurrentPage } = useAppContext();
-  const [accounts, setAccounts] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const { user, accounts, loadAccounts, setCurrentPage } = useAppContext();
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
@@ -31,30 +27,11 @@ export const LinkedAccounts: React.FC = () => {
   const [selectedAccount, setSelectedAccount] = useState<any | null>(null);
   const [editTarget, setEditTarget] = useState<any | null>(null);
 
-  const fetchAccounts = async () => {
-    const uid = activeUserId(user);
-    if (!user.isAuthenticated || !uid) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      const res = await apiFetch(`/api/accounts?user_id=${encodeURIComponent(uid)}`);
-      const data = await res.json();
-      if (data.success) {
-        setAccounts(data.data ?? []);
-      } else {
-        throw new Error(data.detail || 'Failed to load accounts');
-      }
-    } catch (err: any) {
-      console.error(err);
-      setError('Could not retrieve linked accounts. Please make sure the backend is active.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   useEffect(() => {
-    fetchAccounts();
-  }, [user.userId, user.id, user.isAuthenticated]);
+    if (user.isAuthenticated) {
+      loadAccounts();
+    }
+  }, [user.userId, user.id, user.isAuthenticated, loadAccounts]);
 
   const handleDelete = async (accountId: string) => {
     setIsDeleting(true);
@@ -64,8 +41,8 @@ export const LinkedAccounts: React.FC = () => {
       });
       const data = await res.json();
       if (data.success) {
-        setAccounts(prev => prev.filter(acc => acc.account_id !== accountId));
         setDeleteTarget(null);
+        loadAccounts({ force: true });
       } else {
         throw new Error(data.detail || 'Failed to delete account');
       }
@@ -136,12 +113,7 @@ export const LinkedAccounts: React.FC = () => {
         </div>
       )}
 
-      {isLoading ? (
-        <div className="flex flex-col items-center justify-center py-20 gap-3">
-          <Loader2 className="w-10 h-10 text-primary animate-spin" />
-          <p className="text-xs text-outline font-bold uppercase tracking-wider">Retrieving Accounts...</p>
-        </div>
-      ) : accounts.length === 0 ? (
+      {accounts.length === 0 ? (
         <div className="bg-surface-container-lowest p-12 rounded-[32px] border border-outline-variant/30 text-center flex flex-col items-center justify-center min-h-[300px] transition-all duration-300">
           <div className="w-16 h-16 bg-primary/10 text-primary rounded-full flex items-center justify-center mb-4">
             <Building2 className="w-8 h-8 animate-pulse" />
@@ -342,16 +314,8 @@ export const LinkedAccounts: React.FC = () => {
           setEditTarget(null);
         }} 
         editAccount={editTarget}
-        onSuccess={(account) => {
-          if (account?.account_id) {
-            setAccounts((prev) => {
-              if (prev.some((a) => a.account_id === account.account_id)) {
-                return prev.map(a => a.account_id === account.account_id ? account : a);
-              }
-              return [...prev, account];
-            });
-          }
-          void fetchAccounts();
+        onSuccess={() => {
+          loadAccounts({ force: true });
         }}
       />
     </div>

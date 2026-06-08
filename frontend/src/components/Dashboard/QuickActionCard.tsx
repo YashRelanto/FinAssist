@@ -1,8 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { AlertTriangle, CreditCard, Sparkles, RefreshCw } from 'lucide-react';
 import { useAppContext } from '../../context/AppContext';
-import { activeUserId } from '../../lib/activeUserId';
-import { apiFetch } from '../../lib/api';
 
 type CreditAlert = {
   account: string;
@@ -19,65 +17,25 @@ type AccountSpendingInsight = {
   analysis: string;
 };
 
-type HubAnalysis = {
-  month?: string;
-  credit_card_alerts?: CreditAlert[];
-  account_spending?: AccountSpendingInsight[];
-  summary?: string;
-  has_accounts?: boolean;
-  transaction_count?: number;
-};
-
 interface QuickActionCardProps {
   hasAccounts?: boolean;
-  refreshKey?: string | number;
 }
 
-export const QuickActionCard: React.FC<QuickActionCardProps> = ({ hasAccounts, refreshKey }) => {
-  const { user } = useAppContext();
-  const [analysis, setAnalysis] = useState<HubAnalysis | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+export const QuickActionCard: React.FC<QuickActionCardProps> = ({ hasAccounts }) => {
+  const {
+    accountHubAnalysis,
+    accountHubAnalysisLoading,
+    loadAccountHubAnalysis,
+  } = useAppContext();
 
-  const loadAnalysis = async () => {
-    const uid = activeUserId(user);
-    if (!uid || !hasAccounts) {
-      setAnalysis(null);
-      return;
-    }
-
-    setLoading(true);
-    setError('');
-    try {
-      const res = await apiFetch(
-        `/api/account-hub-analysis?user_id=${encodeURIComponent(uid)}`,
-      );
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.detail || 'Failed to load account analysis');
-      }
-      setAnalysis(data);
-    } catch (err: any) {
-      setError(err.message || 'Unable to load analysis');
-      setAnalysis(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (user?.isAuthenticated && hasAccounts) {
-      // Defer LLM-backed analysis until after initial render.
-      const w = window as any;
-      const run = () => loadAnalysis();
-      if (typeof w.requestIdleCallback === 'function') {
-        w.requestIdleCallback(run, { timeout: 2000 });
-      } else {
-        setTimeout(run, 350);
-      }
-    }
-  }, [user?.isAuthenticated, user?.userId, user?.id, hasAccounts, refreshKey]);
-
+  const analysis = accountHubAnalysis as {
+    month?: string;
+    credit_card_alerts?: CreditAlert[];
+    account_spending?: AccountSpendingInsight[];
+    summary?: string;
+    transaction_count?: number;
+  } | null;
+  const loading = accountHubAnalysisLoading;
   const creditAlerts = analysis?.credit_card_alerts ?? [];
   const spendingInsights = analysis?.account_spending ?? [];
 
@@ -93,7 +51,7 @@ export const QuickActionCard: React.FC<QuickActionCardProps> = ({ hasAccounts, r
         {hasAccounts && (
           <button
             type="button"
-            onClick={loadAnalysis}
+            onClick={() => loadAccountHubAnalysis({ force: true })}
             disabled={loading}
             className="p-1.5 rounded-lg hover:bg-white/10 transition disabled:opacity-50"
             title="Refresh analysis"
@@ -115,12 +73,6 @@ export const QuickActionCard: React.FC<QuickActionCardProps> = ({ hasAccounts, r
           <div className="flex items-center justify-center py-8">
             <RefreshCw className="w-6 h-6 animate-spin text-white/70" />
           </div>
-        )}
-
-        {error && (
-          <p className="text-xs font-medium text-red-100 bg-red-500/20 rounded-xl px-3 py-2">
-            {error}
-          </p>
         )}
 
         {hasAccounts && analysis && !loading && (

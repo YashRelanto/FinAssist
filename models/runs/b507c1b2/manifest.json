@@ -1,0 +1,32 @@
+{
+  "job_id": "b507c1b2",
+  "model_type": "prophet",
+  "status": "completed",
+  "started_at": "2026-06-07T14:37:30.417790+00:00",
+  "finished_at": null,
+  "trained_users": 19,
+  "test_mape": null,
+  "trained_at": "2026-06-07T14:37:32.078545+00:00",
+  "staging_path": "C:\\Users\\Relanto\\OneDrive - Relanto\\Desktop\\FinAssistAI\\models\\staging\\expense_forecast_prophet.joblib",
+  "production_path": "C:\\Users\\Relanto\\OneDrive - Relanto\\Desktop\\FinAssistAI\\models\\production\\expense_forecast_prophet.joblib",
+  "manifest": {
+    "model_type": "prophet",
+    "scope": "global",
+    "trained_at": "2026-06-07T14:37:32.078545+00:00",
+    "trained_users": 19,
+    "training_users": 19,
+    "horizon_weeks": 4,
+    "min_weeks": null,
+    "min_months": 6,
+    "test_mape": null,
+    "global_months": 6,
+    "bundle_path": "C:\\Users\\Relanto\\OneDrive - Relanto\\Desktop\\FinAssistAI\\models\\production\\expense_forecast_prophet.joblib",
+    "storage_bucket": "forecast-models",
+    "storage_bundle_key": "production/expense_forecast_prophet.joblib"
+  },
+  "storage": {
+    "bucket": "forecast-models",
+    "bundle_key": "production/expense_forecast_prophet.joblib",
+    "manifest_key": "production/manifest.json"
+  }
+}

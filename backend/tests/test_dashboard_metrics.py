@@ -75,10 +75,11 @@ def test_budget_utilization_for_active_period():
         {
             "budget_id": "b1",
             "budget_name": "Food",
-            "category_id": "c-food",
+            "category_id": "c-food-general",
             "amount": 1000,
-            "start_date": "2026-05-01",
-            "end_date": "2026-05-31",
+            "period": "monthly",
+            "start_date": "2026-05-15",
+            "end_date": "2026-06-15",
             "alert_threshold": 80,
             "categories": {"main_category": "Food & Drinks"},
         }
@@ -86,10 +87,18 @@ def test_budget_utilization_for_active_period():
     transactions = [
         {
             "transaction_type": "expense",
-            "category_id": "c-food",
-            "transaction_date": "2026-05-15",
-            "amount": 900,
-        }
+            "category_id": "c-food-restaurant",
+            "categories": {"main_category": "Food & Drinks", "sub_category": "Restaurant"},
+            "transaction_date": "2026-05-01",
+            "amount": 400,
+        },
+        {
+            "transaction_type": "expense",
+            "category_id": "c-food-restaurant",
+            "categories": {"main_category": "Food & Drinks", "sub_category": "Restaurant"},
+            "transaction_date": "2026-05-20",
+            "amount": 500,
+        },
     ]
     util = compute_budget_utilization(
         budgets, transactions, reference=datetime(2026, 5, 20)
@@ -98,6 +107,42 @@ def test_budget_utilization_for_active_period():
     assert util[0]["spent"] == 900
     assert util[0]["utilization_pct"] == 90.0
     assert util[0]["alert"] is True
+
+
+def test_budget_utilization_counts_start_of_month_when_budget_created_mid_month():
+    budgets = [
+        {
+            "budget_id": "b2",
+            "budget_name": "Food",
+            "category_id": "c-food-general",
+            "amount": 1000,
+            "period": "monthly",
+            "start_date": "2026-06-07",
+            "end_date": "2026-07-07",
+            "alert_threshold": 80,
+            "categories": {"main_category": "Food & Drinks"},
+        }
+    ]
+    transactions = [
+        {
+            "transaction_type": "expense",
+            "category_id": "c-food-general",
+            "categories": {"main_category": "Food & Drinks"},
+            "transaction_date": "2026-06-01",
+            "amount": 300,
+        },
+        {
+            "transaction_type": "expense",
+            "category_id": "c-food-general",
+            "categories": {"main_category": "Food & Drinks"},
+            "transaction_date": "2026-06-07",
+            "amount": 200,
+        },
+    ]
+    util = compute_budget_utilization(
+        budgets, transactions, reference=datetime(2026, 6, 7)
+    )
+    assert util[0]["spent"] == 500
 
 
 def test_savings_trajectory_from_transactions():

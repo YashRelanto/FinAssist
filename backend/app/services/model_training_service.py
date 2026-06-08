@@ -1,4 +1,4 @@
-"""Admin-facing training jobs — Prophet per-user models from the database."""
+"""Admin-facing training jobs — global Prophet model from the database."""
 
 from __future__ import annotations
 

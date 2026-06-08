@@ -3,6 +3,7 @@ import { X, PiggyBank, Calendar, Info, ShieldAlert } from 'lucide-react';
 import { Budget } from '../types';
 import { useAppContext } from '../context/AppContext';
 import { CURRENCY_SYMBOL } from '../lib/utils';
+import { defaultBudgetPeriodDates } from '../lib/budgetPeriod';
 
 interface BudgetModalProps {
   isOpen: boolean;
@@ -26,13 +27,14 @@ const mainCategories = [
 
 export const BudgetModal: React.FC<BudgetModalProps> = ({ isOpen, onClose, editingBudget }) => {
   const { addBudget, updateBudget } = useAppContext();
+  const initialPeriodDates = defaultBudgetPeriodDates('monthly');
   const [formData, setFormData] = useState<Omit<Budget, 'id' | 'userId' | 'categoryId'>>({
     categoryName: 'Food & Drinks',
     budgetName: '',
     amount: 0,
     period: 'monthly',
-    startDate: new Date().toISOString().split('T')[0],
-    endDate: new Date(new Date().setMonth(new Date().getMonth() + 1)).toISOString().split('T')[0],
+    startDate: initialPeriodDates.startDate,
+    endDate: initialPeriodDates.endDate,
     alertThreshold: 80
   });
 
@@ -48,17 +50,28 @@ export const BudgetModal: React.FC<BudgetModalProps> = ({ isOpen, onClose, editi
         alertThreshold: editingBudget.alertThreshold
       });
     } else {
+      const dates = defaultBudgetPeriodDates('monthly');
       setFormData({
         categoryName: 'Food & Drinks',
         budgetName: '',
         amount: 0,
         period: 'monthly',
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date(new Date().setMonth(new Date().getMonth() + 1)).toISOString().split('T')[0],
+        startDate: dates.startDate,
+        endDate: dates.endDate,
         alertThreshold: 80
       });
     }
   }, [editingBudget, isOpen]);
+
+  const handlePeriodChange = (period: string) => {
+    const dates = defaultBudgetPeriodDates(period);
+    setFormData((prev) => ({
+      ...prev,
+      period,
+      startDate: dates.startDate,
+      endDate: dates.endDate,
+    }));
+  };
 
   if (!isOpen) return null;
 
@@ -128,7 +141,7 @@ export const BudgetModal: React.FC<BudgetModalProps> = ({ isOpen, onClose, editi
                 <label className="block text-[10px] font-bold text-outline uppercase tracking-widest mb-2">Period</label>
                 <select 
                   value={formData.period}
-                  onChange={(e) => setFormData({...formData, period: e.target.value})}
+                  onChange={(e) => handlePeriodChange(e.target.value)}
                   className="w-full px-4 py-3 bg-surface-container-low rounded-lg border border-outline-variant focus:ring-2 focus:ring-primary transition-all text-sm font-bold text-on-surface"
                 >
                   <option value="weekly">Weekly</option>

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Seed a Supabase user with daily expense history tuned for the daily Prophet model.
+Seed a Supabase user with daily expense history tuned for the monthly Prophet model.
 
 Each calendar day gets expense rows whose daily total follows real behaviour:
-weekdays ~100–250 INR, weekends ~2,000–5,000 INR. History spans 90 consecutive days
-(>= MIN_DAYS_FOR_PROPHET_USER) ending near today so nightly training can fit
-weekly_seasonality.
+weekdays ~100–250 INR, weekends ~2,000–5,000 INR. History spans at least six calendar
+months (>= MIN_MONTHS_FOR_PROPHET_USER) ending near today so nightly training can fit
+monthly seasonality.
 
 Usage:
   PYTHONPATH=backend python backend/scripts/seed_user_from_raw.py
@@ -27,14 +27,14 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.services.forecast_features import MIN_DAYS_FOR_PROPHET_USER  # noqa: E402
+from app.services.forecast_features import MIN_MONTHS_FOR_PROPHET_USER  # noqa: E402
 from app.utils.supabase_client import supabase  # noqa: E402
 
 DEFAULT_EMAIL = "suyash.bhadouria@relanto.ai"
 MIN_SAVINGS_RATIO = 0.18  # income should exceed expenses by at least ~18%
 
-# Daily Prophet training needs a continuous daily expense series (see expenses_to_daily).
-PROPHET_HISTORY_DAYS = max(90, MIN_DAYS_FOR_PROPHET_USER)
+# Monthly Prophet training aggregates daily rows into calendar months (see expenses_to_monthly).
+PROPHET_HISTORY_DAYS = max(MIN_MONTHS_FOR_PROPHET_USER * 31, 183)
 WEEKDAY_DAILY_RANGE = (100, 250)
 WEEKEND_DAILY_RANGE = (2000, 5000)
 MONTHLY_SALARY = 85000.0
@@ -447,9 +447,11 @@ def seed_user(
     target_user_id = users.data[0]["user_id"]
     print(f"Target user: {email} ({target_user_id})")
 
-    if history_days < MIN_DAYS_FOR_PROPHET_USER:
+    min_history_days = MIN_MONTHS_FOR_PROPHET_USER * 31
+    if history_days < min_history_days:
         raise ValueError(
-            f"history_days={history_days} is below Prophet minimum {MIN_DAYS_FOR_PROPHET_USER}",
+            f"history_days={history_days} is below Prophet minimum {min_history_days} "
+            f"({MIN_MONTHS_FOR_PROPHET_USER} months)",
         )
 
     cats_res = supabase.table("categories").select("category_id,main_category,sub_category").execute()
@@ -596,7 +598,7 @@ def main() -> int:
         "--history-days",
         type=int,
         default=PROPHET_HISTORY_DAYS,
-        help=f"Consecutive days of expense history (min {MIN_DAYS_FOR_PROPHET_USER})",
+        help=f"Consecutive days of expense history (min {MIN_MONTHS_FOR_PROPHET_USER} months)",
     )
     args = parser.parse_args()
 

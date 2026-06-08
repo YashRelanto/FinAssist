@@ -1,5 +1,5 @@
 
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { Dashboard } from '../views/Dashboard';
@@ -23,23 +23,33 @@ export const Layout: React.FC = () => {
   const { currentPage, setCurrentPage, user, authReady } = useAppContext();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // Must run on every render (before any early return) — Rules of Hooks.
-  const pages = useMemo(
-    () => [
-      { id: 'dashboard', node: <Dashboard /> },
-      { id: 'forecasting', node: <Forecasting /> },
-      { id: 'transactions', node: <Transactions /> },
-      { id: 'ai-assistant', node: <AIAssistant /> },
-      { id: 'budget-goals', node: <BudgetGoals /> },
-      { id: 'investments', node: <Investments /> },
-      { id: 'reports', node: <Reports /> },
-      { id: 'settings', node: <Settings /> },
-      { id: 'linked-accounts', node: <LinkedAccounts /> },
-      { id: 'edit-profile', node: <EditProfile /> },
-      { id: 'admin', node: <AdminPanel /> },
-    ],
-    [],
-  );
+  const renderPage = () => {
+    switch (currentPage) {
+      case 'forecasting':
+        return <Forecasting />;
+      case 'transactions':
+        return <Transactions />;
+      case 'ai-assistant':
+        return <AIAssistant />;
+      case 'budget-goals':
+        return <BudgetGoals />;
+      case 'investments':
+        return <Investments />;
+      case 'reports':
+        return <Reports />;
+      case 'settings':
+        return <Settings />;
+      case 'linked-accounts':
+        return <LinkedAccounts />;
+      case 'edit-profile':
+        return <EditProfile />;
+      case 'admin':
+        return <AdminPanel />;
+      case 'dashboard':
+      default:
+        return <Dashboard />;
+    }
+  };
 
   if (!authReady) {
     return (
@@ -69,20 +79,14 @@ export const Layout: React.FC = () => {
       
       <main className="lg:ml-[280px] pt-16 min-h-screen">
         <div className="p-4 lg:p-10 max-w-[1440px] mx-auto">
-          {pages.map((page) => {
-            const active = page.id === currentPage;
-            return (
-              <motion.div
-                key={page.id}
-                initial={false}
-                animate={active ? { opacity: 1, y: 0 } : { opacity: 0, y: 0 }}
-                transition={{ duration: 0.15 }}
-                style={{ display: active ? 'block' : 'none' }}
-              >
-                {page.node}
-              </motion.div>
-            );
-          })}
+          <motion.div
+            key={currentPage}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.15 }}
+          >
+            {renderPage()}
+          </motion.div>
         </div>
       </main>
 

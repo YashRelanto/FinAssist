@@ -16,6 +16,10 @@ models/production/*.joblib
 models/jobs/
 backend/chroma_db/
 backend/sessions.json
+sessions.json
+sessions - Copy.json
+user_request.txt
+extract_user_prompt.py
 *.sqlite
 *.db
 .agents

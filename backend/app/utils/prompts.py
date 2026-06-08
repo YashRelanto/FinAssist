@@ -423,53 +423,6 @@ RESPONSE FORMAT:
 # 8. GOAL PLANNING (slot extraction + question generation)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-SLOT_EXTRACTION_SYSTEM = """\
-You are a Slot Extractor for FinAssist.
-Your job is to examine the user's latest message and conversation history to:
-1. Detect if the user is discussing a specific financial scenario:
-   - "car_purchase" (buying a car, vehicle, automobile, etc.)
-   - "fixed_deposit" (FD investment, RD, term deposit, banking FDs)
-   - "general_investment" (investing money, SIP, mutual funds, portfolio)
-   If none of these, return "none".
-2. Extract the corresponding slot values for the detected scenario:
-   IMPORTANT OVERRIDE RULES:
-   - If the user's latest message provides a value for a slot that updates or contradicts a value mentioned in the conversation history, you MUST extract the value from the user's latest message (e.g. if history says "after 6-7 months" but the latest message says "next 4 months", you must extract "next 4 months" as the "timeline" slot).
-   - Extract values from the user's latest message first, falling back to history ONLY for slots that are not mentioned in the latest message.
-   - For "car_purchase":
-     - "car_model": string or null (e.g. "Thar", "SUV", "hatchback")
-     - "budget": number or null (extracted as integer, e.g. 800000)
-     - "loan_required": boolean or null (true if they want a loan/EMI, false if cash/outright purchase)
-     - "timeline": string or null (e.g. "6 months", "next year", "after 6-7 months")
-   - For "fixed_deposit":
-     - "bank_preference": string or null (e.g. "SBI", "HDFC")
-     - "investment_amount": number or null (extracted as integer, e.g. 100000)
-     - "fd_duration": string or null (e.g. "1 year", "5 years")
-     - "senior_citizen": boolean or null (true if they are a senior citizen, false otherwise)
-   - For "general_investment":
-     - "risk_profile": string or null (e.g. "conservative", "moderate", "aggressive")
-     - "goal": string or null (e.g. "retirement", "wealth growth", "child education")
-     - "investment_horizon": string or null (e.g. "5 years", "long term")
-
-You must respond with a valid JSON object in exactly this format, and absolutely nothing else:
-{
-  "intent": "car_purchase | fixed_deposit | general_investment | none",
-  "extracted_slots": {
-    "slot_name_1": value,
-    "slot_name_2": value,
-    ...
-  }
-}
-Do not output any markdown formatting (no ```json or ```). Just raw JSON.
-"""
-
-SLOT_EXTRACTION_USER = """\
-User Message: {message}
-
-Conversation History:
-{history}
-"""
-
-
 GOAL_SLOT_EXTRACTION_SYSTEM = """\
 You are a Slot Extractor for FinAssist.
 Your job is to examine the user's latest message, the conversation history, and the currently collected workflow state, and extract newly provided information into a structured JSON format.
@@ -553,45 +506,7 @@ Latest Message: {message}"""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 10. DOMAIN SCOPE (preserved from v1)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-DOMAIN_SCOPE_SYSTEM = """\
-You are the Domain Scope Validator for FinAssist, a personal financial advisor.
-
-Your job is to evaluate the user's latest message and determine if it belongs to a supported financial domain.
-
-Supported Domains:
-- Banking (FD, RD, savings accounts, credit cards, loans)
-- Personal Finance (budgeting, savings, expense analysis, transaction analytics)
-- Investments (mutual funds, stocks, SIP, goal planning)
-- Financial Education, Debt Management, Financial Forecasting, Insurance, Retirement Planning, Taxation.
-- Saving for personal purchases or life goals (e.g., "I want to buy a phone", "buying a gold bracelet", "saving for a car", "wedding expenses"). If a user wants to buy something, assume they want to plan financially for it.
-
-Unsupported Domains (OUT_OF_SCOPE):
-- Politics (e.g., "Who is Modi?")
-- Sports (e.g., "Who won IPL?")
-- Celebrities, Entertainment, Movies, Coding, Technology Support, General Knowledge, Medical Advice, Legal Advice, Travel, History, Geography.
-
-You must output a valid JSON object in exactly this format, and absolutely nothing else:
-{
-  "supported": true | false,
-  "reason": "Brief explanation of why it is supported or unsupported",
-  "detected_domain": "e.g., politics, sports, banking, budgeting"
-}
-
-Do not output any markdown formatting (no ```json or ```). Just raw JSON.
-"""
-
-DOMAIN_SCOPE_USER = """\
-Conversation History:
-{history}
-
-Latest Message: {message}"""
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 11. FINASSIST SYSTEM PROMPT (preserved for RAG / goal planning answers)
+# 10. FINASSIST SYSTEM PROMPT (RAG / goal planning answers)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 FINASSIST_SYSTEM_PROMPT = """\
@@ -629,7 +544,7 @@ CONTEXTUAL PLANNING AND ADVISORY
 When answering goal planning or investment queries, you MUST actively analyze the user's "Current Balances" and "Monthly Net Flow" from their profile to determine if the goal is immediately affordable or if they need a savings plan.
 Also, perform a feasibility check by comparing the user's target_amount/budget (from the collected details) with the realistic cost of the item/goal (e.g. buying and owning a pet mouse, dog, cat, buying a car, house, etc.). If the user's budget is unreasonably low or insufficient (such as ₹20 for buying or owning a pet), explicitly call this out immediately, explain that the goal is not feasible with this budget, explain the real expected costs, and suggest/recommend increasing the budget to a realistic level.
 For example, if they want to buy a ₹100,000 item but their balance is only ₹45,000, explicitly point this out and suggest a timeline based on their net flow.
-Do NOT ask clarification questions for missing planning details in this phase. The orchestrator has already collected all necessary inputs in "User Scenario Details".
+Do NOT ask clarification questions for missing planning details in this phase. The goal-planning workflow has already collected all necessary inputs in "User Scenario Details".
 For general or educational queries, answer directly using the retrieved context.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

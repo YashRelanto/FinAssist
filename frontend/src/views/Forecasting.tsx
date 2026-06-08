@@ -30,20 +30,12 @@ const heatmapColors = [
   'bg-blue-700',
 ];
 
-interface DailyPrediction {
-  date: string;
-  day: string;
-  amount: number;
-  is_weekend: boolean;
-}
-
 interface PredictedMonth {
   month: string;
   label: string;
   month_start: string;
   month_end: string;
   amount: number;
-  daily_breakdown?: DailyPrediction[];
 }
 
 interface ForecastData {
@@ -96,8 +88,6 @@ export const Forecasting: React.FC = () => {
     accounts,
     transactions,
     analysisPeriod,
-    loadAccounts,
-    loadTransactions,
     loadForecast,
   } = useAppContext();
   const [forecast, setForecast] = React.useState<ForecastData | null>(null);
@@ -127,13 +117,6 @@ export const Forecasting: React.FC = () => {
     },
     [user?.isAuthenticated, loadForecast, analysisPeriod, accountId, categoryId, merchant],
   );
-
-  React.useEffect(() => {
-    if (user?.isAuthenticated) {
-      loadAccounts();
-      loadTransactions();
-    }
-  }, [user?.isAuthenticated, loadAccounts, loadTransactions]);
 
   React.useEffect(() => {
     if (user?.isAuthenticated) {
@@ -190,7 +173,7 @@ export const Forecasting: React.FC = () => {
                 {forecast.budget_alert_message}
               </motion.p>
               <motion.p className="text-[10px] font-bold text-error uppercase tracking-widest mt-0.5">
-                Model: {forecast.model_name || 'Prophet (per user)'}
+                Model: {forecast.model_name || 'Prophet (global)'}
                 {!forecast.model_loaded && ' — waiting for nightly model training'}
               </motion.p>
             </motion.div>
@@ -198,7 +181,7 @@ export const Forecasting: React.FC = () => {
         </motion.div>
       )}
 
-      {!forecast?.success && forecast?.message && (
+      {forecast?.message && !forecast?.predicted_next_month && (
         <motion.div className="bg-surface-container-low p-4 rounded-2xl border border-outline-variant/30 text-sm font-bold text-outline">
           {forecast.message}
         </motion.div>
@@ -508,7 +491,7 @@ export const Forecasting: React.FC = () => {
                         key={month.month}
                         className="bg-surface-container-lowest rounded-xl p-3 border border-outline-variant/20"
                       >
-                        <motion.div className="flex items-center justify-between mb-2">
+                        <motion.div className="flex items-center justify-between">
                           <motion.span className="text-[10px] font-black text-on-surface uppercase tracking-wide">
                             {month.label}
                           </motion.span>
@@ -516,38 +499,6 @@ export const Forecasting: React.FC = () => {
                             {formatCurrency(month.amount)}
                           </motion.span>
                         </motion.div>
-                        {month.daily_breakdown && month.daily_breakdown.length > 0 && (
-                          <motion.div className="grid grid-cols-7 gap-0.5">
-                            {month.daily_breakdown.map((day) => (
-                              <motion.div
-                                key={day.date}
-                                className={cn(
-                                  'rounded-md p-1 text-center',
-                                  day.is_weekend
-                                    ? 'bg-secondary/15 border border-secondary/20'
-                                    : 'bg-surface-container',
-                                )}
-                                title={`${day.date}: ${formatCurrency(day.amount)}`}
-                              >
-                                <motion.p
-                                  className={cn(
-                                    'text-[8px] font-black uppercase mb-0.5',
-                                    day.is_weekend ? 'text-secondary' : 'text-outline',
-                                  )}
-                                >
-                                  {day.day}
-                                </motion.p>
-                                <motion.p className="text-[8px] font-bold text-on-surface leading-none">
-                                  {day.amount > 999
-                                    ? `${(day.amount / 1000).toFixed(1)}k`
-                                    : day.amount > 0
-                                      ? Math.round(day.amount).toLocaleString()
-                                      : '—'}
-                                </motion.p>
-                              </motion.div>
-                            ))}
-                          </motion.div>
-                        )}
                       </motion.div>
                     ))}
                   </motion.div>
@@ -614,7 +565,7 @@ export const Forecasting: React.FC = () => {
                 </motion.div>
                 <motion.p className="text-[10px] font-bold text-outline uppercase tracking-widest mt-6 text-center">
                   {forecast?.model_loaded
-                    ? `${forecast.model_name} · nightly-trained per-user model`
+                    ? `${forecast.model_name} · nightly-trained global model`
                     : 'Models refresh nightly from your transaction database'}
                 </motion.p>
               </motion.div>

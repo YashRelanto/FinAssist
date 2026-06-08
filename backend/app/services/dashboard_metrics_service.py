@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime
+import calendar
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from app.utils.analysis_period import (
     filter_rows_by_date,
+    month_start,
     resolve_analysis_window,
 )
 
@@ -188,29 +190,29 @@ def compute_budget_utilization(
     reference: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """
-    For each active budget, sum expenses in [start_date, end_date] for its category_id.
+    For each active budget, sum matching category expenses within the budget window.
+
+    Expenses match on main category (all subcategories) and the normalized period
+    window so mid-month budget creation still counts earlier month spend.
     """
     ref = reference or datetime.now()
-    today = ref.strftime("%Y-%m-%d")
+    today = ref.date() if hasattr(ref, "date") else ref
+    today_str = today.isoformat() if isinstance(today, date) else ref.strftime("%Y-%m-%d")
     result: list[dict[str, Any]] = []
 
     for budget in budgets:
-        start = str(budget.get("start_date") or today)
-        end = str(budget.get("end_date") or today)
-        if end < today and budget.get("end_date"):
+        start, end = normalize_budget_window(budget, reference=today)
+        if end < today_str and budget.get("end_date"):
             continue
-        if start > today:
+        if start > today_str:
             continue
 
-        category_id = budget.get("category_id")
         limit = float(budget.get("amount") or 0)
         spent = 0.0
         for row in transactions:
-            if (row.get("transaction_type") or "").lower() != EXPENSE_TYPE:
+            if not _transaction_matches_budget(row, budget):
                 continue
-            if row.get("category_id") != category_id:
-                continue
-            date_str = str(row.get("transaction_date") or "")
+            date_str = str(row.get("transaction_date") or "")[:10]
             if date_str < start or date_str > end:
                 continue
             spent += transaction_amount_value(row.get("amount"), EXPENSE_TYPE)
@@ -232,6 +234,102 @@ def compute_budget_utilization(
             }
         )
     return sorted(result, key=lambda item: item["utilization_pct"], reverse=True)
+
+
+def resolve_budget_period_dates(
+    period: str,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    reference: date | None = None,
+) -> tuple[str, str]:
+    """Return inclusive start/end dates aligned to the budget period (calendar month by default)."""
+    ref = reference or date.today()
+    if start_date and end_date:
+        return start_date, end_date
+
+    period_key = (period or "monthly").strip().lower()
+    if period_key == "weekly":
+        week_start = ref - timedelta(days=ref.weekday())
+        week_end = week_start + timedelta(days=6)
+        return week_start.isoformat(), week_end.isoformat()
+    if period_key == "yearly":
+        return date(ref.year, 1, 1).isoformat(), date(ref.year, 12, 31).isoformat()
+
+    start = month_start(ref)
+    last_day = calendar.monthrange(ref.year, ref.month)[1]
+    end = date(ref.year, ref.month, last_day)
+    return start.isoformat(), end.isoformat()
+
+
+def normalize_budget_window(
+    budget: dict[str, Any],
+    *,
+    reference: date | None = None,
+) -> tuple[str, str]:
+    """
+    Normalize stored budget dates to the full active period window.
+
+    Monthly budgets always use the calendar month containing the start date so
+    existing transactions earlier in the month count toward utilization.
+    """
+    ref = reference or date.today()
+    period = (budget.get("period") or "monthly").strip().lower()
+    raw_start = str(budget.get("start_date") or ref.isoformat())
+    raw_end = str(budget.get("end_date") or ref.isoformat())
+
+    if period == "monthly":
+        start_dt = datetime.strptime(raw_start[:10], "%Y-%m-%d").date()
+        end_dt = datetime.strptime(raw_end[:10], "%Y-%m-%d").date()
+        month_begin = month_start(start_dt)
+        last_day = calendar.monthrange(end_dt.year, end_dt.month)[1]
+        month_end = date(end_dt.year, end_dt.month, last_day)
+        return month_begin.isoformat(), month_end.isoformat()
+
+    if period == "yearly":
+        start_dt = datetime.strptime(raw_start[:10], "%Y-%m-%d").date()
+        return date(start_dt.year, 1, 1).isoformat(), date(start_dt.year, 12, 31).isoformat()
+
+    if period == "weekly":
+        start_dt = datetime.strptime(raw_start[:10], "%Y-%m-%d").date()
+        week_start = start_dt - timedelta(days=start_dt.weekday())
+        week_end = week_start + timedelta(days=6)
+        return week_start.isoformat(), week_end.isoformat()
+
+    return raw_start[:10], raw_end[:10]
+
+
+def _transaction_matches_budget(row: dict[str, Any], budget: dict[str, Any]) -> bool:
+    if (row.get("transaction_type") or "").lower() != EXPENSE_TYPE:
+        return False
+
+    row_cat_id = row.get("category_id")
+    budget_cat_id = budget.get("category_id")
+    if budget_cat_id and row_cat_id == budget_cat_id:
+        return True
+
+    budget_main = normalize_category_name((budget.get("categories") or {}).get("main_category"))
+    row_main = normalize_category_name((row.get("categories") or {}).get("main_category"))
+    if budget_main and row_main and budget_main == row_main:
+        return True
+
+    return False
+
+
+def compute_net_savings(transactions: list[dict[str, Any]]) -> float:
+    """Cumulative income minus expenses (ignores transfers)."""
+    income = 0.0
+    expense = 0.0
+    for row in transactions:
+        tx_type = (row.get("transaction_type") or "").lower()
+        if tx_type == TRANSFER_TYPE:
+            continue
+        amount = transaction_amount_value(row.get("amount"), tx_type)
+        if tx_type == INCOME_TYPE:
+            income += amount
+        elif tx_type == EXPENSE_TYPE:
+            expense += amount
+    return round(max(income - expense, 0.0), 2)
 
 
 def compute_savings_trajectory(

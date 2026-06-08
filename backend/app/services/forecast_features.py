@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Iterable
 
 import numpy as np
@@ -27,6 +27,10 @@ FEATURE_COLUMNS = [
 MIN_WEEKS_FOR_FORECAST = 8
 MIN_WEEKS_FOR_PROPHET_USER = 8
 PROPHET_HOLDOUT_MIN_WEEKS = 9
+MIN_MONTHS_FOR_FORECAST = 6
+MIN_MONTHS_FOR_PROPHET_USER = 6
+# Hold-out needs one month beyond the training fit window (same as MIN_MONTHS_FOR_PROPHET_USER).
+PROPHET_HOLDOUT_MIN_MONTHS = MIN_MONTHS_FOR_PROPHET_USER
 
 
 def expenses_to_weekly(expenses: pd.DataFrame) -> pd.DataFrame:
@@ -431,3 +435,118 @@ def prophet_holdout_mape_daily(daily: pd.DataFrame) -> float | None:
     pred_preds = sanitize_daily_predictions(forecast["yhat"].values, train)
     pred_total = sum(pred_preds)
     return min(safe_mape([hold_total], [pred_total]), 1.0)
+
+
+# ─────────────────────────────────────────────────────────────
+# Monthly-granularity Prophet helpers (primary training path)
+# ─────────────────────────────────────────────────────────────
+
+
+def expenses_to_monthly(expenses: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate expense rows to calendar-month totals ordered by month start."""
+    if expenses.empty:
+        return pd.DataFrame(columns=["month_start", "monthly_expense"])
+
+    df = expenses.copy()
+    df["transaction_date"] = pd.to_datetime(df["transaction_date"])
+    df["amount"] = df["amount"].astype(float).abs()
+    df["month_start"] = df["transaction_date"].dt.to_period("M").dt.to_timestamp()
+    monthly = (
+        df.groupby("month_start", as_index=False)["amount"]
+        .sum()
+        .rename(columns={"amount": "monthly_expense"})
+        .sort_values("month_start")
+        .reset_index(drop=True)
+    )
+    return monthly
+
+
+def drop_incomplete_current_month(
+    monthly: pd.DataFrame,
+    *,
+    reference: date | None = None,
+) -> pd.DataFrame:
+    """
+    Remove the in-progress calendar month.
+
+    Month-to-date totals are not comparable to full-month Prophet forecasts and
+    inflate hold-out MAPE toward 100%.
+    """
+    if monthly.empty:
+        return monthly
+    today = reference or date.today()
+    current_month = pd.Timestamp(today.replace(day=1))
+    m = monthly.copy().sort_values("month_start").reset_index(drop=True)
+    m["month_start"] = pd.to_datetime(m["month_start"])
+    if m["month_start"].iloc[-1] >= current_month:
+        m = m.iloc[:-1]
+    return m.reset_index(drop=True)
+
+
+def create_prophet_model_monthly(month_count: int):
+    """Prophet config tuned for calendar-month expense totals."""
+    from prophet import Prophet
+
+    return Prophet(
+        growth="linear" if month_count >= 12 else "flat",
+        weekly_seasonality=False,
+        yearly_seasonality=month_count >= 12,
+        daily_seasonality=False,
+        seasonality_mode="multiplicative",
+        changepoint_prior_scale=0.05,
+        seasonality_prior_scale=10.0,
+    )
+
+
+def prophet_future_frame_monthly(monthly: pd.DataFrame, steps: int) -> pd.DataFrame:
+    """Generate `steps` consecutive monthly future dates after the last observed month."""
+    m = monthly.sort_values("month_start").reset_index(drop=True)
+    last = pd.Timestamp(m["month_start"].iloc[-1])
+    dates = [last + pd.DateOffset(months=i + 1) for i in range(steps)]
+    return pd.DataFrame({"ds": dates})
+
+
+def sanitize_monthly_predictions(raw: np.ndarray, monthly: pd.DataFrame) -> list[float]:
+    """Floor negative / non-finite monthly predictions to the recent monthly mean."""
+    floor = max(float(monthly["monthly_expense"].tail(3).mean()), 0.0)
+    preds: list[float] = []
+    for v in raw:
+        y = float(v)
+        if not np.isfinite(y) or y < 0:
+            y = floor
+        preds.append(max(0.0, y))
+    return preds
+
+
+def prophet_predict_months(model, monthly: pd.DataFrame, steps: int) -> list[float]:
+    future = prophet_future_frame_monthly(monthly, steps)
+    forecast = model.predict(future)
+    return sanitize_monthly_predictions(forecast["yhat"].values, monthly)
+
+
+def prophet_holdout_mape_monthly(
+    monthly: pd.DataFrame,
+    *,
+    reference: date | None = None,
+) -> float | None:
+    """One-month hold-out MAPE on the last *complete* calendar month."""
+    complete = drop_incomplete_current_month(monthly, reference=reference)
+    if len(complete) < 2:
+        return None
+    m = complete.sort_values("month_start").reset_index(drop=True)
+    hold_y = float(m["monthly_expense"].iloc[-1])
+    if hold_y <= 0:
+        return None
+    train = m.iloc[:-1]
+    if train.empty:
+        return None
+    try:
+        train_df = pd.DataFrame(
+            {"ds": train["month_start"], "y": train["monthly_expense"].clip(lower=1.0)},
+        )
+        model = create_prophet_model_monthly(len(train_df))
+        model.fit(train_df)
+        pred = prophet_predict_months(model, train, 1)[0]
+        return min(safe_mape([hold_y], [pred]), 1.0)
+    except Exception:
+        return None

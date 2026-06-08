@@ -31,7 +31,7 @@ interface AppContextType {
   updateTransaction: (id: string, t: Partial<Transaction>, onComplete?: (success: boolean) => void) => void;
   deleteTransaction: (id: string) => void;
   loadTransactions: () => Promise<void>;
-  loadAccounts: () => void;
+  loadAccounts: (options?: { force?: boolean }) => void;
   loadDbCategories: () => void;
   analysisPeriod: AnalysisPeriod;
   setAnalysisPeriod: (period: AnalysisPeriod) => void;
@@ -44,6 +44,9 @@ interface AppContextType {
     merchant?: string;
     force?: boolean;
   }) => Promise<any | null>;
+  accountHubAnalysis: any | null;
+  accountHubAnalysisLoading: boolean;
+  loadAccountHubAnalysis: (options?: { force?: boolean }) => Promise<any | null>;
   budgets: Budget[];
   addBudget: (b: Omit<Budget, 'id'>) => void;
   updateBudget: (id: string, b: Partial<Budget>) => void;
@@ -224,6 +227,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [dbCategories, setDbCategories] = useState<string[]>([]);
   const [dashboardSummary, setDashboardSummary] = useState<any | null>(null);
   const [budgetGoalsSummary, setBudgetGoalsSummary] = useState<any | null>(null);
+  const [accountHubAnalysis, setAccountHubAnalysis] = useState<any | null>(null);
+  const [accountHubAnalysisLoading, setAccountHubAnalysisLoading] = useState(false);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [categories, setCategories] = useState<Category[]>(initialCategories);
@@ -288,7 +293,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     dashboardSummary?: Promise<void>;
     budgetGoalsSummary?: Promise<void>;
     forecast?: Map<string, Promise<any | null>>;
+    accountHubAnalysis?: Promise<any | null>;
   }>({ forecast: new Map() });
+
+  const accountHubLoadedRef = useRef(false);
+  const accountHubAnalysisRef = useRef<any | null>(null);
 
   const forecastCacheRef = useRef<
     Map<
@@ -424,14 +433,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return promise;
   }, [isAuthed, uid]);
 
-  const loadAccounts = useCallback(() => {
+  const loadAccounts = useCallback((options?: { force?: boolean }) => {
     if (!isAuthed || !uid) {
       setAccounts([]);
       return;
     }
     const now = Date.now();
-    if (now - lastLoadedRef.current.accounts < TTL.accountsMs) return;
-    if (inflightRef.current.accounts) return;
+    if (!options?.force) {
+      if (now - lastLoadedRef.current.accounts < TTL.accountsMs) return;
+      if (inflightRef.current.accounts) return;
+    } else {
+      lastLoadedRef.current.accounts = 0;
+    }
 
     inflightRef.current.accounts = apiFetch(
       `/api/accounts?user_id=${encodeURIComponent(uid)}`
@@ -546,7 +559,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     loadAccounts();
     loadBudgets();
     loadGoals();
-  }, [loadTransactions, loadAccounts, loadBudgets, loadGoals]);
+    loadDbCategories();
+  }, [loadTransactions, loadAccounts, loadBudgets, loadGoals, loadDbCategories]);
 
   const loadDashboardSummary = useCallback(
     async (options?: { force?: boolean }) => {
@@ -581,6 +595,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return inflightRef.current.dashboardSummary;
     },
     [isAuthed, uid, analysisPeriod],
+  );
+
+  const loadAccountHubAnalysis = useCallback(
+    async (options?: { force?: boolean }) => {
+      if (!isAuthed || !uid) {
+        setAccountHubAnalysis(null);
+        return null;
+      }
+
+      if (options?.force) {
+        accountHubLoadedRef.current = false;
+      }
+
+      if (!options?.force && accountHubLoadedRef.current) {
+        return accountHubAnalysisRef.current;
+      }
+      if (inflightRef.current.accountHubAnalysis) {
+        return inflightRef.current.accountHubAnalysis;
+      }
+
+      setAccountHubAnalysisLoading(true);
+      inflightRef.current.accountHubAnalysis = apiFetch(
+        `/api/account-hub-analysis?user_id=${encodeURIComponent(uid)}`,
+      )
+        .then((res) => res.json())
+        .then((data) => {
+          if (data?.success) {
+            setAccountHubAnalysis(data);
+            accountHubAnalysisRef.current = data;
+            accountHubLoadedRef.current = true;
+            return data;
+          }
+          return null;
+        })
+        .catch((err) => {
+          console.warn('Failed to load account hub analysis:', err);
+          return null;
+        })
+        .finally(() => {
+          setAccountHubAnalysisLoading(false);
+          inflightRef.current.accountHubAnalysis = undefined;
+        });
+
+      return inflightRef.current.accountHubAnalysis;
+    },
+    [isAuthed, uid],
   );
 
   const loadBudgetGoalsSummary = useCallback(
@@ -696,6 +756,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setBudgets([]);
       setDashboardSummary(null);
       setBudgetGoalsSummary(null);
+      setAccountHubAnalysis(null);
+      accountHubAnalysisRef.current = null;
+      accountHubLoadedRef.current = false;
     }
   }, [authReady, user.isAuthenticated, user.userId, user.id, refreshUserData]);
 
@@ -1021,6 +1084,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setGoals([]);
     setBudgets([]);
     setReports([]);
+    setAccountHubAnalysis(null);
+    accountHubAnalysisRef.current = null;
+    accountHubLoadedRef.current = false;
     setCurrentPage('dashboard');
   };
 
@@ -1085,6 +1151,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       loadDashboardSummary,
       loadBudgetGoalsSummary,
       loadForecast,
+      accountHubAnalysis,
+      accountHubAnalysisLoading,
+      loadAccountHubAnalysis,
       budgets, addBudget, updateBudget, deleteBudget, loadBudgets, loadGoals,
       goals, addGoal, updateGoal, deleteGoal,
       categories, addCategory, updateCategory, deleteCategory, addSubCategory, deleteSubCategory,

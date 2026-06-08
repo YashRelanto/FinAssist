@@ -16,41 +16,31 @@ import { ForecastPredictionCard } from '../components/Dashboard/ForecastPredicti
 import { AccountModal } from '../components/AccountModal';
 
 export const Dashboard: React.FC = () => {
-  const { user, dashboardSummary, loadDashboardSummary } = useAppContext();
-  const [loading, setLoading] = React.useState(false);
+  const { user, dashboardSummary, loadDashboardSummary, loadAccountHubAnalysis } = useAppContext();
   const [isAccountModalOpen, setIsAccountModalOpen] = React.useState(false);
+  const hubAnalysisScheduledRef = React.useRef(false);
 
-  const fetchDashboardData = React.useCallback(
-    async (options?: { silent?: boolean; force?: boolean }) => {
-      try {
-        if (!options?.silent) setLoading(true);
-        await loadDashboardSummary({ force: options?.force });
-      } finally {
-        if (!options?.silent) setLoading(false);
-      }
+  const refreshDashboard = React.useCallback(
+    async (options?: { force?: boolean }) => {
+      await loadDashboardSummary({ force: options?.force });
     },
     [loadDashboardSummary],
   );
 
-  const handleAccountCreated = (account: Record<string, unknown>) => {
-    // Dashboard is centralized now; just force refresh.
-    void fetchDashboardData({ silent: true, force: true });
+  const handleAccountCreated = () => {
+    void refreshDashboard({ force: true });
+    void loadAccountHubAnalysis({ force: true });
   };
 
   React.useEffect(() => {
-    if (user?.isAuthenticated) {
-      fetchDashboardData();
-    }
-  }, [user?.isAuthenticated, fetchDashboardData]);
+    if (!user?.isAuthenticated || hubAnalysisScheduledRef.current) return;
+    const hasAccounts = (dashboardSummary?.accounts?.length ?? 0) > 0;
+    if (!hasAccounts) return;
+    hubAnalysisScheduledRef.current = true;
+    void loadAccountHubAnalysis();
+  }, [user?.isAuthenticated, dashboardSummary?.accounts?.length, loadAccountHubAnalysis]);
 
-  React.useEffect(() => {
-    if (!user?.isAuthenticated) return;
-    const onFocus = () => fetchDashboardData({ silent: true });
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [user?.isAuthenticated, fetchDashboardData]);
-
-  if ((loading || !dashboardSummary) && user?.isAuthenticated) {
+  if (!dashboardSummary && user?.isAuthenticated) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
@@ -100,7 +90,6 @@ export const Dashboard: React.FC = () => {
         {/* Quick Actions */}
         <QuickActionCard
           hasAccounts={(dashboardData?.accounts?.length ?? 0) > 0}
-          refreshKey={`${dashboardData?.accounts?.length ?? 0}-${dashboardData?.recent_transactions?.length ?? 0}`}
         />
       </div>
 
@@ -133,7 +122,7 @@ export const Dashboard: React.FC = () => {
         
         {/* Quick Add Form */}
         <QuickAddForm
-          onSuccess={() => fetchDashboardData({ force: true })}
+          onSuccess={() => refreshDashboard({ force: true })}
           accounts={dashboardData?.accounts}
         />
 

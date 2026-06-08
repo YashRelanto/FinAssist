@@ -1,4 +1,4 @@
-"""Train per-user Prophet models from Supabase (or in-memory DataFrames) for production."""
+"""Train a global Prophet model from Supabase (or in-memory DataFrames) for production."""
 
 from __future__ import annotations
 
@@ -10,17 +10,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 import joblib
-import numpy as np
 import pandas as pd
 
 from app.services.forecast_features import (
-    MIN_DAYS_FOR_PROPHET_USER,
-    MIN_WEEKS_FOR_PROPHET_USER,
-    create_prophet_model_daily,
-    expenses_to_daily,
-    expenses_to_weekly,
-    prophet_holdout_mape,
-    prophet_holdout_mape_daily,
+    MIN_MONTHS_FOR_PROPHET_USER,
+    create_prophet_model_monthly,
+    drop_incomplete_current_month,
+    expenses_to_monthly,
+    prophet_holdout_mape_monthly,
 )
 logger = logging.getLogger(__name__)
 
@@ -87,7 +84,7 @@ def train_prophet_bundle_from_transactions(
     log: LogFn = None,
 ) -> dict[str, Any]:
     """
-    Fit one Prophet model per user with enough weekly history.
+    Fit one global Prophet model on pooled monthly expense totals across all users.
     Returns the bundle dict (not yet written to disk).
     """
     emit = log or _default_log
@@ -104,58 +101,65 @@ def train_prophet_bundle_from_transactions(
     if "user_id" not in tx.columns:
         raise ValueError("transactions must include user_id")
 
-    per_user_models: dict[str, Any] = {}
-    per_user_mapes: list[float] = []
-    skipped_users: list[dict[str, Any]] = []
+    training_users = int(tx["user_id"].nunique())
+    monthly_all = expenses_to_monthly(tx)
+    month_count = len(monthly_all)
 
-    for user_id, group in tx.groupby("user_id"):
-        uid = str(user_id)
-
-        # Build daily series (zero-fills gaps between first and last date)
-        daily = expenses_to_daily(group)
-        day_count = len(daily)
-
-        if day_count < MIN_DAYS_FOR_PROPHET_USER:
-            skipped_users.append(
-                {"user_id": uid, "days": day_count, "reason": "insufficient_days"}
-            )
-            continue
-
-        # Compute 7-day hold-out MAPE for evaluation
-        mape = prophet_holdout_mape_daily(daily)
-        if mape is not None:
-            per_user_mapes.append(mape)
-
-        d = daily.sort_values("date").reset_index(drop=True)
-        train_df = pd.DataFrame(
-            {
-                "ds": d["date"],
-                # clip at 0 to avoid log-scale issues with zero-spend days
-                "y": d["daily_expense"].clip(lower=0.0),
-            }
-        )
-        model = create_prophet_model_daily(len(train_df))
-        model.fit(train_df)
-        per_user_models[uid] = model
-        emit(f"Trained daily Prophet for user {uid[:8]}… ({day_count} days)")
-
-    if not per_user_models:
+    if month_count < MIN_MONTHS_FOR_PROPHET_USER:
         raise ValueError(
-            f"No users met the minimum of {MIN_DAYS_FOR_PROPHET_USER} days of expense history",
+            f"Need at least {MIN_MONTHS_FOR_PROPHET_USER} months of pooled expense history; "
+            f"got {month_count}",
         )
+
+    monthly = drop_incomplete_current_month(monthly_all)
+    complete_month_count = len(monthly)
+    if complete_month_count < 2:
+        raise ValueError(
+            "Need at least 2 complete calendar months after excluding the in-progress month",
+        )
+
+    mape = prophet_holdout_mape_monthly(monthly_all)
+    if mape is None:
+        emit(
+            f"Hold-out MAPE unavailable ({complete_month_count} complete months; "
+            "need 2+ complete months with positive last-month spend)",
+        )
+    else:
+        emit(f"Hold-out test MAPE: {mape:.3f}")
+
+    m = monthly.sort_values("month_start").reset_index(drop=True)
+    train_df = pd.DataFrame(
+        {
+            "ds": m["month_start"],
+            "y": m["monthly_expense"].clip(lower=1.0),
+        }
+    )
+    model = create_prophet_model_monthly(len(train_df))
+    model.fit(train_df)
+    emit(
+        f"Trained global monthly Prophet on {complete_month_count} complete month(s) "
+        f"({month_count} calendar months incl. MTD) from {training_users} user(s)",
+    )
 
     trained_at = datetime.now(timezone.utc).isoformat()
+    global_monthly = m.assign(month_start=m["month_start"].astype(str))[
+        ["month_start", "monthly_expense"]
+    ].to_dict(orient="records")
     bundle = {
         "model_name": "Prophet",
         "model_type": "prophet",
-        "granularity": "daily",          # <-- tells forecast_service this is a daily model
-        "per_user": per_user_models,
-        "test_mape": float(np.mean(per_user_mapes)) if per_user_mapes else None,
+        "scope": "global",
+        "granularity": "monthly",
+        "model": model,
+        "global_monthly": global_monthly,
+        "test_mape": mape,
         "horizon_weeks": HORIZON_WEEKS,
-        "trained_users": len(per_user_models),
+        "training_users": training_users,
+        "trained_users": training_users,
         "trained_at": trained_at,
-        "min_days": MIN_DAYS_FOR_PROPHET_USER,
-        "skipped_users": skipped_users,
+        "min_months": MIN_MONTHS_FOR_PROPHET_USER,
+        "complete_months": complete_month_count,
+        "calendar_months": month_count,
     }
     return bundle
 
@@ -190,16 +194,19 @@ def _record_training_run(bundle: dict[str, Any], storage_refs: dict[str, str] | 
 
 
 def write_manifest(bundle: dict[str, Any], path: Path = PRODUCTION_MANIFEST_PATH) -> dict[str, Any]:
-    per_user: dict = bundle.get("per_user", {})
     manifest = {
         "model_type": "prophet",
+        "scope": bundle.get("scope", "global"),
         "trained_at": bundle.get("trained_at"),
         "trained_users": bundle.get("trained_users"),
+        "training_users": bundle.get("training_users", bundle.get("trained_users")),
         "horizon_weeks": bundle.get("horizon_weeks"),
         "min_weeks": bundle.get("min_weeks"),
+        "min_months": bundle.get("min_months"),
         "test_mape": bundle.get("test_mape"),
-        "user_ids": sorted(per_user.keys()),
-        "skipped_count": len(bundle.get("skipped_users") or []),
+        "global_months": len(bundle.get("global_monthly") or []),
+        "complete_months": bundle.get("complete_months"),
+        "calendar_months": bundle.get("calendar_months"),
         "bundle_path": str(PRODUCTION_BUNDLE_PATH),
     }
     from app.core.config import settings
@@ -224,7 +231,7 @@ def promote_staging_to_production() -> dict[str, Any]:
 
     bundle = joblib.load(PRODUCTION_BUNDLE_PATH)
     manifest = write_manifest(bundle)
-    logger.info("Promoted Prophet bundle to production (%s users)", manifest["trained_users"])
+    logger.info("Promoted Prophet bundle to production (%s training users)", manifest["trained_users"])
     return manifest
 
 
@@ -244,7 +251,7 @@ def run_training_pipeline(
     bundle = train_prophet_bundle_from_transactions(transactions, log=log)
     STAGING_DIR.mkdir(parents=True, exist_ok=True)
     write_bundle(bundle, STAGING_BUNDLE_PATH)
-    emit(f"Wrote staging bundle ({bundle['trained_users']} users)")
+    emit(f"Wrote staging bundle (global model, {bundle['training_users']} training users)")
 
     result: dict[str, Any] = {
         "trained_users": bundle["trained_users"],

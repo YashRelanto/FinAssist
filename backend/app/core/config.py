@@ -43,7 +43,6 @@ class Settings:
     )
     NVIDIA_BASE_URL: str = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
 
-    # Aliases used by chatbot_engine
     @property
     def active_api_key(self) -> str:
         return self.NVIDIA_API_KEY
@@ -82,12 +81,6 @@ class Settings:
 
     # Public URL of this API (Edge Function calls POST {url}/api/internal/train-forecast)
     TRAINING_WORKER_URL: str = os.getenv("TRAINING_WORKER_URL", "http://localhost:8000")
-
-    # ── Sessions ──────────────────────────────────────────────────────────────
-    SESSIONS_FILE: str = os.getenv(
-        "SESSIONS_FILE",
-        os.path.normpath(os.path.join(_ROOT_DIR, "backend", "sessions.json"))
-    )
 
 
 settings = Settings()
