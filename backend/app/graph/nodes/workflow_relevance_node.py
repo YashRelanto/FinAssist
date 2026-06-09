@@ -8,9 +8,8 @@ import json
 import logging
 from datetime import datetime, timezone
 
-import openai
-
 from app.core.config import settings
+from app.graph.logging_utils import graph_chat_completion
 from app.graph.state import AgentState
 from app.utils.prompts import WORKFLOW_RELEVANCE_SYSTEM, WORKFLOW_RELEVANCE_USER
 
@@ -26,11 +25,9 @@ def workflow_relevance_node(state: AgentState) -> dict:
     workflow_state = state.get("workflow_state") or {}
 
     try:
-        client = openai.OpenAI(
-            api_key=settings.active_api_key,
-            base_url=settings.active_base_url,
-        )
-        response = client.chat.completions.create(
+        response = graph_chat_completion(
+            node="workflow_relevance_node",
+            purpose="workflow_relevance",
             model=settings.active_chat_model,
             messages=[
                 {"role": "system", "content": WORKFLOW_RELEVANCE_SYSTEM},

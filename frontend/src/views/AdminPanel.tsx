@@ -117,25 +117,43 @@ function Badge({ status }: { status: string }) {
 type TrainRun = {
   job_id: string;
   model_type?: string;
+  training_mode?: string;
   status?: string;
   test_mape?: number | null;
   trained_users?: number | null;
+  trained_transactions?: number | null;
   trained_at?: string | null;
   deployable?: boolean;
   label?: string;
 };
 
+const PROPHET_MODES = [
+  { id: 'prophet', label: 'Prophet (regressors)' },
+  { id: 'prophet_default', label: 'Prophet (default ds/y)' },
+] as const;
+
+type ProphetModeId = (typeof PROPHET_MODES)[number]['id'];
+
+function modeLabel(mode: string | undefined): string {
+  return PROPHET_MODES.find((m) => m.id === mode)?.label ?? mode ?? 'prophet';
+}
+
+function runMatchesMode(run: TrainRun, mode: ProphetModeId): boolean {
+  const runMode = run.model_type ?? 'prophet';
+  return runMode === mode;
+}
+
+function formatRunOption(run: TrainRun): string {
+  const mode = modeLabel(run.model_type);
+  const base = run.label ?? run.job_id;
+  const when = run.trained_at ? ` · ${new Date(run.trained_at).toLocaleString()}` : '';
+  const status = run.status && run.status !== 'completed' ? ` (${run.status})` : '';
+  return `${mode} — ${base}${when}${status}`;
+}
+
 function formatMape(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return '—';
   return `${(value * 100).toFixed(1)}%`;
-}
-
-function formatDriftLevel(drift: Record<string, unknown>): string {
-  const level = drift.drift_level;
-  if (typeof level === 'string' && level) return level;
-  const status = drift.status;
-  if (typeof status === 'string' && status) return status;
-  return '—';
 }
 
 function RunSelector({
@@ -163,9 +181,34 @@ function RunSelector({
         {options.length === 0 && <option value="">No training runs available</option>}
         {options.map((run) => (
           <option key={run.job_id} value={run.job_id}>
-            {run.label ?? run.job_id}
-            {run.trained_at ? ` · ${new Date(run.trained_at).toLocaleString()}` : ''}
-            {run.status && run.status !== 'completed' ? ` (${run.status})` : ''}
+            {formatRunOption(run)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function ModeSelector({
+  value,
+  onChange,
+  label = 'Training mode',
+}: {
+  value: ProphetModeId;
+  onChange: (mode: ProphetModeId) => void;
+  label?: string;
+}) {
+  return (
+    <label className="block max-w-md">
+      <span className="text-xs text-on-surface-variant mb-1 block">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as ProphetModeId)}
+        className="w-full text-sm bg-surface border border-outline-variant rounded-lg px-3 py-2 text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
+      >
+        {PROPHET_MODES.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
           </option>
         ))}
       </select>
@@ -175,26 +218,34 @@ function RunSelector({
 
 function OverviewSection() {
   const [runs, setRuns] = useState<TrainRun[]>([]);
+  const [mode, setMode] = useState<ProphetModeId>('prophet');
   const [selectedJobId, setSelectedJobId] = useState('');
   const [data, setData] = useState<any>(null);
   const [loadingRuns, setLoadingRuns] = useState(true);
   const [loadingMetrics, setLoadingMetrics] = useState(false);
   const [error, setError] = useState('');
 
+  const filteredRuns = runs.filter((r) => runMatchesMode(r, mode));
+
   useEffect(() => {
     adminGet('/train/runs')
       .then((d) => {
         const list: TrainRun[] = d.runs ?? [];
         setRuns(list);
-        const firstCompleted =
-          list.find((r) => r.status === 'completed') ?? list[0];
-        if (firstCompleted) {
-          setSelectedJobId(firstCompleted.job_id);
-        }
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingRuns(false));
   }, []);
+
+  useEffect(() => {
+    const firstCompleted =
+      filteredRuns.find((r) => r.status === 'completed') ?? filteredRuns[0];
+    if (firstCompleted) {
+      setSelectedJobId(firstCompleted.job_id);
+    } else {
+      setSelectedJobId('');
+    }
+  }, [mode, runs]);
 
   useEffect(() => {
     if (!selectedJobId) return;
@@ -210,13 +261,13 @@ function OverviewSection() {
   if (error && !data) return <ErrorBox msg={error} />;
 
   const run = data?.run ?? {};
-  const drift = data?.drift ?? {};
   const status = run.status ?? '—';
 
   return (
     <div className="space-y-6">
+      <ModeSelector value={mode} onChange={setMode} label="Model approach" />
       <RunSelector
-        runs={runs}
+        runs={filteredRuns}
         value={selectedJobId}
         onChange={setSelectedJobId}
         label="Training run (job id)"
@@ -227,46 +278,31 @@ function OverviewSection() {
       ) : (
         <>
           {error && <ErrorBox msg={error} />}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
             <StatCard
               icon={BarChart2}
               label="Test MAPE"
               value={formatMape(run.test_mape)}
-              sub="Holdout weekly forecast error"
+              sub="Holdout monthly forecast error"
               color="text-blue-500"
             />
             <StatCard
-              icon={Activity}
-              label="Trained Users"
-              value={run.trained_users ?? '—'}
-              sub={run.trained_at ? new Date(run.trained_at).toLocaleString() : undefined}
+              icon={Database}
+              label="Transactions Trained On"
+              value={run.trained_transactions?.toLocaleString() ?? '—'}
+              sub={
+                run.trained_at
+                  ? `Expense rows · users with 6+ months · ${new Date(run.trained_at).toLocaleString()}`
+                  : 'Expense rows from users with 6+ months of history'
+              }
               color="text-violet-500"
             />
             <StatCard
               icon={Cpu}
               label="Model"
-              value={run.model_type ?? 'prophet'}
+              value={modeLabel(run.model_type)}
               sub={`Job ${selectedJobId || '—'}`}
               color="text-emerald-500"
-            />
-            <StatCard
-              icon={AlertTriangle}
-              label="Drift Level"
-              value={formatDriftLevel(drift)}
-              sub={
-                typeof drift.mean_shift_sigma === 'number'
-                  ? `σ shift ${drift.mean_shift_sigma.toFixed(2)}`
-                  : typeof drift.recommendation === 'string'
-                  ? drift.recommendation
-                  : undefined
-              }
-              color={
-                drift.drift_level === 'high'
-                  ? 'text-orange-500'
-                  : drift.drift_level === 'medium'
-                  ? 'text-yellow-600'
-                  : 'text-green-500'
-              }
             />
           </div>
           {status !== 'completed' && (
@@ -329,12 +365,10 @@ function TrainingSection() {
   const [datasets, setDatasets] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [models, setModels] = useState<string[]>(['prophet']);
+  const [trainingMode, setTrainingMode] = useState<ProphetModeId>('prophet');
   const [datasetId, setDatasetId] = useState('default');
   const [starting, setStarting] = useState(false);
   const [startMsg, setStartMsg] = useState('');
-
-  const MODEL_OPTIONS = ['prophet'];
 
   const loadJobs = () =>
     adminGet('/train/jobs')
@@ -350,14 +384,10 @@ function TrainingSection() {
       .finally(() => setLoading(false));
   }, []);
 
-  const toggleModel = (m: string) =>
-    setModels((prev) => (prev.includes(m) ? prev.filter((x) => x !== m) : [...prev, m]));
-
   const startTrain = async () => {
-    if (!models.length) { setStartMsg('Select at least one model.'); return; }
     setStarting(true); setStartMsg('');
     try {
-      const d = await adminPost('/train', { models, dataset_id: datasetId });
+      const d = await adminPost('/train', { models: [trainingMode], dataset_id: datasetId });
       setStartMsg(`✅ Job started: ${d.job_id}`);
       loadJobs();
     } catch (e: any) {
@@ -377,21 +407,11 @@ function TrainingSection() {
         <h3 className="text-sm font-semibold text-on-surface flex items-center gap-2">
           <PlayCircle className="w-4 h-4 text-primary" /> Start Training Job
         </h3>
-        <div className="flex flex-wrap gap-3">
-          {MODEL_OPTIONS.map((m) => (
-            <button
-              key={m}
-              onClick={() => toggleModel(m)}
-              className={`px-4 py-1.5 rounded-lg text-xs font-medium border transition ${
-                models.includes(m)
-                  ? 'bg-primary text-white border-primary'
-                  : 'bg-surface text-on-surface border-outline-variant hover:border-primary'
-              }`}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
+        <ModeSelector
+          value={trainingMode}
+          onChange={setTrainingMode}
+          label="Model approach to train"
+        />
         <div>
           <label className="text-xs text-on-surface-variant block mb-1">Dataset</label>
           <select
@@ -454,29 +474,34 @@ function TrainingSection() {
 
 function DeploySection() {
   const [runs, setRuns] = useState<TrainRun[]>([]);
+  const [mode, setMode] = useState<ProphetModeId>('prophet');
   const [selectedJobId, setSelectedJobId] = useState('');
-  const [selectedModel, setSelectedModel] = useState('prophet');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [deploying, setDeploying] = useState(false);
   const [deployMsg, setDeployMsg] = useState('');
 
-  const deployableRuns = runs.filter((r) => r.deployable && r.status === 'completed');
+  const deployableRuns = runs.filter(
+    (r) => r.deployable && r.status === 'completed' && runMatchesMode(r, mode),
+  );
 
   useEffect(() => {
     adminGet('/train/runs')
       .then((d) => {
-        const list: TrainRun[] = d.runs ?? [];
-        setRuns(list);
-        const first = list.find((r) => r.deployable && r.status === 'completed');
-        if (first) {
-          setSelectedJobId(first.job_id);
-          if (first.model_type) setSelectedModel(first.model_type);
-        }
+        setRuns(d.runs ?? []);
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    const first = deployableRuns[0];
+    if (first) {
+      setSelectedJobId(first.job_id);
+    } else {
+      setSelectedJobId('');
+    }
+  }, [mode, runs]);
 
   const deploy = async () => {
     if (!selectedJobId) {
@@ -486,9 +511,11 @@ function DeploySection() {
     setDeploying(true);
     setDeployMsg('');
     try {
+      const run = runs.find((r) => r.job_id === selectedJobId);
+      const modelType = run?.model_type ?? mode;
       const d = await adminPost('/deploy', {
         job_id: selectedJobId,
-        models: [selectedModel],
+        models: [modelType],
       });
       setDeployMsg(
         `✅ Deployed job ${d.job_id ?? selectedJobId}: ${(d.deployed ?? []).join(', ') || 'none'}`,
@@ -518,26 +545,13 @@ function DeploySection() {
           </p>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <ModeSelector value={mode} onChange={setMode} label="Model approach" />
             <RunSelector
               runs={deployableRuns}
               value={selectedJobId}
-              onChange={(jobId) => {
-                setSelectedJobId(jobId);
-                const run = runs.find((r) => r.job_id === jobId);
-                if (run?.model_type) setSelectedModel(run.model_type);
-              }}
+              onChange={setSelectedJobId}
               label="Training run (job id)"
             />
-            <label className="block">
-              <span className="text-xs text-on-surface-variant mb-1 block">Model</span>
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                className="w-full text-sm bg-surface border border-outline-variant rounded-lg px-3 py-2 text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
-              >
-                <option value="prophet">prophet</option>
-              </select>
-            </label>
           </div>
         )}
 
@@ -549,7 +563,8 @@ function DeploySection() {
               <Badge status={selectedRun.status ?? 'completed'} />
             </div>
             <p className="text-on-surface-variant">
-              MAPE {formatMape(selectedRun.test_mape)} · {selectedRun.trained_users ?? '—'} users
+              MAPE {formatMape(selectedRun.test_mape)} ·{' '}
+              {selectedRun.trained_transactions?.toLocaleString() ?? '—'} transactions
               {selectedRun.trained_at
                 ? ` · trained ${new Date(selectedRun.trained_at).toLocaleString()}`
                 : ''}

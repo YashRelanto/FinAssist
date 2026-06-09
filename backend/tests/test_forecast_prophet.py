@@ -19,7 +19,17 @@ from app.services.forecast_features import (
     prophet_holdout_mape_monthly,
 )
 from app.services.forecast_service import generate_forecast, reload_models
-from app.services.prophet_training_service import train_from_dataframe, train_prophet_bundle_from_transactions
+from app.services.prophet_training_service import (
+    MODEL_TYPE_PROPHET_DEFAULT,
+    train_from_dataframe,
+    train_prophet_bundle_from_transactions,
+    train_prophet_default_bundle_from_transactions,
+)
+from app.services.forecast_features import (
+    build_global_prophet_ds_y_frame,
+    prepare_global_training_expenses,
+    prophet_default_holdout_mape,
+)
 
 SAMPLE_USER = "test-user-prophet-e2e"
 
@@ -86,6 +96,7 @@ def test_training_bundle_includes_test_mape():
     bundle = train_prophet_bundle_from_transactions(tx)
     assert bundle["test_mape"] is not None
     assert bundle["test_mape"] < 0.5
+    assert bundle["trained_transactions"] == len(tx)
     assert bundle["regressor_columns"] == MONTHLY_REGRESSOR_COLUMNS
     assert model_uses_monthly_regressors(bundle["model"])
 
@@ -148,6 +159,95 @@ def test_global_model_serves_any_user_with_history(trained_production_bundle):
     )
     assert result["success"] is True
     assert result["user_model_available"] is True
+    assert result["predicted_next_month"] > 0
+
+
+def test_prepare_global_training_expenses_excludes_income_and_short_history():
+    long_user = "user-long"
+    short_user = "user-short"
+    rows = []
+    start = pd.Timestamp("2025-01-06")
+    for m in range(8):
+        month_start = start + pd.DateOffset(months=m)
+        rows.append(
+            {
+                "user_id": long_user,
+                "transaction_date": month_start.strftime("%Y-%m-%d"),
+                "amount": 100.0,
+                "transaction_type": "expense",
+            },
+        )
+        rows.append(
+            {
+                "user_id": long_user,
+                "transaction_date": month_start.strftime("%Y-%m-%d"),
+                "amount": 5000.0,
+                "transaction_type": "income",
+            },
+        )
+    for m in range(2):
+        month_start = start + pd.DateOffset(months=m)
+        rows.append(
+            {
+                "user_id": short_user,
+                "transaction_date": month_start.strftime("%Y-%m-%d"),
+                "amount": 50.0,
+                "transaction_type": "expense",
+            },
+        )
+    tx = pd.DataFrame(rows)
+    pool = prepare_global_training_expenses(tx)
+    assert len(pool) == 8
+    assert set(pool["user_id"]) == {long_user}
+    assert set(pool["transaction_type"]) == {"expense"}
+
+
+def test_default_prophet_holdout_mape():
+    tx = _build_sample_transactions(months=8)
+    frame = build_global_prophet_ds_y_frame(tx)
+    mape = prophet_default_holdout_mape(frame, train_ratio=0.6)
+    assert mape is not None
+    assert 0.0 <= mape <= 1.0
+
+
+def test_default_training_bundle_uses_ds_y_only():
+    tx = _build_sample_transactions(months=MIN_MONTHS_FOR_PROPHET_USER)
+    bundle = train_prophet_default_bundle_from_transactions(tx)
+    assert bundle["model_type"] == MODEL_TYPE_PROPHET_DEFAULT
+    assert bundle["training_mode"] == "default"
+    assert bundle["regressor_columns"] == []
+    assert bundle["test_mape"] is not None
+    assert bundle["trained_transactions"] > 0
+
+
+def test_default_prophet_e2e(tmp_path, monkeypatch):
+    import app.core.config as cfg
+    import app.services.forecast_service as fs
+    import app.services.prophet_training_service as pts
+
+    monkeypatch.setattr(cfg.settings, "FORECAST_STORAGE_ENABLED", False)
+    prod = tmp_path / "production"
+    staging = tmp_path / "staging"
+    monkeypatch.setattr(pts, "PRODUCTION_DIR", prod)
+    monkeypatch.setattr(pts, "STAGING_DIR", staging)
+    monkeypatch.setattr(pts, "PRODUCTION_BUNDLE_PATH", prod / "expense_forecast_prophet.joblib")
+    monkeypatch.setattr(pts, "STAGING_BUNDLE_PATH", staging / "expense_forecast_prophet.joblib")
+    monkeypatch.setattr(pts, "PRODUCTION_MANIFEST_PATH", prod / "manifest.json")
+    monkeypatch.setattr(fs, "PRODUCTION_DIR", prod)
+    monkeypatch.setattr(fs, "PRODUCTION_BUNDLE_PATH", prod / "expense_forecast_prophet.joblib")
+    monkeypatch.setattr(fs, "PRODUCTION_MANIFEST_PATH", prod / "manifest.json")
+
+    tx = _build_sample_transactions(months=8)
+    train_from_dataframe(tx, output_dir=prod, promote=True, training_mode=MODEL_TYPE_PROPHET_DEFAULT)
+    reload_models()
+
+    result = generate_forecast(
+        tx.to_dict(orient="records"),
+        [],
+        user_id=SAMPLE_USER,
+        period="1m",
+    )
+    assert result["success"] is True
     assert result["predicted_next_month"] > 0
 
 

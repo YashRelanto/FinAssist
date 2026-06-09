@@ -22,8 +22,18 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 class TrainRequest(BaseModel):
-    models: list[str] = Field(default_factory=lambda: ["prophet"])
+    models: list[str] = Field(
+        default_factory=lambda: ["prophet"],
+        description="Training mode: prophet (regressors) or prophet_default (ds/y only).",
+    )
     dataset_id: str = "database"
+
+
+class TrainFromDbRequest(BaseModel):
+    training_mode: str = Field(
+        default="prophet",
+        description="prophet | prophet_default",
+    )
 
 
 class DeployRequest(BaseModel):
@@ -70,10 +80,13 @@ async def admin_list_datasets(_user=Depends(require_admin)):
 
 
 @router.post("/train-from-db")
-async def admin_train_from_db_sync(_user=Depends(require_admin)):
+async def admin_train_from_db_sync(
+    body: TrainFromDbRequest = TrainFromDbRequest(),
+    _user=Depends(require_admin),
+):
     """Train global Prophet model from Supabase and promote to production (blocking)."""
     try:
-        result = run_training_sync()
+        result = run_training_sync(training_mode=body.training_mode)
         return {"success": True, **result}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

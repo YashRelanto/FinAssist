@@ -160,7 +160,8 @@ def get_model_status() -> dict[str, Any]:
             bundle.get("per_user", {})
         )
     return {
-        "model_type": "prophet",
+        "model_type": bundle.get("model_type", "prophet") if bundle else manifest.get("model_type", "prophet"),
+        "training_mode": bundle.get("training_mode") if bundle else manifest.get("training_mode"),
         "model_name": MODEL_NAME,
         "scope": scope,
         "loaded": _bundle_has_model(bundle),
@@ -213,6 +214,30 @@ def _is_global_bundle() -> bool:
     if bundle.get("scope") == "global":
         return True
     return bundle.get("model") is not None and not bundle.get("per_user")
+
+
+def _is_default_prophet_bundle() -> bool:
+    """True when production bundle uses plain Prophet (ds/y only, no regressors)."""
+    bundle = _load_prophet_bundle()
+    if bundle is None:
+        return False
+    if bundle.get("training_mode") == "default":
+        return True
+    if bundle.get("model_type") == "prophet_default":
+        return True
+    return not bool(bundle.get("regressor_columns"))
+
+
+def _bundle_uses_regressors() -> bool:
+    bundle = _load_prophet_bundle()
+    if bundle is None:
+        return True
+    if _is_default_prophet_bundle():
+        return False
+    model = bundle.get("model")
+    if model is not None:
+        return model_uses_monthly_regressors(model)
+    return bool(bundle.get("regressor_columns"))
 
 
 def _global_monthly_from_bundle(bundle: dict[str, Any]) -> pd.DataFrame:
@@ -317,6 +342,8 @@ def _get_monthly_prediction(
     model = _load_prophet_model(user_id)
     user_monthly = _trim_monthly_history(expenses_to_monthly(expenses_df))
 
+    use_regressors = _bundle_uses_regressors()
+
     if _is_global_bundle() and _is_monthly_bundle():
         bundle = _load_prophet_bundle()
         assert bundle is not None
@@ -325,7 +352,7 @@ def _get_monthly_prediction(
             model,
             global_monthly,
             1,
-            use_regressors=model_uses_monthly_regressors(model),
+            use_regressors=use_regressors,
         )
         return _scale_global_prediction_to_user(
             float(global_preds[0]),
@@ -338,7 +365,7 @@ def _get_monthly_prediction(
             model,
             user_monthly,
             1,
-            use_regressors=model_uses_monthly_regressors(model),
+            use_regressors=use_regressors,
         )
         return float(preds[0])
 
@@ -685,7 +712,12 @@ def generate_forecast(
         hold = float(monthly.iloc[-1]["monthly_expense"])
         try:
             model = _load_prophet_model(user_id)
-            global_preds = prophet_predict_months(model, global_monthly.iloc[:-1], 1)
+            global_preds = prophet_predict_months(
+                model,
+                global_monthly.iloc[:-1],
+                1,
+                use_regressors=_bundle_uses_regressors(),
+            )
             pred_hold = _scale_global_prediction_to_user(
                 global_preds[0],
                 monthly.iloc[:-1],
@@ -699,7 +731,9 @@ def generate_forecast(
         train_m = monthly.iloc[:-1]
         try:
             model = _load_prophet_model(user_id)
-            pred_hold = prophet_predict_months(model, train_m, 1)[0]
+            pred_hold = prophet_predict_months(
+                model, train_m, 1, use_regressors=_bundle_uses_regressors(),
+            )[0]
             holdout_mape = safe_mape([hold], [pred_hold])
         except (RuntimeError, KeyError):
             holdout_mape = None

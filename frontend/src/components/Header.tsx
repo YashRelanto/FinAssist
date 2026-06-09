@@ -3,19 +3,14 @@ import { Search, Bell, Menu, User, Settings, LogOut, ChevronDown } from 'lucide-
 import { useAppContext } from '../context/AppContext';
 import { cn } from '../lib/utils';
 import { TimeframeSelector } from './TimeframeSelector';
-import { resolveAnalysisWindow } from '../lib/analysisPeriod';
 
 interface HeaderProps {
   onMenuClick: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
-  const { user, setCurrentPage, signOut, analysisPeriod, setAnalysisPeriod, dashboardSummary } =
-    useAppContext();
+  const { user, setCurrentPage, signOut, analysisPeriod, setAnalysisPeriod } = useAppContext();
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const periodLabel =
-    dashboardSummary?.period_label ??
-    resolveAnalysisWindow(analysisPeriod).periodLabel;
 
   return (
     <header className="fixed top-0 left-0 lg:left-[280px] right-0 h-16 bg-surface-container-lowest border-b border-outline-variant flex justify-between items-center px-4 lg:px-10 z-30">
@@ -38,11 +33,7 @@ export const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
       </div>
 
       <div className="flex items-center gap-2 lg:gap-6">
-        <TimeframeSelector
-          value={analysisPeriod}
-          onChange={setAnalysisPeriod}
-          periodLabel={periodLabel}
-        />
+        <TimeframeSelector value={analysisPeriod} onChange={setAnalysisPeriod} />
         
         <button className="relative p-2 text-on-surface-variant hover:text-primary transition-colors">
           <Bell className="w-5 h-5" />

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, User, Bot, Paperclip, Sparkles, Loader2 } from 'lucide-react';
+import { Send, User, Bot, Paperclip, Loader2 } from 'lucide-react';
 import { cn, formatCurrency } from '../lib/utils';
 import { useAppContext } from '../context/AppContext';
 
@@ -89,35 +89,8 @@ export const AIAssistant: React.FC = () => {
   };
 
   return (
-    <div className="flex h-[calc(100vh-140px)] gap-6">
-      {/* Sidebar - Recent interactions */}
-      <aside className="w-80 bg-surface-container-lowest border border-outline-variant/30 rounded-2xl flex flex-col overflow-hidden shadow-sm">
-        <div className="p-4 border-b border-outline-variant/30">
-          <button className="w-full flex items-center justify-center gap-2 py-2.5 bg-primary text-white rounded-xl font-bold shadow-md hover:brightness-110 active:scale-95 transition-all">
-            <Sparkles className="w-4 h-4" /> New Insight
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto scrollbar-hide p-2 space-y-1">
-           <h3 className="px-3 py-4 text-[10px] font-bold text-outline uppercase tracking-widest">Recent Interactions</h3>
-           {[
-             { title: 'Spending Prediction Oct', time: 'Today', sub: 'Based on current trajectory...' },
-             { title: 'September Spend Summary', time: 'Yesterday', sub: 'You saved 12% more than...' },
-             { title: 'Budget Advice: Dining', time: '2 days ago', sub: 'Recommendations for dining...' },
-             { title: 'Stock Portfolio Analysis', time: 'Oct 12', sub: 'Diversification check complete.' },
-           ].map((item, i) => (
-             <button key={i} className={cn(
-               "w-full text-left p-3 rounded-xl transition-all duration-200",
-               i === 0 ? "bg-surface-container-low border-l-4 border-primary" : "hover:bg-surface-container-low"
-             )}>
-                <p className="text-sm font-bold text-on-surface truncate">{item.title}</p>
-                <p className="text-[10px] text-outline font-medium mt-1">{item.time} • {item.sub}</p>
-             </button>
-           ))}
-        </div>
-      </aside>
-
-      {/* Main Chat Interface */}
-      <section className="flex-1 flex flex-col bg-surface-container-lowest border border-outline-variant/30 rounded-2xl shadow-sm overflow-hidden relative">
+    <div className="h-[calc(100vh-140px)]">
+      <section className="h-full flex flex-col bg-surface-container-lowest border border-outline-variant/30 rounded-2xl shadow-sm overflow-hidden relative">
         <div className="flex-1 overflow-y-auto p-10 space-y-10 scrollbar-hide pb-32">
           {messages.map((m) => (
              <div key={m.id} className={cn("flex gap-4 max-w-2xl", m.role === 'user' ? "ml-auto flex-row-reverse text-right" : "")}>

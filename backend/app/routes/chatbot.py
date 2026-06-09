@@ -283,9 +283,22 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
     # 2. Call the core engine (LangGraph)
     try:
         from app.graph.graph import finassist_graph
+        from app.graph.logging_utils import (
+            clear_graph_run_context,
+            log_graph_run_end,
+            log_graph_run_start,
+            set_graph_run_context,
+        )
         from app.graph.state import make_initial_state
 
         config = {"configurable": {"thread_id": f"{request.user_id}:{request.thread_id}"}}
+        set_graph_run_context(user_id=request.user_id, thread_id=request.thread_id)
+        log_graph_run_start(
+            user_id=request.user_id,
+            thread_id=request.thread_id,
+            message=request.message,
+        )
+        run_started = time.perf_counter()
 
         # Fetch the current state snapshot from checkpointer to preserve workflow state
         state_snapshot = await finassist_graph.aget_state(config)
@@ -312,8 +325,17 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
         answer = final_state.get("final_answer") or final_state.get("raw_answer") or ""
         intent = final_state.get("final_intent") or final_state.get("intent") or "FINANCIAL_KNOWLEDGE"
         sources = final_state.get("sources") or []
+        log_graph_run_end(
+            user_id=request.user_id,
+            thread_id=request.thread_id,
+            intent=intent,
+            elapsed_ms=(time.perf_counter() - run_started) * 1000,
+            answer_preview=answer,
+        )
+        clear_graph_run_context()
 
     except ValueError as exc:
+        clear_graph_run_context()
         logger.warning(
             "Validation error in process_chat_message | user=%s | error=%s",
             request.user_id,
@@ -324,6 +346,7 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
             detail=f"Invalid input: {exc}",
         ) from exc
     except ConnectionError as exc:
+        clear_graph_run_context()
         logger.error(
             "Connectivity error in process_chat_message | user=%s | error=%s",
             request.user_id,
@@ -337,6 +360,7 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
             ),
         ) from exc
     except Exception as exc:
+        clear_graph_run_context()
         logger.exception(
             "Unhandled error in /api/chat/message | user=%s | thread=%s",
             request.user_id,

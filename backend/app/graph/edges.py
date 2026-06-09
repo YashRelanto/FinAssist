@@ -11,7 +11,7 @@ from typing import Literal
 
 from app.graph.state import AgentState
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("app.graph")
 
 
 def route_after_input_guardrail(
@@ -22,9 +22,9 @@ def route_after_input_guardrail(
     Otherwise -> intent_node.
     """
     if state.get("input_blocked"):
-        logger.debug("[Edge] input_guardrail -> __end__ (blocked)")
+        logger.info("[Edge] input_guardrail -> __end__ (blocked)")
         return "__end__"
-    logger.debug("[Edge] input_guardrail -> intent_node")
+    logger.info("[Edge] input_guardrail -> intent_node")
     return "intent_node"
 
 
@@ -42,18 +42,18 @@ def route_after_intent(
     intent = state.get("intent") or "FINANCIAL_KNOWLEDGE"
 
     if workflow_active:
-        logger.debug("[Edge] intent -> workflow_relevance_node (active workflow priority)")
+        logger.info("[Edge] intent -> workflow_relevance_node (active workflow priority)")
         return "workflow_relevance_node"
 
     if intent == "OUT_OF_SCOPE":
-        logger.debug("[Edge] intent -> __end__ (out of scope)")
+        logger.info("[Edge] intent -> __end__ (out of scope)")
         return "__end__"
 
     if intent == "GOAL_PLANNING":
-        logger.debug("[Edge] intent -> goal_planning_node (new)")
+        logger.info("[Edge] intent -> goal_planning_node (new)")
         return "goal_planning_node"
 
-    logger.debug("[Edge] intent -> context_node")
+    logger.info("[Edge] intent -> context_node")
     return "context_node"
 
 
@@ -65,9 +65,9 @@ def route_after_workflow_relevance(
     If unrelated -> context_node (workflow is paused).
     """
     if state.get("workflow_related", True):
-        logger.debug("[Edge] workflow_relevance -> goal_planning_node")
+        logger.info("[Edge] workflow_relevance -> goal_planning_node")
         return "goal_planning_node"
-    logger.debug("[Edge] workflow_relevance -> context_node (workflow paused)")
+    logger.info("[Edge] workflow_relevance -> context_node (workflow paused)")
     return "context_node"
 
 
@@ -79,9 +79,9 @@ def route_after_goal_planning(
     Otherwise (all slots filled) -> answer_node to generate the plan.
     """
     if state.get("final_answer"):
-        logger.debug("[Edge] goal_planning -> __end__ (clarification needed)")
+        logger.info("[Edge] goal_planning -> __end__ (clarification needed)")
         return "__end__"
-    logger.debug("[Edge] goal_planning -> answer_node (completed)")
+    logger.info("[Edge] goal_planning -> answer_node (completed)")
     return "answer_node"
 
 
@@ -93,9 +93,9 @@ def route_after_clarification(
     Otherwise -> router_node.
     """
     if state.get("clarification_needed"):
-        logger.debug("[Edge] clarification -> __end__ (ambiguous)")
+        logger.info("[Edge] clarification -> __end__ (ambiguous)")
         return "__end__"
-    logger.debug("[Edge] clarification -> router_node")
+    logger.info("[Edge] clarification -> router_node")
     return "router_node"
 
 
@@ -108,19 +108,19 @@ def route_after_router(
     selected_agent = state.get("selected_agent") or "knowledge"
 
     if selected_agent == "transaction":
-        logger.debug("[Edge] router -> transaction_agent")
+        logger.info("[Edge] router -> transaction_agent")
         return "transaction_agent"
     if selected_agent == "comparison":
-        logger.debug("[Edge] router -> comparison_agent")
+        logger.info("[Edge] router -> comparison_agent")
         return "comparison_agent"
     if selected_agent == "trend":
-        logger.debug("[Edge] router -> trend_agent")
+        logger.info("[Edge] router -> trend_agent")
         return "trend_agent"
     if selected_agent == "anomaly":
-        logger.debug("[Edge] router -> anomaly_agent")
+        logger.info("[Edge] router -> anomaly_agent")
         return "anomaly_agent"
 
-    logger.debug("[Edge] router -> rag_node")
+    logger.info("[Edge] router -> rag_node")
     return "rag_node"
 
 
@@ -132,7 +132,7 @@ def route_after_sql_validator(
     If invalid -> answer_node directly (it will format the validation error).
     """
     if state.get("sql_valid", True):
-        logger.debug("[Edge] sql_validator -> sql_executor")
+        logger.info("[Edge] sql_validator -> sql_executor")
         return "sql_executor"
-    logger.debug("[Edge] sql_validator -> answer_node (failed validation)")
+    logger.info("[Edge] sql_validator -> answer_node (failed validation)")
     return "answer_node"

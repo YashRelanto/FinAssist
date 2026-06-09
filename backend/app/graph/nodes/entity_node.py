@@ -15,9 +15,8 @@ from calendar import monthrange
 from datetime import date, timedelta
 from typing import Any, Dict, Optional
 
-import openai
-
 from app.core.config import settings
+from app.graph.logging_utils import graph_chat_completion
 from app.graph.state import AgentState
 from app.utils.prompts import ENTITY_EXTRACTION_SYSTEM, ENTITY_EXTRACTION_USER
 
@@ -128,11 +127,9 @@ def entity_node(state: AgentState) -> dict:
 
     # Step 2: LLM extraction
     try:
-        client = openai.OpenAI(
-            api_key=settings.active_api_key,
-            base_url=settings.active_base_url,
-        )
-        response = client.chat.completions.create(
+        response = graph_chat_completion(
+            node="entity_node",
+            purpose="entity_extraction",
             model=settings.active_chat_model,
             messages=[
                 {"role": "system", "content": ENTITY_EXTRACTION_SYSTEM},

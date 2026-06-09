@@ -154,7 +154,6 @@ export const BudgetGoals: React.FC = () => {
 
   const totalSpent = budgetItems.reduce((acc, item) => acc + item.spent, 0);
   const totalBudget = budgetItems.reduce((acc, item) => acc + item.total, 0);
-  const strokeOffset = 351.8 - (351.8 * trajectory.stroke_pct) / 100;
 
   const handleEditGoal = (g: GoalWithProgress) => {
     setEditingGoal(g);
@@ -490,48 +489,11 @@ export const BudgetGoals: React.FC = () => {
         )}
       </section>
 
-      <div className="bg-inverse-surface rounded-2xl p-8 text-white flex flex-col md:flex-row items-center justify-between gap-8 h-full">
-        <div className="max-w-2xl">
-          <h4 className="text-2xl font-bold mb-3">{trajectory.title}</h4>
-          <p className="opacity-80 text-sm leading-relaxed font-medium">
-            {trajectory.description}
-          </p>
-        </div>
-        <div className="relative w-32 h-32 flex items-center justify-center flex-shrink-0">
-          <svg className="w-full h-full transform -rotate-90">
-            <circle
-              className="text-white/10"
-              cx="64"
-              cy="64"
-              fill="transparent"
-              r="56"
-              stroke="currentColor"
-              strokeWidth="8"
-            />
-            <circle
-              className="text-secondary"
-              cx="64"
-              cy="64"
-              fill="transparent"
-              r="56"
-              stroke="currentColor"
-              strokeDasharray="351.8"
-              strokeDashoffset={strokeOffset}
-              strokeWidth="8"
-              strokeLinecap="round"
-            />
-          </svg>
-          <div className="absolute flex flex-col items-center">
-            <span className="text-3xl font-bold">
-              {trajectory.has_data
-                ? `${trajectory.savings_growth_pct > 0 ? '+' : ''}${trajectory.savings_growth_pct}%`
-                : '0%'}
-            </span>
-            <span className="text-[8px] font-bold opacity-60 uppercase tracking-widest">
-              vs last month
-            </span>
-          </div>
-        </div>
+      <div className="bg-inverse-surface rounded-2xl p-8 text-white">
+        <h4 className="text-2xl font-bold mb-3">{trajectory.title}</h4>
+        <p className="opacity-80 text-sm leading-relaxed font-medium max-w-2xl">
+          {trajectory.description}
+        </p>
       </div>
 
       <GoalModal

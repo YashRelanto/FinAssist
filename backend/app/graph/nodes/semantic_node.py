@@ -11,9 +11,8 @@ import json
 import logging
 from typing import Dict, List
 
-import openai
-
 from app.core.config import settings
+from app.graph.logging_utils import graph_chat_completion
 from app.graph.state import AgentState
 from app.utils.prompts import SEMANTIC_RESOLUTION_SYSTEM, SEMANTIC_RESOLUTION_USER
 from app.utils.supabase_client import supabase_db
@@ -88,11 +87,9 @@ def semantic_node(state: AgentState) -> dict:
         ) if db_categories else "No category data."
 
         try:
-            client = openai.OpenAI(
-                api_key=settings.active_api_key,
-                base_url=settings.active_base_url,
-            )
-            response = client.chat.completions.create(
+            response = graph_chat_completion(
+                node="semantic_node",
+                purpose="semantic_entity_resolution",
                 model=settings.active_chat_model,
                 messages=[
                     {"role": "system", "content": SEMANTIC_RESOLUTION_SYSTEM},

@@ -1,9 +1,8 @@
 import json
 import logging
 from typing import Tuple, Dict, Any, List
-import openai
-
 from app.core.config import settings
+from app.graph.logging_utils import graph_chat_completion
 from app.utils.prompts import (
     GOAL_SLOT_EXTRACTION_SYSTEM, 
     GOAL_SLOT_EXTRACTION_USER,
@@ -77,14 +76,11 @@ class WorkflowLogic:
             history_lines.append(f"{role.capitalize()}: {content}")
         history_str = "\n".join(history_lines) if history_lines else "None."
 
-        client = openai.OpenAI(
-            api_key=settings.active_api_key,
-            base_url=settings.active_base_url,
-        )
-
         # 1. Extraction Phase
         try:
-            response = client.chat.completions.create(
+            response = graph_chat_completion(
+                node="goal_planning_node",
+                purpose="goal_slot_extraction",
                 model=settings.active_chat_model,
                 messages=[
                     {"role": "system", "content": GOAL_SLOT_EXTRACTION_SYSTEM},
@@ -152,7 +148,9 @@ class WorkflowLogic:
         
         # 5. Question Generation Phase
         try:
-            q_response = client.chat.completions.create(
+            q_response = graph_chat_completion(
+                node="goal_planning_node",
+                purpose="goal_clarification_question",
                 model=settings.active_chat_model,
                 messages=[
                     {"role": "system", "content": QUESTION_GENERATOR_SYSTEM},

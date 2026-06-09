@@ -9,10 +9,10 @@ import logging
 from datetime import datetime
 from typing import Dict, Any
 
-import openai
 from langchain_core.messages import HumanMessage, AIMessage
 
 from app.core.config import settings
+from app.graph.logging_utils import graph_chat_completion
 from app.graph.state import AgentState
 from app.utils.workflow_logic import WorkflowLogic
 from app.utils.prompts import (
@@ -41,11 +41,6 @@ def answer_node(state: AgentState) -> dict:
     is_knowledge_path = (intent == "GOAL_PLANNING" or selected_agent == "knowledge")
 
     try:
-        client = openai.OpenAI(
-            api_key=settings.active_api_key,
-            base_url=settings.active_base_url,
-        )
-
         if is_knowledge_path:
             # ── 1. RAG / Advisor / Goal Planning Path ──
             profile = state.get("user_profile") or {}
@@ -110,7 +105,9 @@ def answer_node(state: AgentState) -> dict:
             messages_for_llm.extend(recent_history)
             messages_for_llm.append({"role": "user", "content": user_query})
 
-            completion = client.chat.completions.create(
+            completion = graph_chat_completion(
+                node="answer_node",
+                purpose="knowledge_answer",
                 model=settings.active_chat_model,
                 messages=messages_for_llm,
                 max_tokens=700,
@@ -137,7 +134,9 @@ def answer_node(state: AgentState) -> dict:
                     analytics=json.dumps(analytics_results, indent=2),
                 )
 
-                completion = client.chat.completions.create(
+                completion = graph_chat_completion(
+                    node="answer_node",
+                    purpose="sql_analytics_answer",
                     model=settings.active_chat_model,
                     messages=[
                         {"role": "system", "content": ANSWER_SYSTEM},

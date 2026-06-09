@@ -10,14 +10,12 @@ import { cn } from '../lib/utils';
 interface TimeframeSelectorProps {
   value: AnalysisPeriod;
   onChange: (period: AnalysisPeriod) => void;
-  periodLabel?: string;
   className?: string;
 }
 
 export const TimeframeSelector: React.FC<TimeframeSelectorProps> = ({
   value,
   onChange,
-  periodLabel,
   className,
 }) => {
   const [open, setOpen] = React.useState(false);
@@ -70,12 +68,6 @@ export const TimeframeSelector: React.FC<TimeframeSelectorProps> = ({
             ))}
           </motion.ul>
         </>
-      )}
-
-      {periodLabel && (
-        <p className="hidden lg:block absolute right-0 top-full mt-14 text-[10px] font-bold text-outline uppercase tracking-widest whitespace-nowrap pointer-events-none">
-          {periodLabel}
-        </p>
       )}
     </div>
   );

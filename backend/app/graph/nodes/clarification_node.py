@@ -7,9 +7,8 @@ from __future__ import annotations
 import json
 import logging
 
-import openai
-
 from app.core.config import settings
+from app.graph.logging_utils import graph_chat_completion
 from app.graph.state import AgentState
 from app.utils.prompts import CLARIFICATION_SYSTEM, CLARIFICATION_USER
 
@@ -27,11 +26,9 @@ def clarification_node(state: AgentState) -> dict:
     intent = state.get("intent") or "TRANSACTION_QUERY"
 
     try:
-        client = openai.OpenAI(
-            api_key=settings.active_api_key,
-            base_url=settings.active_base_url,
-        )
-        response = client.chat.completions.create(
+        response = graph_chat_completion(
+            node="clarification_node",
+            purpose="clarification_check",
             model=settings.active_chat_model,
             messages=[
                 {"role": "system", "content": CLARIFICATION_SYSTEM},

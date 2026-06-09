@@ -13,6 +13,8 @@ from typing import Any
 
 from app.services.forecast_service import reload_models
 from app.services.prophet_training_service import (
+    MODEL_TYPE_PROPHET,
+    MODEL_TYPE_PROPHET_DEFAULT,
     PRODUCTION_BUNDLE_PATH,
     PRODUCTION_MANIFEST_PATH,
     STAGING_BUNDLE_PATH,
@@ -27,6 +29,7 @@ PRODUCTION_JOB_ID = "production"
 @dataclass
 class TrainingJob:
     job_id: str
+    training_mode: str = MODEL_TYPE_PROPHET
     status: str = "queued"
     progress: float = 0.0
     logs: list[dict[str, str]] = field(default_factory=list)
@@ -49,6 +52,8 @@ class TrainingJob:
         with self._lock:
             return {
                 "job_id": self.job_id,
+                "training_mode": self.training_mode,
+                "models": [self.training_mode],
                 "status": self.status,
                 "progress": round(self.progress, 1),
                 "logs": list(self.logs[-200:]),
@@ -62,8 +67,11 @@ class TrainingJob:
 _jobs: dict[str, TrainingJob] = {}
 _jobs_lock = threading.Lock()
 
-TRAINABLE_MODELS = ("prophet",)
-MODEL_FILES = {"prophet": "expense_forecast_prophet.joblib"}
+TRAINABLE_MODELS = (MODEL_TYPE_PROPHET, MODEL_TYPE_PROPHET_DEFAULT)
+MODEL_FILES = {
+    MODEL_TYPE_PROPHET: "expense_forecast_prophet.joblib",
+    MODEL_TYPE_PROPHET_DEFAULT: "expense_forecast_prophet.joblib",
+}
 
 
 def get_job(job_id: str) -> TrainingJob | None:
@@ -102,7 +110,8 @@ def _persist_job_artifacts(job: TrainingJob, result: dict[str, Any]) -> None:
         shutil.copy2(PRODUCTION_BUNDLE_PATH, _run_bundle_path(job.job_id))
     manifest = {
         "job_id": job.job_id,
-        "model_type": "prophet",
+        "model_type": result.get("model_type", job.training_mode),
+        "training_mode": result.get("training_mode"),
         "status": "completed",
         "started_at": job.started_at,
         "finished_at": job.finished_at,
@@ -141,14 +150,17 @@ def _production_run_metrics() -> dict[str, Any]:
 
 def _run_summary_from_job(job: TrainingJob) -> dict[str, Any]:
     bundle_path = _run_bundle_path(job.job_id)
+    model_type = job.metrics.get("model_type") or job.training_mode
     return {
         "job_id": job.job_id,
-        "model_type": "prophet",
+        "model_type": model_type,
+        "training_mode": job.metrics.get("training_mode"),
         "status": job.status,
         "started_at": job.started_at,
         "finished_at": job.finished_at,
         "test_mape": job.metrics.get("test_mape"),
         "trained_users": job.metrics.get("trained_users"),
+        "trained_transactions": job.metrics.get("trained_transactions"),
         "trained_at": job.metrics.get("trained_at"),
         "deployable": job.status == "completed"
         and (bundle_path.is_file() or PRODUCTION_BUNDLE_PATH.is_file()),
@@ -165,6 +177,7 @@ def _run_summary_from_disk(job_id: str, manifest: dict[str, Any]) -> dict[str, A
         "finished_at": manifest.get("finished_at"),
         "test_mape": manifest.get("test_mape"),
         "trained_users": manifest.get("trained_users"),
+        "trained_transactions": manifest.get("trained_transactions"),
         "trained_at": manifest.get("trained_at"),
         "deployable": bundle_path.is_file(),
     }
@@ -216,6 +229,7 @@ def list_train_runs(limit: int = 50) -> list[dict[str, Any]]:
                     "finished_at": prod.get("trained_at"),
                     "test_mape": prod.get("test_mape"),
                     "trained_users": prod.get("trained_users"),
+                    "trained_transactions": prod.get("trained_transactions"),
                     "trained_at": prod.get("trained_at"),
                     "deployable": False,
                     "label": prod.get("label"),
@@ -275,6 +289,7 @@ def get_job_details(job_id: str) -> dict[str, Any] | None:
 
     metric_keys = {
         "trained_users",
+        "trained_transactions",
         "test_mape",
         "trained_at",
         "staging_path",
@@ -304,13 +319,20 @@ def _run_job(job: TrainingJob) -> None:
         job.progress = min(95.0, job.progress + 10)
 
     try:
-        result = run_training_pipeline(promote=True, log=emit)
+        result = run_training_pipeline(
+            promote=True,
+            log=emit,
+            training_mode=job.training_mode,
+        )
         reload_models()
         job.metrics = result
         job.status = "completed"
         job.progress = 100.0
         _persist_job_artifacts(job, result)
-        job.log("info", f"Training complete — {result['trained_users']} users")
+        job.log(
+            "info",
+            f"Training complete ({job.training_mode}) — {result['trained_users']} users",
+        )
     except Exception as exc:
         job.status = "failed"
         job.error = str(exc)
@@ -321,9 +343,12 @@ def _run_job(job: TrainingJob) -> None:
 
 def start_training_job(models: list[str] | None = None, dataset_id: str | None = None) -> str:
     """Start async DB training (dataset_id ignored — always uses Supabase)."""
-    _ = models, dataset_id
+    _ = dataset_id
+    mode = (models or [MODEL_TYPE_PROPHET])[0]
+    if mode not in TRAINABLE_MODELS:
+        raise ValueError(f"Unknown training mode: {mode}. Use: {list(TRAINABLE_MODELS)}")
     job_id = str(uuid.uuid4())[:8]
-    job = TrainingJob(job_id=job_id)
+    job = TrainingJob(job_id=job_id, training_mode=mode)
     with _jobs_lock:
         _jobs[job_id] = job
     thread = threading.Thread(target=_run_job, args=(job,), daemon=True)
@@ -331,9 +356,11 @@ def start_training_job(models: list[str] | None = None, dataset_id: str | None =
     return job_id
 
 
-def run_training_sync() -> dict[str, Any]:
+def run_training_sync(training_mode: str = MODEL_TYPE_PROPHET) -> dict[str, Any]:
     """Synchronous train + promote + upload + reload (cron / scripts)."""
-    result = run_training_pipeline(promote=True)
+    if training_mode not in TRAINABLE_MODELS:
+        raise ValueError(f"Unknown training mode: {training_mode}")
+    result = run_training_pipeline(promote=True, training_mode=training_mode)
     reload_models(force_storage_sync=False)
     return result
 

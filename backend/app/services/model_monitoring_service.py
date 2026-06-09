@@ -43,9 +43,11 @@ def get_production_performance() -> dict[str, Any]:
                 "size_mb": round(stat.st_size / (1024 * 1024), 2),
                 "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
                 "trained_users": bundle.get("training_users")
-                or bundle.get("trained_users")
-                or len(bundle.get("per_user", {})),
+                or bundle.get("trained_users"),
+                "trained_transactions": bundle.get("trained_transactions"),
                 "scope": bundle.get("scope", "global"),
+                "model_type": bundle.get("model_type"),
+                "training_mode": bundle.get("training_mode"),
                 "test_mape": bundle.get("test_mape"),
                 "trained_at": bundle.get("trained_at"),
             }

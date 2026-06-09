@@ -7,9 +7,8 @@ from __future__ import annotations
 import json
 import logging
 
-import openai
-
 from app.core.config import settings
+from app.graph.logging_utils import graph_chat_completion
 from app.graph.state import AgentState
 from app.utils.prompts import SQL_GENERATION_SYSTEM, SQL_GENERATION_USER
 
@@ -32,11 +31,9 @@ def transaction_agent(state: AgentState) -> dict:
     )
 
     try:
-        client = openai.OpenAI(
-            api_key=settings.active_api_key,
-            base_url=settings.active_base_url,
-        )
-        response = client.chat.completions.create(
+        response = graph_chat_completion(
+            node="transaction_agent",
+            purpose="sql_ast_generation",
             model=settings.active_chat_model,
             messages=[
                 {"role": "system", "content": SQL_GENERATION_SYSTEM},

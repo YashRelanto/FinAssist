@@ -472,6 +472,95 @@ def prophet_predict_months(
     return preds
 
 
+def filter_users_with_min_month_history(
+    transactions: pd.DataFrame,
+    *,
+    min_months: int = MIN_MONTHS_FOR_PROPHET_USER,
+) -> pd.DataFrame:
+    """Keep rows only for users with at least `min_months` distinct calendar months."""
+    if transactions.empty or "user_id" not in transactions.columns:
+        return transactions.copy()
+
+    tx = transactions.copy()
+    tx["transaction_date"] = pd.to_datetime(tx["transaction_date"])
+    month_counts = (
+        tx.groupby("user_id")["transaction_date"]
+        .apply(lambda s: s.dt.to_period("M").nunique())
+    )
+    eligible = month_counts[month_counts >= min_months].index
+    return tx[tx["user_id"].isin(eligible)].reset_index(drop=True)
+
+
+def prepare_global_training_expenses(
+    transactions: pd.DataFrame,
+    *,
+    min_months: int = MIN_MONTHS_FOR_PROPHET_USER,
+) -> pd.DataFrame:
+    """
+    Training pool for global Prophet models:
+
+    1. Keep expense rows only (income/credit rows are excluded — the model forecasts spend).
+    2. Keep users with at least `min_months` distinct calendar months of expense activity.
+    3. Return every expense row for those qualifying users (no per-user models).
+    """
+    if transactions.empty:
+        return transactions.copy()
+
+    tx = transactions.copy()
+    if "transaction_type" in tx.columns:
+        tx = tx[tx["transaction_type"] == "expense"].copy()
+    if tx.empty or "user_id" not in tx.columns:
+        return tx.reset_index(drop=True)
+
+    return filter_users_with_min_month_history(tx, min_months=min_months)
+
+
+def build_global_prophet_ds_y_frame(transactions: pd.DataFrame) -> pd.DataFrame:
+    """Pooled global monthly series as Prophet ds/y (no extra regressors)."""
+    monthly = drop_incomplete_current_month(expenses_to_monthly(transactions))
+    m = monthly.sort_values("month_start").reset_index(drop=True)
+    if m.empty:
+        return pd.DataFrame(columns=["ds", "y"])
+    return pd.DataFrame(
+        {
+            "ds": pd.to_datetime(m["month_start"]),
+            "y": m["monthly_expense"].astype(float).clip(lower=0.0),
+        }
+    )
+
+
+def prophet_default_holdout_mape(
+    prophet_df: pd.DataFrame,
+    *,
+    train_ratio: float = 0.6,
+) -> float | None:
+    """
+    60/40 chronological hold-out MAPE using default Prophet (ds + y only).
+    Matches the admin reference: train on first 60%, predict the remaining months.
+    """
+    if prophet_df.empty or len(prophet_df) < 3:
+        return None
+
+    df = prophet_df.sort_values("ds").reset_index(drop=True)
+    split = int(len(df) * train_ratio)
+    if split < 2 or split >= len(df):
+        return None
+
+    train_df = df.iloc[:split][["ds", "y"]].copy()
+    test_df = df.iloc[split:][["ds", "y"]].copy()
+    if float(test_df["y"].sum()) <= 0:
+        return None
+
+    from prophet import Prophet
+
+    model = Prophet()
+    model.fit(train_df)
+    forecast = model.predict(test_df[["ds"]])
+    pred = np.clip(forecast["yhat"].values.astype(float), 0.0, None)
+    actual = test_df["y"].astype(float).values
+    return min(safe_mape(actual, pred), 1.0)
+
+
 def prophet_holdout_mape_monthly(
     monthly: pd.DataFrame,
     *,
