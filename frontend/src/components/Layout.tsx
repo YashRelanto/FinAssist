@@ -7,7 +7,6 @@ import { Transactions } from '../views/Transactions';
 import { AIAssistant } from '../views/AIAssistant';
 import { BudgetGoals } from '../views/BudgetGoals';
 import { Investments } from '../views/Investments';
-import { Reports } from '../views/Reports';
 import { Settings } from '../views/Settings';
 import { Forecasting } from '../views/Forecasting';
 import { AdminPanel } from '../views/AdminPanel';
@@ -35,8 +34,6 @@ export const Layout: React.FC = () => {
         return <BudgetGoals />;
       case 'investments':
         return <Investments />;
-      case 'reports':
-        return <Reports />;
       case 'settings':
         return <Settings />;
       case 'linked-accounts':

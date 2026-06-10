@@ -4,7 +4,6 @@ import {
   Receipt, 
   PiggyBank, 
   TrendingUp, 
-  FileText, 
   Bot, 
   Settings,
   Shield,
@@ -28,7 +27,6 @@ const navItems = [
   { id: 'transactions', label: 'Transactions', icon: Receipt },
   { id: 'budget-goals', label: 'Budget & Goals', icon: PiggyBank },
   { id: 'investments', label: 'Investments', icon: TrendingUp },
-  { id: 'reports', label: 'Reports', icon: FileText },
   { id: 'ai-assistant', label: 'AI Assistant', icon: Bot },
 ];
 
