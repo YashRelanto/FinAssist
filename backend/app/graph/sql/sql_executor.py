@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def run_query_builder_fallback(ast: Dict[str, Any], user_id: str) -> List[Dict[str, Any]]:
     """
-    Translates the SQL AST back to a PostgREST query chain as a fallback.
+    Translates the SQL AST back to a PostGres query chain as a fallback.
     """
     if not ast:
         return []

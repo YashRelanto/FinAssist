@@ -3,6 +3,29 @@ from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes import statement_parser, chatbot, api, forecasting, admin, internal
 import uvicorn
+import logging
+import colorlog
+
+# ── Configure colorful logging ────────────────────────────────────────────
+handler = colorlog.StreamHandler()
+handler.setFormatter(colorlog.ColoredFormatter(
+    "%(log_color)s%(asctime)s — %(name)s — %(levelname)s%(reset)s — %(message)s",
+    log_colors={
+        'DEBUG': 'cyan',
+        'INFO': 'green',
+        'WARNING': 'yellow',
+        'ERROR': 'red',
+        'CRITICAL': 'red,bg_white',
+    },
+    reset=True,
+    style='%'
+))
+
+logging.root.setLevel(logging.INFO)
+logging.root.addHandler(handler)
+
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
 
 app = FastAPI(title="FinAssist API")
 
