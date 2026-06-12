@@ -20,6 +20,8 @@ from app.utils.prompts import (
     ANSWER_USER,
     ANSWER_KNOWLEDGE_SYSTEM,
     FINASSIST_SYSTEM_PROMPT,
+    BRAIN_ANSWER_SYSTEM,
+    BRAIN_ANSWER_USER,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,13 +37,56 @@ def answer_node(state: AgentState) -> dict:
     intent = state.get("intent") or "FINANCIAL_KNOWLEDGE"
     selected_agent = state.get("selected_agent") or "knowledge"
     user_query = state.get("user_query") or ""
+    standalone_query = state.get("standalone_query") or state.get("rewritten_query") or user_query
     lc_messages = state.get("messages") or []
+    final_context = state.get("final_context") or {}
+    execution_plan = state.get("execution_plan") or {}
 
-    # Check if we should use the advisor/knowledge path
+    is_brain_path = bool(execution_plan.get("tools")) and bool(final_context)
     is_knowledge_path = (intent == "GOAL_PLANNING" or selected_agent == "knowledge")
 
     try:
-        if is_knowledge_path:
+        if is_brain_path and intent != "GOAL_PLANNING":
+            profile = state.get("user_profile") or {}
+            income = profile.get("income", "unknown")
+            annual_income = profile.get("annual_income", income)
+            income_display = (
+                f"₹{annual_income:,.0f} per annum"
+                if isinstance(annual_income, (int, float))
+                else str(annual_income)
+            )
+
+            system_prompt = BRAIN_ANSWER_SYSTEM.format(
+                final_context=json.dumps(final_context, indent=2, default=str),
+                income_display=income_display,
+                risk_profile=profile.get("risk_profile", "Moderate"),
+                city=profile.get("city", "India"),
+                monthly_net_flow=profile.get("monthly_net_flow", "N/A"),
+            )
+
+            completion = graph_chat_completion(
+                node="answer_node",
+                purpose="brain_answer",
+                model=settings.active_chat_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": BRAIN_ANSWER_USER.format(query=standalone_query)},
+                ],
+                max_tokens=500,
+                temperature=0.2,
+            )
+            answer = completion.choices[0].message.content.strip()
+
+            sources = []
+            if state.get("rag_results", {}).get("sources"):
+                sources.extend(state["rag_results"]["sources"])
+            if state.get("agent_results"):
+                sources.append("Supabase Transactions")
+            if state.get("portfolio_results", {}).get("portfolio_health"):
+                sources.append("Portfolio Analysis")
+            sources = sources or ["FinAssist Brain"]
+
+        elif is_knowledge_path:
             # ── 1. RAG / Advisor / Goal Planning Path ──
             profile = state.get("user_profile") or {}
             context_blocks = state.get("retrieved_context") or []

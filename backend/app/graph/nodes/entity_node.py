@@ -77,6 +77,26 @@ def _resolve_dates(question: str) -> Dict[str, Optional[str]]:
     if "this year" in q:
         return {"from": f"{today.year}-01-01", "to": today.isoformat()}
 
+    quarter_m = re.search(r"\b(?:q|quarter)\s*([1-4])(?:\s*(?:of\s*)?(\d{4}))?\b", q)
+    if quarter_m or "this quarter" in q or "last quarter" in q:
+        q_num = int(quarter_m.group(1)) if quarter_m else ((today.month - 1) // 3 + 1)
+        explicit_year = int(quarter_m.group(2)) if quarter_m and quarter_m.group(2) else None
+        if "last quarter" in q:
+            q_num -= 1
+            year = explicit_year or today.year
+            if q_num < 1:
+                q_num = 4
+                year -= 1
+        else:
+            year = explicit_year or today.year
+        start_month = (q_num - 1) * 3 + 1
+        end_month = start_month + 2
+        last_day = monthrange(year, end_month)[1]
+        return {
+            "from": f"{year}-{start_month:02d}-01",
+            "to": f"{year}-{end_month:02d}-{last_day:02d}",
+        }
+
     # between <Month> and <Month> [YYYY]
     between_m = re.search(r"between\s+(\w+)\s+and\s+(\w+)(?:\s+(\d{4}))?", q)
     if between_m:
@@ -111,7 +131,7 @@ def entity_node(state: AgentState) -> dict:
     2. LLM extraction of merchants, categories, metric, group_by, etc.
     3. Merge: Python dates override LLM output
     """
-    query = state.get("rewritten_query") or state["user_query"]
+    query = state.get("standalone_query") or state.get("rewritten_query") or state["user_query"]
 
     # Step 1: Resolve dates in pure Python
     resolved_dates = _resolve_dates(query)
@@ -149,6 +169,12 @@ def entity_node(state: AgentState) -> dict:
         if resolved_dates["to"]:
             entities.setdefault("date_range", {})["to"] = resolved_dates["to"]
 
+        entities.setdefault("financial", {"income": None, "expense": None, "savings": None, "emi": None})
+        entities.setdefault("investments", {
+            "stocks": [], "etfs": [], "mutual_funds": [], "sips": [],
+            "bonds": [], "gold": [],
+        })
+        entities.setdefault("temporal", {"period": None, "fiscal_year": None})
         logger.info("[Node:entity] Extracted: %s", json.dumps(entities, default=str))
 
     except Exception as exc:
@@ -163,6 +189,15 @@ def entity_node(state: AgentState) -> dict:
             "sort": None,
             "limit": None,
             "comparison": None,
+            "financial": {"income": None, "expense": None, "savings": None, "emi": None},
+            "investments": {
+                "stocks": [], "etfs": [], "mutual_funds": [], "sips": [],
+                "bonds": [], "gold": [],
+            },
+            "temporal": {"period": None, "fiscal_year": None},
         }
 
-    return {"entities": entities}
+    metadata = dict(state.get("metadata") or {})
+    metadata["last_entities"] = entities
+    return {"entities": entities, "metadata": metadata}
+

@@ -52,6 +52,7 @@ class AgentState(TypedDict, total=False):
     # ── Security — Input Guard ────────────────────────────────────────
     input_blocked: bool              # True when InputGuard blocks the message
     input_error:   Optional[str]     # Human-readable reason for the block
+    validated_query: str             # Normalized query after input guard (FR-1)
 
     # ── Intent Classification ─────────────────────────────────────────
     intent:     str                  # TRANSACTION_QUERY, SPENDING_SUMMARY, etc.
@@ -59,6 +60,7 @@ class AgentState(TypedDict, total=False):
 
     # ── Context Resolution (follow-up handling) ───────────────────────
     rewritten_query: str             # Resolved query after follow-up merging
+    standalone_query: str            # BRD alias for rewritten_query
 
     # ── Entity Extraction ─────────────────────────────────────────────
     entities: Dict[str, Any]         # Structured: merchant, category, dates, metric, etc.
@@ -69,8 +71,21 @@ class AgentState(TypedDict, total=False):
     # ── Clarification ─────────────────────────────────────────────────
     clarification_needed:   bool
     clarification_question: str
+    clarification_options:  List[str]
+    clarification_history:  List[Dict[str, Any]]
+    clarification_complete: bool
 
-    # ── Agent Routing ─────────────────────────────────────────────────
+    # ── Semantic Reasoning (Brain prep) ───────────────────────────────
+    semantic_context: Dict[str, Any]
+
+    # ── Brain Orchestration ───────────────────────────────────────────
+    execution_plan: Dict[str, Any]
+    rag_results: Dict[str, Any]
+    agent_results: List[Dict[str, Any]]
+    portfolio_results: Dict[str, Any]
+    final_context: Dict[str, Any]
+
+    # ── Agent Routing (legacy + tool execution) ───────────────────────
     selected_agent: str              # transaction, comparison, trend, anomaly, knowledge
     agent_context:  Dict[str, Any]   # Agent-specific parameters / instructions
 
@@ -129,6 +144,7 @@ def make_initial_state(
         # Security
         input_blocked=False,
         input_error=None,
+        validated_query="",
 
         # Intent
         intent="",
@@ -136,6 +152,7 @@ def make_initial_state(
 
         # Context
         rewritten_query="",
+        standalone_query="",
 
         # Entities
         entities={},
@@ -144,6 +161,17 @@ def make_initial_state(
         # Clarification
         clarification_needed=False,
         clarification_question="",
+        clarification_options=[],
+        clarification_history=[],
+        clarification_complete=True,
+
+        # Semantic / Brain
+        semantic_context={},
+        execution_plan={},
+        rag_results={},
+        agent_results=[],
+        portfolio_results={},
+        final_context={},
 
         # Routing
         selected_agent="",

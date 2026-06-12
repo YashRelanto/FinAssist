@@ -23,12 +23,21 @@ def trend_agent(state: AgentState) -> dict:
     intent = state.get("intent") or "TREND_ANALYSIS"
     entities = state.get("resolved_entities") or state.get("entities") or {}
 
+    metric = (entities.get("metric") or "").lower()
+    tx_type = entities.get("transaction_type")
+    trend_focus = "expense"
+    if tx_type == "income" or metric in ("income", "salary"):
+        trend_focus = "income"
+    elif metric in ("savings", "saving"):
+        trend_focus = "savings"
+
     agent_instructions = (
-        "Generate a single SQL AST to retrieve aggregated data grouped by month or week "
-        "over time (typically the last 6-12 months). The query should select the transaction date "
-        "or period, sum the amount as total, and group by the month/date. "
-        "Ensure date aggregation is handled, or select the raw transaction date and amount "
-        "so the analytics node can aggregate them in Python. "
+        f"Generate a single SQL AST for {trend_focus} trend analysis grouped by month "
+        "over the last 6-12 months. "
+        f"Filter transaction_type to {'income' if trend_focus == 'income' else 'expense'} "
+        f"when analyzing {trend_focus} trends. "
+        "For savings trends, return both income and expense rows so analytics can compute net savings. "
+        "Select transaction_date and amount; group by month when possible. "
         "Always enforce filtering by user_id using '{{user_id}}'."
     )
 

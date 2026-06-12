@@ -4,6 +4,7 @@ SQL Planner — Converts SQL AST dictionaries to raw SQL strings.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Dict, Any, List
 

@@ -1,5 +1,7 @@
 """
-Router node — Pure Python routing selection.
+Router node — DEPRECATED. Superseded by brain_orchestrator + tool_runner.
+
+Kept for reference only; not wired into the compiled graph.
 """
 
 from __future__ import annotations

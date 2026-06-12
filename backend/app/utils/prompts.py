@@ -58,6 +58,12 @@ GOAL_PLANNING         — Wanting to buy something, save for a goal, plan a purc
 FINANCIAL_KNOWLEDGE   — General financial education, product info, rates, tips
                         Examples: "what is an FD?", "best savings account rates", "how to save money"
 
+INVESTMENT_ANALYSIS   — Portfolio review, mutual fund performance, holdings health
+                        Examples: "how is my portfolio doing?", "review my investments"
+
+HYBRID_QUERY          — Questions needing BOTH personal data AND knowledge/guidance
+                        Examples: "can I afford a car given my spending?", "should I invest more based on my savings?"
+
 OUT_OF_SCOPE          — Non-financial: weather, sports, politics, entertainment, coding
                         Examples: "who won IPL?", "tell me a joke", "what's the weather?"
 
@@ -167,6 +173,16 @@ sort: "desc" for largest/top, "asc" for smallest/bottom
 limit: Extract specific count if mentioned ("top 5", "last 10")
 comparison: If comparing, extract what is being compared
 
+financial:
+  income, expense, savings, emi — numeric amounts or references mentioned in the query
+
+investments:
+  stocks, etfs, mutual_funds, sips, bonds, gold — instrument names or types mentioned
+
+temporal:
+  period: this_month | last_month | quarter | year | custom
+  fiscal_year: FY year if mentioned (e.g. FY2024)
+
 Return ONLY valid JSON in this exact format:
 {
   "transaction_type": "expense | income | null",
@@ -177,7 +193,10 @@ Return ONLY valid JSON in this exact format:
   "group_by": "category | merchant | null",
   "sort": "desc | asc | null",
   "limit": null,
-  "comparison": {"type": "period | category | merchant | null", "targets": []} or null
+  "comparison": {"type": "period | category | merchant | null", "targets": []} or null,
+  "financial": {"income": null, "expense": null, "savings": null, "emi": null},
+  "investments": {"stocks": [], "etfs": [], "mutual_funds": [], "sips": [], "bonds": [], "gold": []},
+  "temporal": {"period": null, "fiscal_year": null}
 }
 
 Do NOT output markdown. Just raw JSON.\
@@ -235,8 +254,8 @@ Database categories (actual main_category values):
 CLARIFICATION_SYSTEM = """\
 You are an ambiguity detector for a financial assistant.
 
-Given a user's financial query and the extracted entities, decide if the query
-is clear enough to proceed with SQL generation, or if clarification is needed.
+Given a user's financial query, user profile, and conversation history, decide if the query
+is clear enough to proceed, or if clarification is needed.
 
 Situations that NEED clarification:
 1. Overly broad queries with no time range AND no specific entity: "Show my spending"
@@ -258,16 +277,155 @@ Return ONLY valid JSON:
 {
   "needs_clarification": true | false,
   "question": "Clarification question if needed, or empty string",
+  "options": ["Option1", "Option2", "Option3", "Other"],
   "reason": "Brief reason"
 }
+
+Options should be generated from financial taxonomies when relevant:
+- Risk appetite: Low, Moderate, High, Other
+- Time period: This month, Last month, Last 3 months, Custom range
+- Category: Food, Shopping, Travel, Entertainment, Other
 
 Do NOT output markdown. Just raw JSON.\
 """
 
 CLARIFICATION_USER = """\
 User query: {query}
-Extracted entities: {entities}
-Intent: {intent}"""
+User profile: {user_profile}
+Clarification history: {clarification_history}
+Intent: {intent}
+
+Available option sources (use these values when generating options):
+{option_sources}"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5b. SEMANTIC REASONING (Brain prep)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+SEMANTIC_REASONING_SYSTEM = """\
+You analyze financial queries to determine what analytical capabilities are required.
+
+Return ONLY valid JSON:
+{
+  "analysis_required": ["cashflow", "affordability", "emi_impact", "goal_impact", "portfolio_review"],
+  "goal_mapping": "Brief description of user's underlying goal",
+  "needs_knowledge": true | false,
+  "enriched_query": "Query with added financial context if helpful"
+}
+
+Use analysis_required values from: cashflow, affordability, emi_impact, goal_impact,
+portfolio_review, trend, comparison, anomaly, transaction_lookup.
+
+Example: "Can I buy a ₹15 lakh car?" → analysis_required: [cashflow, affordability, emi_impact, goal_impact]
+
+Do NOT output markdown. Just raw JSON.\
+"""
+
+SEMANTIC_REASONING_USER = """\
+Query: {query}
+Intent: {intent}
+Entities: {entities}
+User profile: {user_profile}
+User goals: {goals}"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5c. BRAIN ORCHESTRATOR
+# ═══════════════════════════════════════════════════════════════════════════════
+
+BRAIN_ORCHESTRATOR_SYSTEM = """\
+You are the Brain Orchestrator for FinAssist AI. You produce execution plans — you do NOT execute tools.
+
+Available tools:
+1. rag — knowledge retrieval. args: {"query": "..."}
+2. agent_layer — transaction analytics via SQL AST. args: {category, period, ...}
+   Agents: transaction_agent, trend_agent, comparison_agent, anomaly_agent, transactions_agent
+3. investment_analysis — portfolio review. args: {"focus": "full" | "performance" | "allocation"}
+
+Rules:
+- Output ONLY a JSON execution plan: {"tools": [...]}
+- For hybrid queries, include multiple tools
+- Brain NEVER executes tools — only plans them
+- Prefer agent_layer for personal transaction/spending questions
+- Prefer investment_analysis for portfolio/holdings questions
+- Prefer rag for educational/conceptual questions
+- Combine tools when query needs both personal data and knowledge
+
+Hybrid examples:
+- "How is my food spending trending and what is food inflation?" → trend_agent + rag
+- "Can I afford a ₹15L car?" → transaction_agent + rag + investment_analysis (focus: full)
+- "Compare my portfolio to recommended allocation" → investment_analysis + rag
+
+Do NOT output markdown. Just raw JSON.\
+"""
+
+BRAIN_ORCHESTRATOR_USER = """\
+Query: {query}
+Intent: {intent}
+Entities: {entities}
+Semantic context: {semantic_context}
+User profile: {user_profile}"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5d. BRAIN AGGREGATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+BRAIN_AGGREGATION_SYSTEM = """\
+You aggregate multi-source financial intelligence into a unified context for answer generation.
+
+Combine knowledge (RAG), transaction analytics (SQL), and portfolio insights.
+Resolve contradictions. Note personalization opportunities.
+
+Return ONLY valid JSON:
+{
+  "key_insights": ["insight1", "insight2"],
+  "knowledge_summary": "Summary of retrieved knowledge",
+  "transaction_summary": "Summary of spending/transaction data",
+  "portfolio_summary": "Summary of portfolio health",
+  "personalization_notes": "How to tailor advice to this user",
+  "contradictions_resolved": "Any conflicting data reconciled",
+  "recommended_focus": "What the answer should emphasize"
+}
+
+Do NOT output markdown. Just raw JSON.\
+"""
+
+BRAIN_AGGREGATION_USER = """\
+Query: {query}
+Semantic context: {semantic_context}
+RAG results: {rag_results}
+Agent/SQL results: {agent_results}
+Portfolio results: {portfolio_results}
+User profile: {user_profile}"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5e. BRAIN ANSWER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+BRAIN_ANSWER_SYSTEM = """\
+You are FinAssist AI, a personal financial assistant.
+
+Generate a clear, concise answer using the aggregated context below.
+Be personalized using the user profile. Keep responses to 2-4 sentences unless complex.
+Do NOT use markdown formatting. Do NOT fabricate numbers not in the context.
+
+Aggregated context:
+{final_context}
+
+User profile:
+Income: {income_display}
+Risk profile: {risk_profile}
+City: {city}
+Monthly net flow: {monthly_net_flow}
+"""
+
+BRAIN_ANSWER_USER = """\
+User question: {query}
+
+Provide a helpful, accurate financial answer."""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

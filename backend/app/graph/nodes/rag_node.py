@@ -19,15 +19,10 @@ INTENT_COLLECTION_MAP: Dict[str, List[str]] = {
 }
 
 
-def rag_node(state: AgentState) -> dict:
+def run_rag_retrieval(query: str, intent: str = "FINANCIAL_KNOWLEDGE") -> dict:
     """
-    Retrieves context for the user's query from ChromaDB.
-    If no relevant documents are found (or confidence/distance is low),
-    falls back to live web search and scrape.
+    Core RAG retrieval logic — usable as a Brain tool or graph node.
     """
-    intent = state.get("intent") or "FINANCIAL_KNOWLEDGE"
-    query = state.get("rewritten_query") or state.get("user_query") or ""
-
     collections = INTENT_COLLECTION_MAP.get(intent, ["financial_tips"])
 
     seen_texts = set()
@@ -76,3 +71,10 @@ def rag_node(state: AgentState) -> dict:
         "context_sources": source_refs[:5],
         "rag_confidence": min_distance,
     }
+
+
+def rag_node(state: AgentState) -> dict:
+    """Graph node wrapper around run_rag_retrieval."""
+    intent = state.get("intent") or "FINANCIAL_KNOWLEDGE"
+    query = state.get("standalone_query") or state.get("rewritten_query") or state.get("user_query") or ""
+    return run_rag_retrieval(query=query, intent=intent)

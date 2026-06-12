@@ -40,7 +40,7 @@ class TestPipelineIntegration(unittest.IsolatedAsyncioTestCase):
         final_state = await finassist_graph.ainvoke(initial_state, config=self.config)
         self.assertTrue(final_state.get("input_blocked"))
         self.assertIsNotNone(final_state.get("final_answer"))
-        self.assertEqual(final_state.get("final_intent"), "OUT_OF_SCOPE")
+        self.assertEqual(final_state.get("final_intent"), "out_of_scope")
 
     async def test_out_of_scope_query(self):
         """Unrelated non-financial queries should be classified as OUT_OF_SCOPE."""
@@ -53,7 +53,7 @@ class TestPipelineIntegration(unittest.IsolatedAsyncioTestCase):
         )
         final_state = await finassist_graph.ainvoke(initial_state, config=self.config)
         self.assertEqual(final_state.get("intent"), "OUT_OF_SCOPE")
-        self.assertEqual(final_state.get("final_intent"), "OUT_OF_SCOPE")
+        self.assertEqual(final_state.get("final_intent"), "out_of_scope")
         self.assertIn("specialises in personal finance", final_state.get("final_answer", ""))
 
     async def test_financial_knowledge_rag_flow(self):
@@ -67,8 +67,11 @@ class TestPipelineIntegration(unittest.IsolatedAsyncioTestCase):
         )
         final_state = await finassist_graph.ainvoke(initial_state, config=self.config)
         self.assertEqual(final_state.get("intent"), "FINANCIAL_KNOWLEDGE")
-        self.assertEqual(final_state.get("selected_agent"), "knowledge")
+        execution_plan = final_state.get("execution_plan") or {}
+        tools = execution_plan.get("tools") or []
+        self.assertTrue(any(t.get("tool") == "rag" for t in tools))
         self.assertIsNotNone(final_state.get("final_answer"))
+        self.assertTrue(final_state.get("final_context") or final_state.get("rag_results"))
         self.assertFalse(final_state.get("input_blocked"))
         self.assertFalse(final_state.get("output_blocked"))
 
