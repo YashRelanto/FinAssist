@@ -4,8 +4,15 @@ Tool execution layer — dispatches Brain execution plans to RAG, agents, and in
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import Any, Dict, List
+import os
+import time
+from typing import Any, Dict, List, Union
+
+_DEBUG_LOG = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "debug-8a76fb.log")
+)
 
 from app.graph.agents import (
     anomaly_agent,
@@ -20,6 +27,41 @@ from app.graph.state import AgentState
 from app.services.investment_analysis_service import analyze_portfolio
 
 logger = logging.getLogger(__name__)
+
+SqlQueryValue = Union[str, Dict[str, str], None]
+
+
+def _sql_query_to_str(sql_query: SqlQueryValue) -> str:
+    """Flatten single or dual comparison SQL queries into one display string."""
+    if not sql_query:
+        return ""
+    if isinstance(sql_query, dict):
+        parts = [sql_query[key] for key in ("query_a", "query_b") if sql_query.get(key)]
+        return "; ".join(parts)
+    return str(sql_query)
+
+
+def _debug_log(hypothesis_id: str, location: str, message: str, data: Dict[str, Any]) -> None:
+    # #region agent log
+    try:
+        with open(_DEBUG_LOG, "a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "sessionId": "8a76fb",
+                        "hypothesisId": hypothesis_id,
+                        "location": location,
+                        "message": message,
+                        "data": data,
+                        "timestamp": int(time.time() * 1000),
+                    }
+                )
+                + "\n"
+            )
+    except OSError:
+        pass
+    # #endregion
+
 
 AGENT_FN_MAP = {
     "transaction_agent": transaction_agent,
@@ -166,7 +208,7 @@ def execute_tool_plan(state: AgentState, execution_plan: Dict[str, Any]) -> Dict
         if rows:
             merged_sql_results.extend(rows if isinstance(rows, list) else [rows])
         if ar.get("sql_query"):
-            sql_queries.append(ar["sql_query"])
+            sql_queries.append(_sql_query_to_str(ar["sql_query"]))
         if ar.get("analytics_results"):
             merged_analytics["agents"][agent_key] = ar["analytics_results"]
     if agent_results:
@@ -174,6 +216,19 @@ def execute_tool_plan(state: AgentState, execution_plan: Dict[str, Any]) -> Dict
         merged_analytics.update(last.get("analytics_results") or {})
         if not merged_sql_results:
             merged_sql_results = last.get("sql_results") or []
+
+    # #region agent log
+    _debug_log(
+        "H1",
+        "tool_runner.py:execute_tool_plan",
+        "sql_query merge",
+        {
+            "sql_query_count": len(sql_queries),
+            "sql_results_count": len(merged_sql_results) if isinstance(merged_sql_results, list) else 0,
+            "agent_count": len(agent_results),
+        },
+    )
+    # #endregion
 
     metadata = dict(state.get("metadata") or {})
     if tool_errors:

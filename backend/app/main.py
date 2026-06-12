@@ -1,8 +1,11 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from app.core.logging_config import configure_logging
 from app.routes import statement_parser, chatbot, api, forecasting, admin, internal
 import uvicorn
+
+configure_logging()
 
 app = FastAPI(title="FinAssist API")
 
@@ -54,4 +57,11 @@ async def home_redirect():
     return RedirectResponse(url="http://localhost:3000/dashboard")
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        access_log=False,
+        log_config=None,
+    )

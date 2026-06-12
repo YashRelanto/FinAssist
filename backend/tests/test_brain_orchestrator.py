@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.graph.nodes.brain_orchestrator_node import _fallback_plan
+from app.graph.nodes.brain_orchestrator_node import _fallback_plan, _validate_plan_tools
 from app.graph.state import make_initial_state
 
 
@@ -43,6 +43,23 @@ class TestBrainOrchestrator(unittest.TestCase):
         tool_names = [t["tool"] for t in plan["tools"]]
         self.assertIn("agent_layer", tool_names)
         self.assertIn("rag", tool_names)
+
+    def test_validate_accepts_name_and_nested_agent(self):
+        raw_tools = [
+            {
+                "name": "agent_layer",
+                "args": {
+                    "category": "transaction",
+                    "period": "last_two_months",
+                    "agent": "comparison_agent",
+                },
+            }
+        ]
+        validated = _validate_plan_tools(raw_tools, "compare spendings")
+        self.assertEqual(len(validated), 1)
+        self.assertEqual(validated[0]["tool"], "agent_layer")
+        self.assertEqual(validated[0]["agent"], "comparison_agent")
+        self.assertEqual(validated[0]["args"]["period"], "last_two_months")
 
     def test_fallback_investment_analysis(self):
         state = make_initial_state(

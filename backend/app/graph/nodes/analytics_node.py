@@ -124,7 +124,37 @@ def analytics_node(state: AgentState) -> dict:
         comp_info = resolved_entities.get("comparison") or {}
         targets = comp_info.get("targets") or []
 
-        if len(targets) >= 2:
+        labeled_a = [
+            r for r in sql_results
+            if isinstance(r, dict)
+            and str(r.get("comparison_target") or "").lower() in ("target_a", "a", "query_a")
+        ]
+        labeled_b = [
+            r for r in sql_results
+            if isinstance(r, dict)
+            and str(r.get("comparison_target") or "").lower() in ("target_b", "b", "query_b")
+        ]
+
+        if labeled_a or labeled_b:
+            sum_a = sum(float(r.get("amount") or 0.0) for r in labeled_a)
+            sum_b = sum(float(r.get("amount") or 0.0) for r in labeled_b)
+            diff = sum_a - sum_b
+            pct_change = (diff / sum_b * 100.0) if sum_b != 0 else 0.0
+            analytics_results["comparison"] = {
+                "target_a_name": targets[0] if targets else "period_a",
+                "target_b_name": targets[1] if len(targets) > 1 else "period_b",
+                "target_a_total": sum_a,
+                "target_b_total": sum_b,
+                "difference": diff,
+                "pct_change": pct_change,
+            }
+            logger.info(
+                "[Node:analytics] Computed labeled comparison: A=%f B=%f diff=%f",
+                sum_a,
+                sum_b,
+                diff,
+            )
+        elif len(targets) >= 2:
             target_a, target_b = targets[0], targets[1]
             part_a = []
             part_b = []

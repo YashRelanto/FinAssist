@@ -22,10 +22,23 @@ VALID_AGENTS = {
 }
 
 
+def _normalize_tool_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Accept LLM variants: `name` instead of `tool`, `agent` nested in args."""
+    normalized = dict(entry)
+    if not normalized.get("tool") and normalized.get("name"):
+        normalized["tool"] = normalized.pop("name")
+    args = dict(normalized.get("args") or {})
+    if not normalized.get("agent") and args.get("agent"):
+        normalized["agent"] = args.pop("agent")
+    normalized["args"] = args
+    return normalized
+
+
 def _validate_plan_tools(tools: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
     """Filter and normalize tool entries against the allowlist."""
     validated: List[Dict[str, Any]] = []
-    for entry in tools:
+    for raw_entry in tools:
+        entry = _normalize_tool_entry(raw_entry)
         tool_name = (entry.get("tool") or "").lower()
         if tool_name not in VALID_TOOLS:
             logger.warning("[Node:brain] Dropping unknown tool: %s", tool_name)
