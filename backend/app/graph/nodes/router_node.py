@@ -19,6 +19,7 @@ INTENT_TO_AGENT = {
     "COMPARISON":          "comparison",
     "ANOMALY_DETECTION":   "anomaly",
     "FINANCIAL_KNOWLEDGE": "knowledge",
+    "PORTFOLIO_ANALYSIS":  "investment_analysis",
 }
 
 

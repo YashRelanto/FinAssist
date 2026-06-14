@@ -19,8 +19,6 @@ from app.graph.nodes import (
     semantic_node,
     clarification_node,
     router_node,
-    goal_planning_node,
-    workflow_relevance_node,
     rag_node,
     analytics_node,
     answer_node,
@@ -31,6 +29,7 @@ from app.graph.agents import (
     comparison_agent,
     trend_agent,
     anomaly_agent,
+    investment_analysis_agent,
 )
 from app.graph.sql import (
     sql_planner,
@@ -40,8 +39,6 @@ from app.graph.sql import (
 from app.graph.edges import (
     route_after_input_guardrail,
     route_after_intent,
-    route_after_workflow_relevance,
-    route_after_goal_planning,
     route_after_clarification,
     route_after_router,
     route_after_sql_validator,
@@ -68,8 +65,6 @@ def build_graph():
     builder.add_node("semantic_node", _w("semantic_node", semantic_node))
     builder.add_node("clarification_node", _w("clarification_node", clarification_node))
     builder.add_node("router_node", _w("router_node", router_node))
-    builder.add_node("goal_planning_node", _w("goal_planning_node", goal_planning_node))
-    builder.add_node("workflow_relevance_node", _w("workflow_relevance_node", workflow_relevance_node))
     builder.add_node("rag_node", _w("rag_node", rag_node))
     builder.add_node("analytics_node", _w("analytics_node", analytics_node))
     builder.add_node("answer_node", _w("answer_node", answer_node))
@@ -80,6 +75,7 @@ def build_graph():
     builder.add_node("comparison_agent", _w("comparison_agent", comparison_agent))
     builder.add_node("trend_agent", _w("trend_agent", trend_agent))
     builder.add_node("anomaly_agent", _w("anomaly_agent", anomaly_agent))
+    builder.add_node("investment_analysis_agent", _w("investment_analysis_agent", investment_analysis_agent))
 
     # ── 3. Register SQL Pipeline Nodes ──────────────────────────────────
     builder.add_node("sql_planner", _w("sql_planner", sql_planner))
@@ -104,26 +100,6 @@ def build_graph():
         route_after_intent,
         {
             "context_node": "context_node",
-            "workflow_relevance_node": "workflow_relevance_node",
-            "goal_planning_node": "goal_planning_node",
-            "__end__": END,
-        },
-    )
-
-    builder.add_conditional_edges(
-        "workflow_relevance_node",
-        route_after_workflow_relevance,
-        {
-            "goal_planning_node": "goal_planning_node",
-            "context_node": "context_node",
-        },
-    )
-
-    builder.add_conditional_edges(
-        "goal_planning_node",
-        route_after_goal_planning,
-        {
-            "answer_node": "answer_node",
             "__end__": END,
         },
     )
@@ -145,6 +121,7 @@ def build_graph():
             "comparison_agent": "comparison_agent",
             "trend_agent": "trend_agent",
             "anomaly_agent": "anomaly_agent",
+            "investment_analysis_agent": "investment_analysis_agent",
             "rag_node": "rag_node",
         },
     )
@@ -168,6 +145,7 @@ def build_graph():
     builder.add_edge("comparison_agent", "sql_planner")
     builder.add_edge("trend_agent", "sql_planner")
     builder.add_edge("anomaly_agent", "sql_planner")
+    builder.add_edge("investment_analysis_agent", "output_guardrail")
 
     builder.add_edge("sql_planner", "sql_validator")
     builder.add_edge("sql_executor", "analytics_node")

@@ -14,9 +14,7 @@ from app.graph.state import AgentState
 logger = logging.getLogger("app.graph")
 
 
-def route_after_input_guardrail(
-    state: AgentState,
-) -> Literal["intent_node", "__end__"]:
+def route_after_input_guardrail(state: AgentState,) -> Literal["intent_node", "__end__"]:
     """
     If the user input was blocked by guardrails -> END.
     Otherwise -> intent_node.
@@ -101,7 +99,7 @@ def route_after_clarification(
 
 def route_after_router(
     state: AgentState,
-) -> Literal["transaction_agent", "comparison_agent", "trend_agent", "anomaly_agent", "rag_node"]:
+) -> Literal["transaction_agent", "comparison_agent", "trend_agent", "anomaly_agent", "investment_analysis_agent", "rag_node"]:
     """
     Routes the execution to the corresponding specialized agent node or RAG node.
     """
@@ -119,6 +117,9 @@ def route_after_router(
     if selected_agent == "anomaly":
         logger.info("[Edge] router -> anomaly_agent")
         return "anomaly_agent"
+    if selected_agent == "investment_analysis":
+        logger.info("[Edge] router -> investment_analysis_agent")
+        return "investment_analysis_agent"
 
     logger.info("[Edge] router -> rag_node")
     return "rag_node"

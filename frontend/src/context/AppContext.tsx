@@ -73,8 +73,10 @@ interface AppContextType {
   setCurrentPage: (page: string) => void;
   currentPage: string;
   authReady: boolean;
-
+  chatMessages: any[];
+  setChatMessages: React.Dispatch<React.SetStateAction<any[]>>;
 }
+
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
@@ -226,7 +228,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const categories = initialCategories;
   const [currentPage, setCurrentPage] = useState('dashboard');
+  const [chatMessages, setChatMessages] = useState<any[]>(() => [
+    { 
+      id: 1, 
+      role: 'ai', 
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 
+      text: "Hello! I am your FinAssist AI Advisor. I have access to your transactions and our latest financial knowledge base. How can I help you today?", 
+      type: 'text' 
+    }
+  ]);
   const [analysisPeriod, setAnalysisPeriodState] = useState<AnalysisPeriod>(
+
     () => loadStoredAnalysisPeriod(),
   );
   const [pendingDate, setPendingDate] = useState<string | null>(null);
@@ -1046,7 +1058,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     accountHubAnalysisRef.current = null;
     accountHubLoadedRef.current = false;
     setCurrentPage('dashboard');
+    setChatMessages([
+      { 
+        id: 1, 
+        role: 'ai', 
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 
+        text: "Hello! I am your FinAssist AI Advisor. I have access to your transactions and our latest financial knowledge base. How can I help you today?", 
+        type: 'text' 
+      }
+    ]);
   };
+
 
   const uploadReport = async (file: File) => {
     const newReport: Report = {
@@ -1119,7 +1141,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       signOut,
       setCurrentPage, currentPage,
       authReady,
+      chatMessages, setChatMessages,
     }}>
+
       {children}
     </AppContext.Provider>
   );

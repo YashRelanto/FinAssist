@@ -14,8 +14,7 @@ const initialMessages = [
 ];
 
 export const AIAssistant: React.FC = () => {
-  const { user } = useAppContext();
-  const [messages, setMessages] = useState<any[]>(initialMessages);
+  const { user, chatMessages: messages, setChatMessages: setMessages } = useAppContext();
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);

@@ -14,7 +14,7 @@ from app.graph.state import make_initial_state
 class TestPipelineIntegration(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
-        self.user_id = "test-user-id"
+        self.user_id = "00000000-0000-0000-0000-000000000000"
         self.thread_id = str(uuid.uuid4())
         self.config = {"configurable": {"thread_id": f"{self.user_id}:{self.thread_id}"}}
         self.profile = {
@@ -72,46 +72,21 @@ class TestPipelineIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(final_state.get("input_blocked"))
         self.assertFalse(final_state.get("output_blocked"))
 
-    async def test_goal_planning_workflow(self):
-        """Goal planning multi-turn slot filling should function correctly."""
-        # Turn 1: Initial query
-        query_1 = "I need to buy a brand new phone how can i plan for it"
-        initial_state_1 = make_initial_state(
+    async def test_investment_analysis_agent(self):
+        """Investment analysis query should resolve via investment_analysis_agent."""
+        query = "Analyse my portfolio and how do i split my investments"
+        initial_state = make_initial_state(
             user_id=self.user_id,
             session_id=self.thread_id,
-            user_query=query_1,
+            user_query=query,
             user_profile=self.profile,
         )
-        final_state_1 = await finassist_graph.ainvoke(initial_state_1, config=self.config)
-        
-        self.assertEqual(final_state_1.get("intent"), "GOAL_PLANNING")
-        self.assertTrue(final_state_1.get("workflow_active"))
-        self.assertIsNotNone(final_state_1.get("final_answer"))
-        
-        # Extract workflow state details
-        wf_state_1 = final_state_1.get("workflow_state") or {}
-        self.assertEqual(wf_state_1.get("workflow_status"), "active")
-        
-        # Turn 2: Reply with budget (slot value)
-        query_2 = "500000"
-        initial_state_2 = make_initial_state(
-            user_id=self.user_id,
-            session_id=self.thread_id,
-            user_query=query_2,
-            user_profile=self.profile,
-            workflow_state=wf_state_1,
-            workflow_active=True,
-        )
-        final_state_2 = await finassist_graph.ainvoke(initial_state_2, config=self.config)
-        
-        self.assertTrue(final_state_2.get("workflow_active"))
-        wf_state_2 = final_state_2.get("workflow_state") or {}
-        collected = wf_state_2.get("collected_information") or {}
-        
-        # Ensure budget slot was extracted and mapped correctly to target_amount
-        self.assertIn("target_amount", collected)
-        self.assertEqual(int(collected["target_amount"]), 500000)
-        self.assertIsNotNone(final_state_2.get("final_answer"))
+        final_state = await finassist_graph.ainvoke(initial_state, config=self.config)
+        self.assertEqual(final_state.get("intent"), "PORTFOLIO_ANALYSIS")
+        self.assertEqual(final_state.get("selected_agent"), "investment_analysis")
+        self.assertIsNotNone(final_state.get("final_answer"))
+        self.assertFalse(final_state.get("input_blocked"))
+        self.assertFalse(final_state.get("output_blocked"))
 
 
 if __name__ == "__main__":

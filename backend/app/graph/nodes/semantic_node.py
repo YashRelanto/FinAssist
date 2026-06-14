@@ -117,12 +117,21 @@ def semantic_node(state: AgentState) -> dict:
 
             # Update categories with resolved names + IDs
             resolved_categories = resolution.get("categories", [])
+            unmatched_cats = []
             if resolved_categories:
                 resolved["categories"] = [c.get("resolved", c.get("original", ""))
                                           for c in resolved_categories]
                 resolved["category_ids"] = [c.get("resolved_id")
                                             for c in resolved_categories
                                             if c.get("resolved_id")]
+                valid_ids = {cat["category_id"] for cat in db_categories}
+                for c in resolved_categories:
+                    res_id = c.get("resolved_id")
+                    if not res_id or res_id not in valid_ids:
+                        unmatched_cats.append(c.get("original", ""))
+            elif extracted_categories:
+                unmatched_cats = list(extracted_categories)
+            resolved["unmatched_categories"] = unmatched_cats
 
             logger.info("[Node:semantic] Resolved: %s", json.dumps(resolved, default=str))
             return {"resolved_entities": resolved}
@@ -132,6 +141,7 @@ def semantic_node(state: AgentState) -> dict:
 
     # Fallback: just try ilike matching for categories
     resolved = dict(entities)
+    unmatched_cats = []
     if extracted_categories and db_categories:
         matched = []
         matched_ids = []
@@ -143,7 +153,11 @@ def semantic_node(state: AgentState) -> dict:
                     break
             else:
                 matched.append(cat_term)
+                unmatched_cats.append(cat_term)
         resolved["categories"] = matched
         resolved["category_ids"] = matched_ids
+    elif extracted_categories:
+        unmatched_cats = list(extracted_categories)
+    resolved["unmatched_categories"] = unmatched_cats
 
     return {"resolved_entities": resolved}

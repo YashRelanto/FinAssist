@@ -25,6 +25,34 @@ def clarification_node(state: AgentState) -> dict:
     entities = state.get("resolved_entities") or state.get("entities") or {}
     intent = state.get("intent") or "TRANSACTION_QUERY"
 
+    unmatched_categories = entities.get("unmatched_categories", [])
+    if unmatched_categories:
+        import difflib
+        from app.graph.nodes.semantic_node import _fetch_db_categories
+        db_categories = _fetch_db_categories()
+        unique_categories = sorted(list({c["main_category"] for c in db_categories if c.get("main_category")}))
+        
+        closest = []
+        for uc in unmatched_categories:
+            matches = difflib.get_close_matches(uc, unique_categories, n=3, cutoff=0.1)
+            closest.extend(matches)
+        closest = sorted(list(set(closest)))
+        if not closest:
+            closest = unique_categories[:3]
+        
+        unmatched_str = ", ".join(unmatched_categories)
+        closest_str = ", ".join(closest)
+        question = f"I cannot find any category called {unmatched_str} but these are the closest matching categories: {closest_str}."
+        
+        logger.info("[Node:clarification] unmatched categories detected: %s", question)
+        return {
+            "clarification_needed": True,
+            "clarification_question": question,
+            "final_answer": question,
+            "final_intent": intent,
+            "sources": ["Clarification Decider"]
+        }
+
     try:
         response = graph_chat_completion(
             node="clarification_node",
