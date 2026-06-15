@@ -36,20 +36,13 @@ def route_after_intent(
     If new goal planning intent -> start fresh slot filling.
     Otherwise -> context_node (normal flow).
     """
-    workflow_active = state.get("workflow_active", False)
     intent = state.get("intent") or "FINANCIAL_KNOWLEDGE"
 
-    if workflow_active:
-        logger.info("[Edge] intent -> workflow_relevance_node (active workflow priority)")
-        return "workflow_relevance_node"
 
     if intent == "OUT_OF_SCOPE":
         logger.info("[Edge] intent -> __end__ (out of scope)")
         return "__end__"
 
-    if intent == "GOAL_PLANNING":
-        logger.info("[Edge] intent -> goal_planning_node (new)")
-        return "goal_planning_node"
 
     logger.info("[Edge] intent -> context_node")
     return "context_node"

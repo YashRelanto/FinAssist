@@ -449,11 +449,19 @@ def compute_summary_for_window(
     *,
     window: dict[str, Any],
     profile_income: float = 0.0,
+    profile_fixed_rent: float = 0.0,
+    profile_fixed_emi: float = 0.0,
 ) -> dict[str, float]:
-    """Income/expense/net for the selected calendar analysis window."""
+    """Income/expense/net for the selected calendar analysis window.
+
+    - `monthly_income` is taken directly from the user_profiles table (stagnant).
+    - `fixed_expense` is the sum of `fixed_rent` + `fixed_emi` from the profile.
+    - `net_inflow` / `net_outflow` are calculated from transactions within the window.
+    - `net_savings` = `net_inflow` - `net_outflow` and `savings_rate` is relative to `monthly_income`.
+    """
     rows = transactions
-    income = 0.0
-    expense = 0.0
+    income_tx = 0.0
+    expense_tx = 0.0
     for row in filter_rows_by_date(
         rows,
         start_date=window.get("start_date"),
@@ -464,24 +472,34 @@ def compute_summary_for_window(
             continue
         amount = transaction_amount_value(row.get("amount"), tx_type)
         if tx_type == INCOME_TYPE:
-            income += amount
+            income_tx += amount
         elif tx_type == EXPENSE_TYPE:
-            expense += amount
+            expense_tx += amount
 
-    if profile_income > 0.0 and window.get("period") == "1m":
-        income = profile_income
+    # Monthly income is always taken from the profile (stagnant)
+    monthly_income = float(profile_income or 0.0)
+    fixed_expense = float((profile_fixed_rent or 0.0) + (profile_fixed_emi or 0.0))
 
-    net = income - expense
-    savings_rate = round((net / income) * 100, 1) if income > 0 else 0.0
+    net_inflow = income_tx
+    net_outflow = expense_tx
+    net = net_inflow - net_outflow
+    savings_rate = round((net / monthly_income) * 100, 1) if monthly_income > 0 else 0.0
+
     total_balance = 0.0
     for acc in accounts:
         if (acc.get("account_type") or "").lower() == "credit_card":
             continue
         total_balance += float(acc.get("current_balance") or 0)
+
+    # Preserve the existing `monthly_expenses` key for compatibility while adding
+    # new fields requested by the UI and placing them in the desired order.
     return {
         "total_balance": total_balance,
-        "monthly_income": round(income, 2),
-        "monthly_expenses": round(expense, 2),
+        "monthly_income": round(monthly_income, 2),
+        "fixed_expense": round(fixed_expense, 2),
+        "net_inflow": round(net_inflow, 2),
+        "net_outflow": round(net_outflow, 2),
+        "monthly_expenses": round(expense_tx, 2),
         "net_savings": round(net, 2),
         "savings_rate": savings_rate,
     }
@@ -525,6 +543,8 @@ def build_dashboard_payload(
     budgets: list[dict[str, Any]],
     reference: datetime | None = None,
     profile_income: float = 0.0,
+    profile_fixed_rent: float = 0.0,
+    profile_fixed_emi: float = 0.0,
     period: str = "1m",
 ) -> dict[str, Any]:
     ref = reference or datetime.now()
@@ -539,6 +559,8 @@ def build_dashboard_payload(
             transactions,
             window=window,
             profile_income=profile_income,
+            profile_fixed_rent=profile_fixed_rent,
+            profile_fixed_emi=profile_fixed_emi,
         ),
         "chart_data": build_chart_data_for_window(monthly_stats, window=window),
         "accounts": accounts,

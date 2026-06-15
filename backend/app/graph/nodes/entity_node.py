@@ -59,7 +59,31 @@ def _resolve_dates(question: str) -> Dict[str, Optional[str]]:
     if "this week" in q:
         monday = today - timedelta(days=today.weekday())
         return {"from": monday.isoformat(), "to": today.isoformat()}
+    
+    """
+    n_months_match = re.search(
+        r"(?:last|past|previous)\s+(\d+)\s+months?",
+        q,
+    )
 
+    if n_months_match:
+        n = int(n_months_match.group(1))
+
+        year = today.year
+        month = today.month - n
+
+        while month <= 0:
+            month += 12
+            year -= 1
+
+        start_date = date(year, month, 1)
+
+        return {
+            "from": start_date.isoformat(),
+            "to": today.isoformat(),
+        }
+    """
+        
     if "last month" in q:
         first_this = today.replace(day=1)
         last_prev = first_this - timedelta(days=1)

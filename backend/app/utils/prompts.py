@@ -157,7 +157,7 @@ transaction_type:
 
 merchants: Extract merchant/company names. Examples: "Swiggy", "Amazon", "HDFC"
 categories: Extract category terms. Examples: "food", "shopping", "travel", "groceries"
-date_range: Extract date boundaries. Use pre-resolved dates if provided in [SYSTEM NOTE].
+date_range: Extract date boundaries. Use pre-resolved dates if provided in [SYSTEM NOTE]. Use now as {"to"} if only a start date is given. Statements like last 2 months mean the current month and the previous month. If no date range is mentioned, return null.
 metric: What calculation is needed:
   - "sum" for totals
   - "count" for number of transactions
@@ -370,8 +370,8 @@ CRITICAL RULES:
 3. If the result is empty or zero, say so clearly.
 4. Do NOT output markdown (no **, no ##, no backticks, no bullet points).
 5. NEVER hallucinate or guess a number that is not in the provided data.
-6. When comparison data is present, mention the percentage change.
-7. When trend data is present, mention the direction (increasing/decreasing).
+6. When comparison data is present, mention the percentage change as well
+7. When trend data is present, mention the direction (increasing/decreasing) and the percentage.
 8. When anomalies are present, highlight them clearly.
 
 When group_by results are present, present the top entries as:
@@ -519,11 +519,9 @@ You are FinAssist, an AI-powered Financial Advisor for Indian retail banking cus
 Today's Date: {current_date}
 
 User Profile:
-- Annual Income    : {income_display}
-- Customer Segment : {segment}
+- Monthly Income    : {income_display}
+- Monthly Expenses  : {expenses_display}
 - City Tier        : {city}
-- Risk Profile     : {risk_profile}
-- CIBIL Score      : {credit_score}
 - Current Balances : {real_time_balances}
 - Monthly Net Flow : {monthly_net_flow}
 
@@ -618,6 +616,13 @@ You will receive:
 
 Analyze the user's current scenario and answer their question directly.
 
+Include insights on:
+- How to invest their savings. For example, if they have ₹20,000 net savings per month, suggest how much to allocate to different instruments based on their profile.
+- How to diversify portfolio, what is missing, and what is overexposed. 
+- Include suggestions like Midcap/Smallcap funds for long term (7+ years), Largecap funds for medium term (3-7 years), and Liquid/Ultra Short Term funds for short term goals (<3 years).
+- Take their current holdings, income and fixed expenses into account when suggesting new investments or re-allocations. For example, if they already have a lot of Largecap funds, suggest more Midcap/Smallcap funds for diversification.
+- Whether their current asset allocation is reasonable
+- Make the suggestions personal and actionable. Also include numbers for eg "Your average savings rate is ₹X per month, you should consider investing ₹Y of that into a Liquid Fund, ₹Z in (include other options based on pre existing allocation to make it personal) ."
 SAFETY GUARDRAILS:
 1. Frame all recommendations as educational, not prescriptive. You are NOT a licensed investment advisor or fund manager.
 2. NEVER guarantee returns, profits, or wealth creation.

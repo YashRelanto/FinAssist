@@ -19,7 +19,7 @@ async def get_forecast(
     account_id: str | None = None,
     category_id: str | None = None,
     merchant: str | None = None,
-    period: str = Query(default=DEFAULT_PERIOD, description="1m, 3m, 5m, or all"),
+    period: str = Query(default=DEFAULT_PERIOD, description="1m, 3m, 6m, 1y, or all"),
 ):
     try:
         period_key = normalize_period(period)

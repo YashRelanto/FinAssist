@@ -37,18 +37,13 @@ interface BreakdownSlice {
 }
 
 interface ExpenseBreakdownProps {
-  /** Calendar-month breakdown from dashboard-summary (matches summary cards). */
-  initialData?: BreakdownSlice[];
+  analysisPeriod: AnalysisPeriod;
 }
 
-export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ initialData }) => {
-  const { user, analysisPeriod } = useAppContext();
+export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ analysisPeriod }) => {
+  const { user } = useAppContext();
   const [loading, setLoading] = useState(false);
   const [transactions, setTransactions] = useState<any[]>([]);
-  const [presetSlices, setPresetSlices] = useState<BreakdownSlice[] | null>(
-    initialData?.length ? initialData : null,
-  );
-  const [range, setRange] = useState<RangeType>(analysisPeriod);
   const [drillDown, setDrillDown] = useState<string | null>(null);
 
   const fetchTransactions = async (startDate: string, endDate: string) => {
@@ -70,39 +65,18 @@ export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ initialData 
   };
 
   useEffect(() => {
-    setRange(analysisPeriod);
-  }, [analysisPeriod]);
-
-  useEffect(() => {
-    if (initialData?.length) {
-      setPresetSlices(initialData);
-    }
-  }, [initialData]);
-
-  useEffect(() => {
     const uid = activeUserId(user);
     if (!uid) return;
 
-    if (range === analysisPeriod && initialData?.length && !drillDown) {
-      setPresetSlices(initialData);
-      setLoading(false);
-      return;
-    }
-
-    const { startDate, endDate } = resolveAnalysisWindow(range);
+    const { startDate, endDate } = resolveAnalysisWindow(analysisPeriod);
     if (!startDate) {
       fetchTransactions('2000-01-01', endDate);
       return;
     }
-    setPresetSlices(null);
     fetchTransactions(startDate, endDate);
-  }, [range, analysisPeriod, user, drillDown, initialData]);
+  }, [analysisPeriod, user]);
 
   const chartData = useMemo(() => {
-    if (range === '1m' && presetSlices && !drillDown) {
-      return presetSlices;
-    }
-
     const groups: Record<string, number> = {};
     
     transactions.forEach(t => {
@@ -115,7 +89,7 @@ export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ initialData 
     return Object.entries(groups)
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value);
-  }, [transactions, drillDown, range, presetSlices]);
+  }, [transactions, drillDown]);
 
   const totalExpense = useMemo(() => chartData.reduce((sum, item) => sum + item.value, 0), [chartData]);
 
@@ -144,7 +118,7 @@ export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ initialData 
           <div className="flex items-center gap-2 w-full px-4 py-2.5 bg-surface-container-low border border-outline-variant/30 rounded-2xl">
             <Filter className="w-3.5 h-3.5 text-outline shrink-0" />
             <p className="text-[11px] font-black uppercase tracking-widest text-outline truncate">
-              {resolveAnalysisWindow(range).periodLabel}
+              {resolveAnalysisWindow(analysisPeriod).periodLabel}
             </p>
             <Calendar className="w-3.5 h-3.5 text-outline/40 ml-auto shrink-0" />
           </div>

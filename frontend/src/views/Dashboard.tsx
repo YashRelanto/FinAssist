@@ -16,7 +16,7 @@ import { ForecastPredictionCard } from '../components/Dashboard/ForecastPredicti
 import { AccountModal } from '../components/AccountModal';
 
 export const Dashboard: React.FC = () => {
-  const { user, dashboardSummary, loadDashboardSummary, loadAccountHubAnalysis } = useAppContext();
+  const { user, dashboardSummary, loadDashboardSummary, loadAccountHubAnalysis, transactions, accounts, analysisPeriod } = useAppContext();
   const [isAccountModalOpen, setIsAccountModalOpen] = React.useState(false);
   const hubAnalysisScheduledRef = React.useRef(false);
 
@@ -50,12 +50,23 @@ export const Dashboard: React.FC = () => {
 
   const dashboardData = dashboardSummary;
 
+  const mappedSummary = dashboardData?.summary
+    ? {
+        fixed_income: dashboardData.summary.monthly_income,
+        fixed_expense: dashboardData.summary.fixed_expense,
+        net_inflow: dashboardData.summary.net_inflow,
+        net_outflow: dashboardData.summary.net_outflow,
+        net_savings: dashboardData.summary.net_savings,
+        savings_rate: dashboardData.summary.savings_rate,
+      }
+    : undefined;
+
   return (
     <div className="space-y-8 pb-10">
       
       {/* Summary Cards */}
       <SummaryCards
-        data={dashboardData?.summary}
+        data={mappedSummary}
         periodLabel={dashboardData?.period_label}
       />
 
@@ -99,10 +110,13 @@ export const Dashboard: React.FC = () => {
         {/* Financial Performance */}
         <FinancialPerformanceChart
           data={dashboardData?.chart_data}
+          accounts={accounts}
+          transactions={transactions}
+          analysisPeriod={analysisPeriod}
         />
 
         {/* Expense Breakdown */}
-        <ExpenseBreakdown initialData={dashboardData?.expense_breakdown_month} />
+        <ExpenseBreakdown analysisPeriod={analysisPeriod} />
       </div>
 
       {/* Budget + Recent Transactions */}

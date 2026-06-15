@@ -25,6 +25,7 @@ interface AppContextType {
   accounts: any[];
   dbCategories: string[];
   dashboardSummary: any | null;
+  dashboardSummaryLoading: boolean;
   budgetGoalsSummary: any | null;
   addTransaction: (t: Omit<Transaction, 'id'>) => void;
   updateTransaction: (id: string, t: Partial<Transaction>, onComplete?: (success: boolean) => void) => void;
@@ -221,6 +222,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [accounts, setAccounts] = useState<any[]>([]);
   const [dbCategories, setDbCategories] = useState<string[]>([]);
   const [dashboardSummary, setDashboardSummary] = useState<any | null>(null);
+  const [dashboardSummaryLoading, setDashboardSummaryLoading] = useState(false);
   const [budgetGoalsSummary, setBudgetGoalsSummary] = useState<any | null>(null);
   const [accountHubAnalysis, setAccountHubAnalysis] = useState<any | null>(null);
   const [accountHubAnalysisLoading, setAccountHubAnalysisLoading] = useState(false);
@@ -580,6 +582,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (inflightRef.current.dashboardSummary) return inflightRef.current.dashboardSummary;
       }
 
+      setDashboardSummaryLoading(true);
       inflightRef.current.dashboardSummary = apiFetch(
         `/api/dashboard-summary?user_id=${encodeURIComponent(uid)}&period=${encodeURIComponent(analysisPeriod)}`,
       )
@@ -594,6 +597,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           console.warn('Failed to load dashboard summary:', err);
         })
         .finally(() => {
+          setDashboardSummaryLoading(false);
           inflightRef.current.dashboardSummary = undefined;
         });
 
@@ -1120,6 +1124,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       accounts,
       dbCategories,
       dashboardSummary,
+      dashboardSummaryLoading,
       budgetGoalsSummary,
       analysisPeriod,
       setAnalysisPeriod,

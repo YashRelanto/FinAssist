@@ -60,17 +60,41 @@ def ensure_user_with_profile(user_id: str, email: str, full_name: str) -> dict[s
 
     profile = p_res.data[0]
     role = (user.get("role") or "user").lower()
+    # Fetch user's accounts and current balances (service-role DB client)
+    accounts_list: list[dict[str, Any]] = []
+    total_balance = 0.0
+    try:
+        a_res = (
+            supabase_db.table("accounts")
+            .select("account_id,account_name,current_balance,account_type")
+            .eq("user_id", uid)
+            .order("created_at", desc=False)
+            .execute()
+        )
+        accounts_list = a_res.data or []
+        for acc in accounts_list:
+            # treat missing or non-numeric balances as 0
+            try:
+                bal = float(acc.get("current_balance") or 0)
+            except Exception:
+                bal = 0.0
+            # Exclude credit card accounts from total_balance if marked so
+            if (acc.get("account_type") or "").lower() != "credit_card":
+                total_balance += bal
+    except Exception as acc_exc:
+        logger.debug("Failed to load accounts for user %s: %s", uid, acc_exc)
 
     return {
         "user_id": user["user_id"],
         "full_name": user["full_name"],
-        "email": user["email"],
         "role": role,
         "onboarded": profile["onboarded"],
         "income": float(profile["income"]),
         "city_tier": profile["city_tier"],
         "fixed_rent": float(profile["fixed_rent"]),
         "fixed_emi": float(profile["fixed_emi"]),
+        "real_time_balances": accounts_list,
+        "total_balance": float(total_balance),
         "biggest_category": profile["biggest_category"],
         "primary_goal": profile["primary_goal"],
     }

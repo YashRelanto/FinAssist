@@ -1,11 +1,12 @@
-export type AnalysisPeriod = '1m' | '3m' | '5m' | 'all';
+export type AnalysisPeriod = '1m' | '3m' | '6m' | '1y' | 'all';
 
 export const DEFAULT_ANALYSIS_PERIOD: AnalysisPeriod = '1m';
 
 export const ANALYSIS_PERIOD_OPTIONS: { value: AnalysisPeriod; label: string }[] = [
   { value: '1m', label: '1 Month' },
   { value: '3m', label: '3 Months' },
-  { value: '5m', label: '5 Months' },
+  { value: '6m', label: '6 Months' },
+  { value: '1y', label: '1 Year' },
   { value: 'all', label: 'All Time' },
 ];
 
@@ -55,9 +56,16 @@ export function resolveAnalysisWindow(
   if (period === 'all') {
     return { startDate: null, endDate: end, periodLabel: 'All time' };
   }
-  const months = period === '1m' ? 1 : period === '3m' ? 3 : 5;
+  
+  const months = 
+    period === '1m' ? 1 : 
+    period === '3m' ? 3 : 
+    period === '6m' ? 6 :
+    period === '1y' ? 12 : 1;
+    
   const start = addMonths(monthStart(reference), -(months - 1));
   const startDate = start.toISOString().slice(0, 10);
+  
   const label =
     period === '1m'
       ? reference.toLocaleString('en', { month: 'long', year: 'numeric' }) + ' (month to date)'

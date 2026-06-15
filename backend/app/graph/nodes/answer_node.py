@@ -70,13 +70,10 @@ def answer_node(state: AgentState) -> dict:
 
             # Format user profile values
             income = profile.get("income", "unknown")
-            annual_income = profile.get("annual_income", income)
-            segment = profile.get("segment", "General")
+            monthly_income = profile.get("income", income)
             city = profile.get("city", "India")
-            risk_profile = profile.get("risk_profile", "Moderate")
-            credit_score = profile.get("credit_score", "N/A")
             current_date = datetime.now().strftime("%d %B %Y")
-            income_display = f"₹{annual_income:,.0f} per annum" if isinstance(annual_income, (int, float)) else str(annual_income)
+            income_display = f"₹{monthly_income:,.0f} per month" if isinstance(monthly_income, (int, float)) else str(monthly_income)
             real_time_balances = profile.get("real_time_balances", "N/A")
             monthly_net_flow = profile.get("monthly_net_flow", "N/A")
 
@@ -84,10 +81,7 @@ def answer_node(state: AgentState) -> dict:
             system_prompt = system_prompt_template.format(
                 current_date=current_date,
                 income_display=income_display,
-                segment=segment,
                 city=city,
-                risk_profile=risk_profile,
-                credit_score=credit_score,
                 real_time_balances=real_time_balances,
                 monthly_net_flow=monthly_net_flow,
                 context_text=context_text,

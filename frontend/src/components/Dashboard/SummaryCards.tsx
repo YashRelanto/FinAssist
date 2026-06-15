@@ -4,9 +4,10 @@ import { cn, formatCurrency } from '../../lib/utils';
 
 interface SummaryCardsProps {
   data?: {
-    total_balance: number;
-    monthly_income: number;
-    monthly_expenses: number;
+    fixed_income: number;
+    fixed_expense?: number;
+    net_inflow?: number;
+    net_outflow?: number;
     net_savings: number;
     savings_rate: number;
   };
@@ -20,26 +21,35 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({ data, periodLabel })
 
   const stats = [
     {
-      label: 'Total Balance',
-      value: formatCurrency(data?.total_balance || 0),
-      trend: 'Live data',
-      up: true as boolean | null,
-      desc: 'All accounts',
-    },
-    {
-      label: 'Monthly Income',
-      value: `+${formatCurrency(data?.monthly_income || 0)}`,
+      label: 'Fixed Income',
+      value: `+${formatCurrency(data?.fixed_income || 0)}`,
       trend: periodHint,
       up: null,
-      desc: 'Calendar months',
+      desc: 'From profile',
       color: 'text-secondary',
     },
     {
-      label: 'Period Expenses',
-      value: `-${formatCurrency(data?.monthly_expenses || 0)}`,
+      label: 'Fixed Expense',
+      value: `-${formatCurrency(data?.fixed_expense || 0)}`,
       trend: periodHint,
       up: false as boolean | null,
-      desc: 'Excl. transfers',
+      desc: 'Rent + EMI',
+      color: 'text-error',
+    },
+    {
+      label: 'Net Inflow',
+      value: `+${formatCurrency(data?.net_inflow || 0)}`,
+      trend: periodHint,
+      up: true as boolean | null,
+      desc: 'In period',
+      color: 'text-secondary',
+    },
+    {
+      label: 'Net Outflow',
+      value: `-${formatCurrency(data?.net_outflow || 0)}`,
+      trend: periodHint,
+      up: false as boolean | null,
+      desc: 'Outflows in period',
       color: 'text-error',
     },
     {
@@ -47,7 +57,7 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({ data, periodLabel })
       value: `${netSavings >= 0 ? '+' : ''}${formatCurrency(netSavings)}`,
       trend: netSavings >= 0 ? 'Surplus' : 'Deficit',
       up: netSavings >= 0,
-      desc: 'Income − expenses',
+      desc: 'In period',
       color: netSavings >= 0 ? undefined : 'text-error',
     },
     {
@@ -61,7 +71,7 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({ data, periodLabel })
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-6 gap-6">
       {stats.map((stat, i) => (
         <div
           key={i}

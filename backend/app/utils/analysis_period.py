@@ -1,4 +1,4 @@
-"""Calendar-month analysis windows (1 / 3 / 5 months + all time)."""
+"""Calendar-month analysis windows (1 / 3 / 6 months, 1 year + all time)."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ import calendar
 from datetime import date
 from typing import Any
 
-VALID_PERIODS = frozenset({"1m", "3m", "5m", "all"})
+VALID_PERIODS = frozenset({"1m", "3m", "6m", "1y", "all"})
 DEFAULT_PERIOD = "1m"
-MONTHS_BY_PERIOD = {"1m": 1, "3m": 3, "5m": 5}
+MONTHS_BY_PERIOD = {"1m": 1, "3m": 3, "6m": 6, "1y": 12}
 
 
 def normalize_period(period: str | None) -> str:
@@ -38,6 +38,8 @@ def resolve_analysis_window(
 
     1m on 5 Jun → 1 Jun … 5 Jun (month-to-date).
     3m on 5 Jun → 1 Apr … 5 Jun.
+    6m on 5 Jun → 1 Jan … 5 Jun.
+    1y on 5 Jun → 1 Jun (prev year) … 5 Jun.
     all → from first transaction through today (start_date None).
     """
     today = reference or date.today()

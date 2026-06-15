@@ -128,6 +128,9 @@ def update_transaction_record(
     main_category: str,
     sub_category: str = "General",
     transaction_date: str,
+    is_recurring: bool = False,
+    recurrence_period: str | None = None,
+    recurrence_skips: int = 0,
 ) -> dict[str, Any]:
     if not supabase_db:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -197,6 +200,9 @@ def update_transaction_record(
                 "description": description,
                 "transaction_date": transaction_date,
                 "running_balance": new_bal if old_account_id == new_account_id else None,
+                "is_recurring": is_recurring,
+                "recurrence_period": recurrence_period,
+                "recurrence_skips": recurrence_skips,
             }
         )
         .eq("transaction_id", transaction_id)
@@ -258,6 +264,9 @@ def create_transaction_record(
     main_category: str,
     sub_category: str = "General",
     transaction_date: str,
+    is_recurring: bool = False,
+    recurrence_period: str | None = None,
+    recurrence_skips: int = 0,
 ) -> dict[str, Any]:
     """
     Insert a transaction and update the linked account's current_balance.
@@ -285,6 +294,9 @@ def create_transaction_record(
         "description": description,
         "transaction_date": transaction_date,
         "running_balance": new_bal,
+        "is_recurring": is_recurring,
+        "recurrence_period": recurrence_period,
+        "recurrence_skips": recurrence_skips,
     }
 
     insert_res = supabase_db.table("transactions").insert(trans_data).execute()

@@ -279,13 +279,17 @@ async def get_dashboard_summary(
 
         prof_res = (
             supabase.table("user_profiles")
-            .select("income")
+            .select("income, fixed_rent, fixed_emi")
             .eq("user_id", user_id)
             .execute()
         )
         profile_income = 0.0
+        profile_fixed_rent = 0.0
+        profile_fixed_emi = 0.0
         if prof_res.data:
             profile_income = float(prof_res.data[0].get("income") or 0.0)
+            profile_fixed_rent = float(prof_res.data[0].get("fixed_rent") or 0.0)
+            profile_fixed_emi = float(prof_res.data[0].get("fixed_emi") or 0.0)
 
         return build_dashboard_payload(
             accounts=accounts,
@@ -293,6 +297,8 @@ async def get_dashboard_summary(
             recent_rows=recent_res.data or [],
             budgets=budget_res.data or [],
             profile_income=profile_income,
+            profile_fixed_rent=profile_fixed_rent,
+            profile_fixed_emi=profile_fixed_emi,
             period=period_key,
         )
     except HTTPException:
@@ -323,6 +329,9 @@ class TransactionCreate(BaseModel):
     main_category: str
     sub_category: str = "General"
     transaction_date: str
+    is_recurring: Optional[bool] = False
+    recurrence_period: Optional[str] = None
+    recurrence_skips: Optional[int] = 0
 
 @router.post("/transactions")
 async def create_transaction(req: TransactionCreate):
@@ -337,6 +346,9 @@ async def create_transaction(req: TransactionCreate):
             main_category=req.main_category,
             sub_category=req.sub_category,
             transaction_date=req.transaction_date,
+            is_recurring=req.is_recurring or False,
+            recurrence_period=req.recurrence_period,
+            recurrence_skips=req.recurrence_skips or 0,
         )
         return {
             "success": True,
@@ -395,11 +407,112 @@ async def get_transactions(user_id: str, start_date: str = None, end_date: str =
                     "runningBalance": float(row["running_balance"])
                     if row.get("running_balance") is not None
                     else None,
+                    "is_recurring": bool(row.get("is_recurring")),
+                    "recurrence_period": row.get("recurrence_period"),
+                    "recurrence_skips": int(row.get("recurrence_skips") or 0),
                 }
             )
         return {"success": True, "data": formatted}
     except Exception as e:
         print(f"Error fetching transactions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/upcoming-payments")
+async def get_upcoming_payments(user_id: str):
+    if not user_id or not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        from datetime import date, timedelta
+        
+        # Query recurring transactions
+        res = (
+            supabase.table("transactions")
+            .select(
+                "transaction_id,transaction_date,amount,transaction_type,merchant_name,description,"
+                "account_id,category_id,is_recurring,recurrence_period,recurrence_skips,"
+                "categories(main_category,sub_category),"
+                "accounts(account_name)"
+            )
+            .eq("user_id", user_id)
+            .eq("is_recurring", True)
+            .execute()
+        )
+        
+        rows = res.data or []
+        upcoming = []
+        today = date.today()
+        
+        def add_months(sourcedate: date, months: int) -> date:
+            month = sourcedate.month - 1 + months
+            year = sourcedate.year + month // 12
+            month = month % 12 + 1
+            day = min(sourcedate.day, [31,
+                29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28,
+                31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month-1])
+            return date(year, month, day)
+
+        def add_years(sourcedate: date, years: int) -> date:
+            try:
+                return sourcedate.replace(year=sourcedate.year + years)
+            except ValueError:
+                return sourcedate.replace(year=sourcedate.year + years, day=28)
+
+        for row in rows:
+            base_date_str = row.get("transaction_date")
+            period = row.get("recurrence_period")
+            skips = int(row.get("recurrence_skips") or 0)
+            
+            if not base_date_str or not period:
+                continue
+                
+            try:
+                base_date = datetime.strptime(base_date_str, "%Y-%m-%d").date()
+            except Exception:
+                continue
+                
+            step = skips + 1
+            current = base_date
+            
+            # Find first occurrence that is >= today
+            iterations = 0
+            while current < today and iterations < 100:
+                iterations += 1
+                if period == "daily":
+                    current += timedelta(days=step)
+                elif period == "weekly":
+                    current += timedelta(weeks=step)
+                elif period == "monthly":
+                    current = add_months(current, step)
+                elif period == "yearly":
+                    current = add_years(current, step)
+                else:
+                    break
+                    
+            if base_date >= today:
+                current = base_date
+                
+            categories_info = row.get("categories") or {}
+            accounts_info = row.get("accounts") or {}
+            
+            upcoming.append({
+                "id": row["transaction_id"],
+                "merchant": row.get("merchant_name") or row.get("description") or "Unknown",
+                "category": normalize_category_name(categories_info.get("main_category")),
+                "subCategory": categories_info.get("sub_category") or "General",
+                "amount": float(row.get("amount") or 0),
+                "account": accounts_info.get("account_name") or "Unknown Account",
+                "account_id": row.get("account_id"),
+                "type": row.get("transaction_type"),
+                "notes": row.get("description"),
+                "next_date": current.strftime("%Y-%m-%d"),
+                "recurrence_period": period,
+                "recurrence_skips": skips
+            })
+            
+        upcoming.sort(key=lambda x: x["next_date"])
+        return {"success": True, "data": upcoming}
+    except Exception as e:
+        print(f"Error fetching upcoming payments: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/transactions/{trans_id}")
@@ -416,6 +529,9 @@ async def update_transaction(trans_id: str, req: TransactionCreate):
             main_category=req.main_category,
             sub_category=req.sub_category,
             transaction_date=req.transaction_date,
+            is_recurring=req.is_recurring or False,
+            recurrence_period=req.recurrence_period,
+            recurrence_skips=req.recurrence_skips or 0,
         )
         return {
             "success": True,
