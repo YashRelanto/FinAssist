@@ -7,24 +7,35 @@ import logging
 import colorlog
 
 # ── Configure colorful logging ────────────────────────────────────────────
-handler = colorlog.StreamHandler()
-handler.setFormatter(colorlog.ColoredFormatter(
-    "%(log_color)s%(asctime)s — %(name)s — %(levelname)s%(reset)s — %(message)s",
-    log_colors={
-        'DEBUG': 'cyan',
-        'INFO': 'green',
-        'WARNING': 'yellow',
-        'ERROR': 'red',
-        'CRITICAL': 'red,bg_white',
-    },
-    reset=True,
-    style='%'
-))
+# Idempotent setup: this module can be imported twice in one process (once as
+# "__main__" via `python app/main.py`, then again as "app.main" when uvicorn
+# imports it). Guard against attaching the handler twice, which would otherwise
+# emit every log line in duplicate.
+_LOG_FORMAT = "%(asctime)s — %(name)s — %(levelname)s — %(message)s"
+_root = logging.getLogger()
+_root.setLevel(logging.INFO)
 
-logging.root.setLevel(logging.INFO)
-logging.root.addHandler(handler)
+if not any(getattr(h, "_finassist_handler", False) for h in _root.handlers):
+    handler = colorlog.StreamHandler()
+    handler.setFormatter(colorlog.ColoredFormatter(
+        "%(log_color)s" + _LOG_FORMAT.replace("%(message)s", "%(reset)s%(message)s"),
+        log_colors={
+            'DEBUG': 'cyan',
+            'INFO': 'green',
+            'WARNING': 'yellow',
+            'ERROR': 'red',
+            'CRITICAL': 'red,bg_white',
+        },
+        reset=True,
+        style='%',
+    ))
+    handler._finassist_handler = True  # marker so re-import doesn't add a duplicate
+    _root.addHandler(handler)
 
+# Quieten noisy third-party loggers (HTTP client request lines, etc.).
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+for _noisy in ("httpx", "httpcore", "openai", "urllib3", "hpack", "supabase", "postgrest"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 
 app = FastAPI(title="FinAssist API")
@@ -77,4 +88,15 @@ async def home_redirect():
     return RedirectResponse(url="http://localhost:3000/dashboard")
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    # Scope the auto-reloader to the source package only. Otherwise the watcher
+    # also sees runtime writes (chroma_db/, security_events.json, models/, data/,
+    # *.pyc) under the working dir and restarts the server mid-request.
+    uvicorn.run(
+        "app.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        reload_dirs=["app"],
+        reload_includes=["*.py"],
+        reload_excludes=["*.pyc", "__pycache__/*", "*.json", "*.log", "*.sqlite3"],
+    )

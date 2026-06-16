@@ -3,18 +3,33 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from contextvars import ContextVar
 from functools import wraps
 from typing import Any, Callable
 
 import openai
+from langgraph.errors import GraphInterrupt
 
 from app.core.config import settings
 
 logger = logging.getLogger("app.graph")
 
 _run_context: ContextVar[dict[str, str]] = ContextVar("graph_run_context", default={})
+
+# Per-request token accumulator. LangGraph runs sync nodes in worker threads that
+# receive a COPY of the contextvars — so a ContextVar can't accumulate across the
+# thread boundary (mutations in the worker copy don't propagate back). Instead we
+# keep a shared, lock-guarded dict keyed by thread_id; workers can still read the
+# thread_id from the (copied) run context. Reads/resets happen in the request
+# coroutine, writes happen in the node workers — both keyed by the same thread_id.
+_token_usage: dict[str, dict[str, int]] = {}
+_token_lock = threading.Lock()
+
+
+def _run_key() -> str:
+    return _run_context.get().get("thread_id", "") or "_default"
 
 
 def set_graph_run_context(*, user_id: str, thread_id: str) -> None:
@@ -23,6 +38,29 @@ def set_graph_run_context(*, user_id: str, thread_id: str) -> None:
 
 def clear_graph_run_context() -> None:
     _run_context.set({})
+
+
+def reset_token_usage() -> None:
+    """Clear the per-request token accumulator (call at the start of each turn)."""
+    with _token_lock:
+        _token_usage[_run_key()] = {}
+
+
+def get_token_usage() -> dict[str, int]:
+    """Return per-node token usage and the total for the current request."""
+    with _token_lock:
+        usage = dict(_token_usage.get(_run_key(), {}))
+    usage["total"] = sum(usage.values())
+    return usage
+
+
+def _record_token_usage(node: str, total_tokens: int) -> None:
+    """Add a completion's token count to the per-node accumulator."""
+    if not total_tokens:
+        return
+    with _token_lock:
+        bucket = _token_usage.setdefault(_run_key(), {})
+        bucket[node] = bucket.get(node, 0) + int(total_tokens)
 
 
 def _ctx_prefix() -> str:
@@ -126,6 +164,7 @@ def graph_chat_completion(
             f" completion_tokens={usage.completion_tokens}"
             f" total_tokens={usage.total_tokens}"
         )
+        _record_token_usage(node, getattr(usage, "total_tokens", 0) or 0)
 
     content = ""
     if response.choices:
@@ -157,6 +196,10 @@ def wrap_graph_node(node_name: str, fn: Callable[[Any], dict[str, Any]]) -> Call
         )
         try:
             result = fn(state)
+        except GraphInterrupt:
+            # Not a failure — the node paused for human input (HITL clarification).
+            logger.info("[%s] interrupt | %s(awaiting user input)", node_name, _ctx_prefix())
+            raise
         except Exception:
             elapsed_ms = (time.perf_counter() - started) * 1000
             logger.exception(

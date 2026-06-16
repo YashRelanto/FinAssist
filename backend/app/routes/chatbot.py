@@ -78,6 +78,19 @@ class ChatResponse(BaseModel):
             "(e.g. 'BankBazaar', 'MoneyControl', 'Supabase: transactions')."
         ),
     )
+    artifacts: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "Visualization specs (charts) for the frontend to render. Each item has "
+            "type/chart_type/title/x_field/y_field/data."
+        ),
+    )
+    metadata: dict = Field(
+        default_factory=dict,
+        description=(
+            "Run observability: tools_used, iterations, total_tokens, per_tool_token_usage."
+        ),
+    )
     thread_id: str = Field(
         ...,
         description="Echo of the thread_id used for this turn.",
@@ -280,19 +293,26 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
         user_profile["real_time_balances"] = "N/A"
         user_profile["monthly_net_flow"] = "N/A"
 
-    # 2. Call the core engine (LangGraph)
+    # 2. Call the core engine (LangGraph supervisor)
+    artifacts: List[dict] = []
+    metadata: Dict[str, Any] = {}
     try:
+        from langgraph.types import Command
+
         from app.graph.graph import finassist_graph
         from app.graph.logging_utils import (
             clear_graph_run_context,
+            get_token_usage,
             log_graph_run_end,
             log_graph_run_start,
+            reset_token_usage,
             set_graph_run_context,
         )
         from app.graph.state import make_initial_state
 
         config = {"configurable": {"thread_id": f"{request.user_id}:{request.thread_id}"}}
         set_graph_run_context(user_id=request.user_id, thread_id=request.thread_id)
+        reset_token_usage()
         log_graph_run_start(
             user_id=request.user_id,
             thread_id=request.thread_id,
@@ -300,31 +320,49 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
         )
         run_started = time.perf_counter()
 
-        # Fetch the current state snapshot from checkpointer to preserve workflow state
+        # Resume-aware invoke: if the graph is paused on an interrupt (HITL
+        # clarification), resume it with the user's reply; otherwise start fresh.
         state_snapshot = await finassist_graph.aget_state(config)
-        wf_state = {}
-        wf_active = False
+        is_paused = bool(state_snapshot and state_snapshot.next)
 
-        if state_snapshot and state_snapshot.values:
-            wf_state = state_snapshot.values.get("workflow_state") or {}
-            wf_active = state_snapshot.values.get("workflow_active", False)
+        if is_paused:
+            logger.info("Resuming paused graph for thread=%s", request.thread_id)
+            final_state = await finassist_graph.ainvoke(
+                Command(resume=request.message), config=config
+            )
+        else:
+            initial_state = make_initial_state(
+                user_id=request.user_id,
+                session_id=request.thread_id,
+                user_query=request.message,
+                user_profile=user_profile,
+            )
+            final_state = await finassist_graph.ainvoke(initial_state, config=config)
 
-        # Initialize state with correct argument names
-        initial_state = make_initial_state(
-            user_id=request.user_id,
-            session_id=request.thread_id,
-            user_query=request.message,
-            user_profile=user_profile,
-            workflow_state=wf_state,
-            workflow_active=wf_active,
-        )
+        # If the Brain raised a clarification interrupt, surface the question.
+        interrupts = final_state.get("__interrupt__") if isinstance(final_state, dict) else None
+        if interrupts:
+            payload = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
+            answer = (payload or {}).get("question", "Could you clarify your request?")
+            intent = "clarification"
+            sources = []
+        else:
+            answer = final_state.get("final_answer") or ""
+            intent = final_state.get("final_intent") or "FINANCIAL_KNOWLEDGE"
+            sources = final_state.get("sources") or []
+            artifacts = final_state.get("artifacts") or []
 
-        final_state = await finassist_graph.ainvoke(initial_state, config=config)
+        # Build observability metadata.
+        token_usage = get_token_usage()
+        evidence = final_state.get("evidence") or [] if isinstance(final_state, dict) else []
+        tools_used = list(dict.fromkeys(e.get("tool") for e in evidence if e.get("tool")))
+        metadata = {
+            "tools_used": tools_used,
+            "iterations": final_state.get("iterations", 0) if isinstance(final_state, dict) else 0,
+            "total_tokens": token_usage.pop("total", 0),
+            "per_tool_token_usage": token_usage,
+        }
 
-        # Retrieve outputs from the final state
-        answer = final_state.get("final_answer") or final_state.get("raw_answer") or ""
-        intent = final_state.get("final_intent") or final_state.get("intent") or "FINANCIAL_KNOWLEDGE"
-        sources = final_state.get("sources") or []
         log_graph_run_end(
             user_id=request.user_id,
             thread_id=request.thread_id,
@@ -376,6 +414,8 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
         answer=answer,
         intent=intent.lower(),  # Convert to lowercase to match expected frontend schema
         sources=sources,
+        artifacts=artifacts,
+        metadata=metadata,
         thread_id=request.thread_id,
         user_id=request.user_id,
     )

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, User, Bot, Paperclip, Loader2 } from 'lucide-react';
 import { cn, formatCurrency } from '../lib/utils';
 import { useAppContext } from '../context/AppContext';
+import { ChatChart } from '../components/ChatChart';
 
 const initialMessages = [
   { 
@@ -55,13 +56,15 @@ export const AIAssistant: React.FC = () => {
       if (!response.ok) throw new Error('API request failed');
 
       const data = await response.json();
-      
+
       const aiMessage = {
         id: Date.now() + 1,
         role: 'ai',
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         text: data.answer || data.response || "I didn't quite catch that.",
-        type: 'text'
+        type: 'text',
+        // Visualization specs returned by the backend (charts to render inline).
+        artifacts: Array.isArray(data.artifacts) ? data.artifacts : [],
       };
 
       setMessages(prev => [...prev, aiMessage]);
@@ -105,6 +108,15 @@ export const AIAssistant: React.FC = () => {
                      m.role === 'user' ? "bg-primary text-white rounded-tr-none text-left" : "bg-surface-container-low rounded-tl-none text-on-surface"
                    )}>
                       <p className="text-sm">{m.text}</p>
+                      {m.role === 'ai' && Array.isArray(m.artifacts) && m.artifacts.length > 0 && (
+                        <div className="mt-1">
+                          {m.artifacts
+                            .filter((a: any) => a && a.type === 'chart')
+                            .map((a: any, i: number) => (
+                              <ChatChart key={i} artifact={a} />
+                            ))}
+                        </div>
+                      )}
                       {m.type === 'card' && m.data && (
                         <div className="mt-4 bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/50 space-y-4">
                           {m.data.map((item: any, i: number) => (

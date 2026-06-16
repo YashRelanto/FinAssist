@@ -19,14 +19,25 @@ def analytics_node(state: AgentState) -> dict:
     A/B differences, and z-score anomaly detection) in pure Python.
     """
     sql_results = state.get("sql_results") or []
-    selected_agent = state.get("selected_agent") or "transaction"
-    resolved_entities = state.get("resolved_entities") or {}
+    analysis_type = state.get("analysis_type") or "basic"
+    brain_task = state.get("brain_task") or {}
+    resolved_entities = brain_task.get("entities") or {}
+    sub_question = brain_task.get("sub_question") or state.get("user_query")
 
     analytics_results = {}
 
     if not sql_results:
         logger.info("[Node:analytics] No SQL results to analyze")
-        return {"analytics_results": {"status": "no_data"}}
+        return {
+            "analytics_results": {"status": "no_data"},
+            "evidence": [{
+                "tool": "nl2sql",
+                "task": sub_question,
+                "summary": "Query returned no rows.",
+                "data": {"rows": [], "analytics": {"status": "no_data"},
+                         "sql_error": state.get("sql_error")},
+            }],
+        }
 
     # Support dict type (e.g. split comparison results)
     if isinstance(sql_results, dict):
@@ -46,7 +57,14 @@ def analytics_node(state: AgentState) -> dict:
             "pct_change": pct_change,
         }
         logger.info("[Node:analytics] Computed dict comparison: A=%f B=%f diff=%f pct=%.2f%%", sum_a, sum_b, diff, pct_change)
-        return {"analytics_results": analytics_results}
+        return {
+            "analytics_results": analytics_results,
+            "evidence": [{
+                "tool": "nl2sql", "task": sub_question,
+                "summary": f"Comparison: A=₹{sum_a:,.2f} vs B=₹{sum_b:,.2f} ({pct_change:+.1f}%).",
+                "data": {"rows": sql_results, "analytics": analytics_results},
+            }],
+        }
 
     # Extract amounts if present in results
     amounts = []
@@ -87,7 +105,7 @@ def analytics_node(state: AgentState) -> dict:
             analytics_results["count"] = len(sql_results)
 
     # ── 1. Trend Calculations ──
-    if selected_agent == "trend":
+    if analysis_type == "trend":
         monthly_data = {}
         for r in sql_results:
             if not isinstance(r, dict):
@@ -120,7 +138,7 @@ def analytics_node(state: AgentState) -> dict:
         logger.info("[Node:analytics] Computed trends for %d periods", len(trend_list))
 
     # ── 2. Comparison Calculations ──
-    elif selected_agent == "comparison":
+    elif analysis_type == "comparison":
         comp_info = resolved_entities.get("comparison") or {}
         targets = comp_info.get("targets") or []
 
@@ -167,7 +185,7 @@ def analytics_node(state: AgentState) -> dict:
             logger.info("[Node:analytics] Computed comparison: A=%s (total=%f) B=%s (total=%f)", target_a, sum_a, target_b, sum_b)
 
     # ── 3. Anomaly Detection ──
-    elif selected_agent == "anomaly":
+    elif analysis_type == "anomaly":
         if amounts and len(amounts) >= 3:
             mean = sum(amounts) / len(amounts)
             variance = sum((x - mean) ** 2 for x in amounts) / len(amounts)
@@ -222,4 +240,24 @@ def analytics_node(state: AgentState) -> dict:
         if merchant_totals:
             analytics_results["merchant_breakdown"] = sorted(merchant_totals.items(), key=lambda x: x[1], reverse=True)
 
-    return {"analytics_results": analytics_results}
+    # Build a compact summary for the Brain's evidence log.
+    summary_bits = []
+    if "total_amount" in analytics_results:
+        summary_bits.append(f"total=₹{analytics_results['total_amount']:,.2f}")
+    if "count" in analytics_results:
+        summary_bits.append(f"count={analytics_results['count']}")
+    if analytics_results.get("trend"):
+        summary_bits.append(f"trend over {len(analytics_results['trend'])} periods")
+    if analytics_results.get("anomalies") is not None:
+        summary_bits.append(f"{len(analytics_results['anomalies'])} anomalies")
+    summary = "NL2SQL: " + (", ".join(summary_bits) if summary_bits else f"{len(sql_results)} rows")
+
+    return {
+        "analytics_results": analytics_results,
+        "evidence": [{
+            "tool": "nl2sql",
+            "task": sub_question,
+            "summary": summary,
+            "data": {"rows": sql_results[:100], "analytics": analytics_results},
+        }],
+    }

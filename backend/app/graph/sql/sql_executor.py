@@ -13,6 +13,37 @@ from app.graph.schema_registry import SCHEMA_REGISTRY
 
 logger = logging.getLogger(__name__)
 
+# Columns that live on the joined `categories` table, not on `transactions`.
+_CATEGORY_COLUMNS = {"main_category", "sub_category"}
+_categories_cache: List[Dict[str, Any]] | None = None
+
+
+def _fetch_categories() -> List[Dict[str, Any]]:
+    """Fetch (and process-cache) the categories table for name→id resolution."""
+    global _categories_cache
+    if _categories_cache is None:
+        try:
+            resp = supabase.table("categories").select("category_id, main_category, sub_category").execute()
+            _categories_cache = resp.data or []
+        except Exception as exc:
+            logger.warning("[SQL Executor] Failed to fetch categories for filter resolution: %s", exc)
+            _categories_cache = []
+    return _categories_cache
+
+
+def _resolve_category_ids(column_short: str, values: Any) -> List[str]:
+    """
+    Map a categories.main_category / sub_category filter value to transactions.category_id
+    values, so the PostgREST fallback can filter on the transactions table directly.
+    """
+    vals = values if isinstance(values, (list, tuple)) else [values]
+    wanted = {str(v).strip().lower() for v in vals if v is not None}
+    return [
+        c["category_id"]
+        for c in _fetch_categories()
+        if str(c.get(column_short) or "").strip().lower() in wanted
+    ]
+
 
 def run_query_builder_fallback(ast: Dict[str, Any], user_id: str) -> List[Dict[str, Any]]:
     """
@@ -60,6 +91,17 @@ def run_query_builder_fallback(ast: Dict[str, Any], user_id: str) -> List[Dict[s
 
         if isinstance(val, str):
             val = val.replace("{{user_id}}", user_id).replace("{user_id}", user_id)
+
+        # Joined `categories` columns can't be filtered on the transactions table via
+        # PostgREST. Translate the category name to transactions.category_id IN (...).
+        if col in _CATEGORY_COLUMNS:
+            cat_ids = _resolve_category_ids(col, val)
+            if cat_ids:
+                query = query.in_("category_id", cat_ids)
+            else:
+                logger.warning("[SQL Executor] No category matched filter %s=%s; returning no rows", col, val)
+                query = query.in_("category_id", ["00000000-0000-0000-0000-000000000000"])
+            continue
 
         if op == "=":
             if isinstance(val, list):

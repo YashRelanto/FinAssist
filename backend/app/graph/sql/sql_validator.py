@@ -125,8 +125,17 @@ def sql_validator(state: AgentState) -> dict:
     is_valid = len(errors) == 0
     if not is_valid:
         logger.error("[Node:sql_validator] Validation failed: %s", errors)
+        # Surface the failure to the Brain as evidence so it can finish gracefully.
+        brain_task = state.get("brain_task") or {}
+        return {
+            "sql_valid": False,
+            "sql_error": "; ".join(errors),
+            "evidence": [{
+                "tool": "nl2sql",
+                "task": brain_task.get("sub_question") or state.get("user_query"),
+                "summary": "SQL validation failed; no data retrieved.",
+                "data": {"validation_errors": errors},
+            }],
+        }
 
-    return {
-        "sql_valid": is_valid,
-        "sql_validation_errors": errors,
-    }
+    return {"sql_valid": True}

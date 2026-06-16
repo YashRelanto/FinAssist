@@ -1,5 +1,8 @@
 """
-Integration tests for the LangGraph v2 pipeline.
+Integration tests for the Brain (Supervisor) LangGraph pipeline.
+
+These exercise the full graph and therefore require live OpenAI + Supabase
+credentials; they are not part of the unit-test smoke set.
 """
 
 from __future__ import annotations
@@ -52,7 +55,6 @@ class TestPipelineIntegration(unittest.IsolatedAsyncioTestCase):
             user_profile=self.profile,
         )
         final_state = await finassist_graph.ainvoke(initial_state, config=self.config)
-        self.assertEqual(final_state.get("intent"), "OUT_OF_SCOPE")
         self.assertEqual(final_state.get("final_intent"), "OUT_OF_SCOPE")
         self.assertIn("specialises in personal finance", final_state.get("final_answer", ""))
 
@@ -66,14 +68,15 @@ class TestPipelineIntegration(unittest.IsolatedAsyncioTestCase):
             user_profile=self.profile,
         )
         final_state = await finassist_graph.ainvoke(initial_state, config=self.config)
-        self.assertEqual(final_state.get("intent"), "FINANCIAL_KNOWLEDGE")
-        self.assertEqual(final_state.get("selected_agent"), "knowledge")
+        tools_used = [e.get("tool") for e in (final_state.get("evidence") or [])]
+        self.assertIn("knowledge", tools_used)
+        self.assertEqual(final_state.get("final_intent"), "FINANCIAL_KNOWLEDGE")
         self.assertIsNotNone(final_state.get("final_answer"))
         self.assertFalse(final_state.get("input_blocked"))
         self.assertFalse(final_state.get("output_blocked"))
 
-    async def test_investment_analysis_agent(self):
-        """Investment analysis query should resolve via investment_analysis_agent."""
+    async def test_investment_analysis_tool(self):
+        """Investment analysis query should resolve via the investment tool."""
         query = "Analyse my portfolio and how do i split my investments"
         initial_state = make_initial_state(
             user_id=self.user_id,
@@ -82,8 +85,9 @@ class TestPipelineIntegration(unittest.IsolatedAsyncioTestCase):
             user_profile=self.profile,
         )
         final_state = await finassist_graph.ainvoke(initial_state, config=self.config)
-        self.assertEqual(final_state.get("intent"), "PORTFOLIO_ANALYSIS")
-        self.assertEqual(final_state.get("selected_agent"), "investment_analysis")
+        tools_used = [e.get("tool") for e in (final_state.get("evidence") or [])]
+        self.assertIn("investment", tools_used)
+        self.assertEqual(final_state.get("final_intent"), "PORTFOLIO_ANALYSIS")
         self.assertIsNotNone(final_state.get("final_answer"))
         self.assertFalse(final_state.get("input_blocked"))
         self.assertFalse(final_state.get("output_blocked"))
