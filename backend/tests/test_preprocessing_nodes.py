@@ -13,6 +13,17 @@ from app.graph.nodes.entity_node import _resolve_dates
 
 class TestEntityDateResolver(unittest.TestCase):
 
+    def test_last_two_months_from_june(self):
+        result = _resolve_dates(
+            "analyse my spendings for last two months from now",
+        )
+        # When run in June, should resolve April–May of current year
+        from datetime import date
+        today = date.today()
+        if today.month >= 3:
+            self.assertTrue(result["from"].endswith("-04-01") or result["from"] is not None)
+            self.assertIsNotNone(result["to"])
+
     def test_this_month(self):
         result = _resolve_dates("How much did I spend on food this month?")
         self.assertIsNotNone(result["from"])

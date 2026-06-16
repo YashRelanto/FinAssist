@@ -9,6 +9,7 @@ import {
   updateStoredUser,
 } from '../lib/authSession';
 import { apiFetch } from '../lib/api';
+import { clearChatSession } from '../lib/chatSession';
 import { activeUserId } from '../lib/activeUserId';
 import {
   type AnalysisPeriod,
@@ -1037,6 +1038,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const signOut = () => {
     clearAuthSession();
+    clearChatSession();
     setUser(initialUser);
     setTransactions([]);
     setGoals([]);

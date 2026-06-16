@@ -3,17 +3,9 @@ import { Send, User, Bot, Loader2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAppContext } from '../context/AppContext';
 import { getOrCreateChatThreadId, sendChatMessage } from '../lib/api';
+import { loadChatSession, saveChatSession, type StoredChatMessage } from '../lib/chatSession';
 
-type ChatMessage = {
-  id: number;
-  role: 'user' | 'ai';
-  time: string;
-  text: string;
-  type: 'text';
-  intent?: string;
-  sources?: string[];
-  clarificationOptions?: string[];
-};
+type ChatMessage = StoredChatMessage;
 
 const initialMessages: ChatMessage[] = [
   {
@@ -27,11 +19,18 @@ const initialMessages: ChatMessage[] = [
 
 export const AIAssistant: React.FC = () => {
   const { user } = useAppContext();
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const userId = user.userId || 'guest-user';
+  const [threadId] = useState(() => getOrCreateChatThreadId());
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    return loadChatSession(userId, threadId) ?? initialMessages;
+  });
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [threadId] = useState(() => getOrCreateChatThreadId());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    saveChatSession(userId, threadId, messages);
+  }, [messages, userId, threadId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -53,7 +52,7 @@ export const AIAssistant: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const data = await sendChatMessage(user.userId || 'guest-user', text.trim(), threadId);
+      const data = await sendChatMessage(userId, text.trim(), threadId);
 
       const aiMessage: ChatMessage = {
         id: Date.now() + 1,

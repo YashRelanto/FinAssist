@@ -1,0 +1,15 @@
+{
+  "model_type": "prophet",
+  "scope": "global",
+  "trained_at": "2026-06-16T06:42:51.134733+00:00",
+  "trained_users": 2,
+  "trained_transactions": 1247,
+  "training_users": 2,
+  "min_months": 6,
+  "test_mape": 0.22231940082602739,
+  "global_months": 12,
+  "complete_months": 12,
+  "bundle_path": "C:\\Users\\SuyashSinghBhadouria\\OneDrive - Relanto\\Desktop\\FinAssistAI\\models\\prophet\\production\\expense_forecast_prophet.joblib",
+  "storage_bucket": "forecast-models",
+  "storage_bundle_key": "production/expense_forecast_prophet.joblib"
+}

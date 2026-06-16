@@ -1,5 +1,0 @@
-{"sessionId": "8a76fb", "hypothesisId": "H1", "location": "tool_runner.py:execute_tool_plan", "message": "sql_query merge", "data": {"sql_query_count": 1, "sql_results_count": 0, "agent_count": 1}, "timestamp": 1781251970883}
-{"sessionId": "8a76fb", "hypothesisId": "H1", "location": "tool_runner.py:execute_tool_plan", "message": "sql_query merge", "data": {"sql_query_count": 0, "sql_results_count": 2, "agent_count": 2}, "timestamp": 1781251970884}
-{"sessionId": "8a76fb", "hypothesisId": "H1", "location": "tool_runner.py:execute_tool_plan", "message": "sql_query merge", "data": {"sql_query_count": 1, "sql_results_count": 0, "agent_count": 1}, "timestamp": 1781252250238}
-{"sessionId": "8a76fb", "hypothesisId": "H1", "location": "tool_runner.py:execute_tool_plan", "message": "sql_query merge", "data": {"sql_query_count": 1, "sql_results_count": 0, "agent_count": 1}, "timestamp": 1781252298586}
-{"sessionId": "8a76fb", "hypothesisId": "H1", "location": "tool_runner.py:execute_tool_plan", "message": "sql_query merge", "data": {"sql_query_count": 0, "sql_results_count": 0, "agent_count": 0}, "timestamp": 1781253017642}

@@ -1,11 +1,15 @@
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.logging_config import configure_logging
 from app.routes import statement_parser, chatbot, api, forecasting, admin, internal
+from app.utils.chroma_store import chroma_db
 import uvicorn
 
 configure_logging()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="FinAssist API")
 
@@ -37,8 +41,14 @@ app.include_router(internal.router)
 
 @app.on_event("startup")
 async def sync_forecast_models_on_startup():
+    # chroma_db import above eagerly loads the embedding model and Chroma collections.
+    logger.info(
+        "Chroma vector store ready (%d collections)",
+        len(chroma_db.list_collections()),
+    )
+
     from app.core.config import settings
-    from app.services.forecast_service import reload_models
+    from app.services.prophet.inference import reload_models
 
     if settings.FORECAST_SYNC_ON_STARTUP and settings.FORECAST_STORAGE_ENABLED:
         reload_models(force_storage_sync=False)

@@ -15,6 +15,37 @@ from app.utils.prompts import BRAIN_AGGREGATION_SYSTEM, BRAIN_AGGREGATION_USER
 logger = logging.getLogger(__name__)
 
 
+def _extract_verified_spending(state: AgentState) -> dict | None:
+    """Pull deterministic spending numbers from agent/analytics results."""
+    analytics = state.get("analytics_results") or {}
+    if analytics.get("detailed_analysis"):
+        return analytics["detailed_analysis"]
+
+    for agent_result in state.get("agent_results") or []:
+        agent_analytics = agent_result.get("analytics_results") or {}
+        if agent_analytics.get("detailed_analysis"):
+            return agent_analytics["detailed_analysis"]
+
+    return None
+
+
+def _attach_verified_numbers(final_context: dict, state: AgentState) -> dict:
+    verified = _extract_verified_spending(state)
+    if verified:
+        final_context["verified_spending_numbers"] = verified
+    analytics = state.get("analytics_results") or {}
+    if analytics and verified is None:
+        final_context["raw_analytics"] = {
+            k: v for k, v in analytics.items()
+            if k in (
+                "total_amount", "average_amount", "count", "trend",
+                "comparison", "category_breakdown", "merchant_breakdown",
+                "analysis_window",
+            )
+        }
+    return final_context
+
+
 def brain_aggregation_node(state: AgentState) -> dict:
     """
     Combines RAG, agent/SQL, and portfolio results into final_context for the answer node.
@@ -62,8 +93,8 @@ def brain_aggregation_node(state: AgentState) -> dict:
                 )},
             ],
             response_format={"type": "json_object"},
-            max_tokens=800,
-            temperature=0.1,
+            max_tokens=1200,
+            temperature=0.0,
         )
         final_context = json.loads(response.choices[0].message.content.strip())
         logger.info("[Node:brain_agg] Aggregated context keys: %s", list(final_context.keys()))
@@ -87,6 +118,8 @@ def brain_aggregation_node(state: AgentState) -> dict:
             if semantic_context.get("analysis_required")
             else "general",
         }
+
+    final_context = _attach_verified_numbers(final_context, state)
 
     metadata = dict(state.get("metadata") or {})
     if final_context.get("contradictions_resolved"):

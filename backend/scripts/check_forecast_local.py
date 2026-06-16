@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.services.forecast_service import generate_forecast, get_model_status, reload_models  # noqa: E402
+from app.services.prophet.inference import generate_forecast, get_model_status, reload_models  # noqa: E402
 from app.utils.supabase_client import supabase  # noqa: E402
 
 
@@ -56,7 +56,7 @@ def main() -> int:
             print(f"    -> forecast success={ok} predicted_next_month={pred} message={msg}")
 
         if has_model:
-            from app.services.forecast_features import expenses_to_weekly
+            from app.services.prophet.features import expenses_to_weekly
             import pandas as pd
 
             if txs:

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
-from app.services.prophet_training_service import (
+from app.services.prophet.paths import (
     BUNDLE_FILENAME,
     PRODUCTION_BUNDLE_PATH,
     PRODUCTION_MANIFEST_PATH,
@@ -30,7 +30,6 @@ def _storage_client():
 
 
 def ensure_forecast_bucket() -> str:
-    """Create the private forecast-models bucket if it does not exist."""
     bucket = settings.FORECAST_STORAGE_BUCKET
     client = _storage_client()
     try:
@@ -53,13 +52,11 @@ def upload_production_artifacts(
     bundle_path: Path = PRODUCTION_BUNDLE_PATH,
     manifest_path: Path = PRODUCTION_MANIFEST_PATH,
 ) -> dict[str, str]:
-    """Publish local production artifacts to Supabase Storage."""
     if not bundle_path.is_file():
         raise FileNotFoundError(f"Production bundle missing: {bundle_path}")
 
     bucket = ensure_forecast_bucket()
-    client = _storage_client()
-    storage = client.storage.from_(bucket)
+    storage = _storage_client().storage.from_(bucket)
 
     with bundle_path.open("rb") as handle:
         storage.upload(
@@ -72,12 +69,11 @@ def upload_production_artifacts(
             },
         )
 
-    manifest_bytes: bytes
-    if manifest_path.is_file():
-        manifest_bytes = manifest_path.read_bytes()
-    else:
-        manifest_bytes = json.dumps({"bundle": STORAGE_BUNDLE_KEY}).encode("utf-8")
-
+    manifest_bytes = (
+        manifest_path.read_bytes()
+        if manifest_path.is_file()
+        else json.dumps({"bundle": STORAGE_BUNDLE_KEY}).encode("utf-8")
+    )
     storage.upload(
         STORAGE_MANIFEST_KEY,
         manifest_bytes,
@@ -88,11 +84,7 @@ def upload_production_artifacts(
         },
     )
 
-    logger.info(
-        "Uploaded forecast models to storage://%s/%s",
-        bucket,
-        STORAGE_BUNDLE_KEY,
-    )
+    logger.info("Uploaded forecast models to storage://%s/%s", bucket, STORAGE_BUNDLE_KEY)
     return {
         "bucket": bucket,
         "bundle_key": STORAGE_BUNDLE_KEY,
@@ -105,11 +97,8 @@ def download_production_artifacts(
     bundle_path: Path = PRODUCTION_BUNDLE_PATH,
     manifest_path: Path = PRODUCTION_MANIFEST_PATH,
 ) -> dict[str, Any]:
-    """Download production artifacts from Supabase Storage to local cache."""
     bucket = settings.FORECAST_STORAGE_BUCKET
-    client = _storage_client()
-    storage = client.storage.from_(bucket)
-
+    storage = _storage_client().storage.from_(bucket)
     bundle_path.parent.mkdir(parents=True, exist_ok=True)
 
     bundle_bytes = storage.download(STORAGE_BUNDLE_KEY)
@@ -134,11 +123,9 @@ def download_production_artifacts(
 
 
 def storage_manifest() -> dict[str, Any]:
-    """Read manifest.json from storage without downloading the full bundle."""
     bucket = settings.FORECAST_STORAGE_BUCKET
-    client = _storage_client()
     try:
-        raw = client.storage.from_(bucket).download(STORAGE_MANIFEST_KEY)
+        raw = _storage_client().storage.from_(bucket).download(STORAGE_MANIFEST_KEY)
         return json.loads(raw.decode("utf-8"))
     except Exception:
         return {}
@@ -150,21 +137,11 @@ def _is_storage_not_found(exc: Exception) -> bool:
 
 
 def sync_production_from_storage(force: bool = False) -> bool:
-    """
-    Download production bundle from storage when local cache is missing or stale.
-    Returns True if a download occurred.
-    """
     if not settings.FORECAST_STORAGE_ENABLED:
         return False
 
     remote = storage_manifest()
     if not remote:
-        if PRODUCTION_BUNDLE_PATH.is_file():
-            logger.debug("No remote forecast manifest; local production bundle present")
-        elif force:
-            logger.info(
-                "No forecast models in Supabase Storage yet; using local bundle if available"
-            )
         return False
 
     local_trained_at = None
@@ -177,11 +154,7 @@ def sync_production_from_storage(force: bool = False) -> bool:
 
     remote_trained_at = remote.get("trained_at")
     local_missing = not PRODUCTION_BUNDLE_PATH.is_file()
-    stale = (
-        remote_trained_at
-        and local_trained_at
-        and remote_trained_at > local_trained_at
-    )
+    stale = remote_trained_at and local_trained_at and remote_trained_at > local_trained_at
 
     if not (force or local_missing or stale):
         return False
@@ -191,9 +164,7 @@ def sync_production_from_storage(force: bool = False) -> bool:
         return True
     except Exception as exc:
         if _is_storage_not_found(exc):
-            logger.info(
-                "Forecast model not in Supabase Storage yet; using local bundle if available"
-            )
+            logger.info("Forecast model not in Supabase Storage yet; using local bundle if available")
         else:
             logger.warning("Storage sync failed: %s", exc)
         return False

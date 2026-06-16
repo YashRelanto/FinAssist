@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.services.model_storage_service import ensure_forecast_bucket  # noqa: E402
+from app.services.prophet.storage import ensure_forecast_bucket  # noqa: E402
 
 
 def main() -> int:

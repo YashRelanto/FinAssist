@@ -17,6 +17,8 @@ from typing_extensions import TypedDict
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph.message import add_messages
 
+from app.utils.temporal_context import get_time_context
+
 
 class AgentState(TypedDict, total=False):
     """
@@ -206,5 +208,5 @@ def make_initial_state(
         output_blocked=False,
 
         # Observability
-        metadata={"start_time": time.time()},
+        metadata={"start_time": time.time(), "time_context": get_time_context()},
     )

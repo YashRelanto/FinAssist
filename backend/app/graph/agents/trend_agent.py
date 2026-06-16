@@ -10,6 +10,7 @@ import logging
 from app.core.config import settings
 from app.graph.logging_utils import graph_chat_completion
 from app.graph.state import AgentState
+from app.graph.agents._sql_prompt import sql_prompt_kwargs
 from app.utils.prompts import SQL_GENERATION_SYSTEM, SQL_GENERATION_USER
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,8 @@ def trend_agent(state: AgentState) -> dict:
     query = state.get("rewritten_query") or state.get("user_query") or ""
     intent = state.get("intent") or "TREND_ANALYSIS"
     entities = state.get("resolved_entities") or state.get("entities") or {}
+    time_ctx = sql_prompt_kwargs()
+    date_range = entities.get("date_range") or {}
 
     metric = (entities.get("metric") or "").lower()
     tx_type = entities.get("transaction_type")
@@ -31,13 +34,26 @@ def trend_agent(state: AgentState) -> dict:
     elif metric in ("savings", "saving"):
         trend_focus = "savings"
 
+    dr_from = date_range.get("from")
+    dr_to = date_range.get("to")
+    if dr_from and dr_to:
+        window_clause = (
+            f"ONLY include transactions where transaction_date is between "
+            f"{dr_from} and {dr_to} inclusive. Group by calendar month within that window."
+        )
+    else:
+        window_clause = (
+            f"Include the last 6 complete calendar months ending before {time_ctx['current_date']}. "
+            "Group by calendar month."
+        )
+
     agent_instructions = (
-        f"Generate a single SQL AST for {trend_focus} trend analysis grouped by month "
-        "over the last 6-12 months. "
+        f"Generate a single SQL AST for {trend_focus} trend analysis grouped by month. "
+        f"{window_clause} "
         f"Filter transaction_type to {'income' if trend_focus == 'income' else 'expense'} "
         f"when analyzing {trend_focus} trends. "
         "For savings trends, return both income and expense rows so analytics can compute net savings. "
-        "Select transaction_date and amount; group by month when possible. "
+        "Select transaction_date and amount. "
         "Always enforce filtering by user_id using '{{user_id}}'."
     )
 
@@ -47,12 +63,13 @@ def trend_agent(state: AgentState) -> dict:
             purpose="trend_sql_ast_generation",
             model=settings.active_chat_model,
             messages=[
-                {"role": "system", "content": SQL_GENERATION_SYSTEM},
+                {"role": "system", "content": SQL_GENERATION_SYSTEM.format(**time_ctx)},
                 {"role": "user", "content": SQL_GENERATION_USER.format(
                     query=query,
                     intent=intent,
                     entities=json.dumps(entities),
                     agent_instructions=agent_instructions,
+                    **time_ctx,
                 )},
             ],
             response_format={"type": "json_object"},

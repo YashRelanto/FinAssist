@@ -2,11 +2,7 @@ from datetime import date, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.services.forecast_service import (
-    generate_forecast,
-    get_model_status,
-    reload_models,
-)
+from app.services.prophet.inference import generate_forecast, get_model_status, reload_models
 from app.utils.analysis_period import DEFAULT_PERIOD, normalize_period
 from app.utils.supabase_client import supabase
 
@@ -42,7 +38,7 @@ async def get_forecast(
         if category_id:
             tx_query = tx_query.eq("category_id", category_id)
         if merchant:
-            # Best-effort DB-side filter; forecast_service will also apply a contains filter.
+            # Best-effort DB-side filter; inference layer also applies a contains filter.
             tx_query = tx_query.ilike("merchant_name", f"%{merchant}%")
 
         trans_res = tx_query.execute()

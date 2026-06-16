@@ -10,6 +10,7 @@ import logging
 from app.core.config import settings
 from app.graph.logging_utils import graph_chat_completion
 from app.graph.state import AgentState
+from app.graph.agents._sql_prompt import sql_prompt_kwargs
 from app.utils.prompts import SQL_GENERATION_SYSTEM, SQL_GENERATION_USER
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ def transaction_agent(state: AgentState) -> dict:
     query = state.get("rewritten_query") or state.get("user_query") or ""
     intent = state.get("intent") or "TRANSACTION_QUERY"
     entities = state.get("resolved_entities") or state.get("entities") or {}
+    time_ctx = sql_prompt_kwargs()
 
     agent_instructions = (
         "Generate a single SQL AST to retrieve the requested transactions or aggregates "
@@ -36,12 +38,13 @@ def transaction_agent(state: AgentState) -> dict:
             purpose="sql_ast_generation",
             model=settings.active_chat_model,
             messages=[
-                {"role": "system", "content": SQL_GENERATION_SYSTEM},
+                {"role": "system", "content": SQL_GENERATION_SYSTEM.format(**time_ctx)},
                 {"role": "user", "content": SQL_GENERATION_USER.format(
                     query=query,
                     intent=intent,
                     entities=json.dumps(entities),
                     agent_instructions=agent_instructions,
+                    **time_ctx,
                 )},
             ],
             response_format={"type": "json_object"},

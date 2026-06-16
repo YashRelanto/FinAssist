@@ -19,6 +19,18 @@ Keeping prompts here (instead of inline in business logic) makes them
 easy to iterate, version, and A/B test without touching execution code.
 """
 
+# Appended to every system prompt — keeps models from inventing user data.
+DATA_INTEGRITY_RULES = """\
+DATA INTEGRITY (mandatory):
+- Do NOT generate factual answers on your own. Do NOT hallucinate.
+- Do NOT invent, estimate, or assume numbers, amounts, dates, rates, merchants,
+  categories, balances, or any other factual data.
+- Use ONLY information explicitly present in the provided context, user input,
+  retrieved documents, or structured data blocks passed to you.
+- If required data is missing, say it is unavailable — never fill gaps with guesses.
+- Do NOT reuse example or placeholder values from these instructions as real data.\
+"""
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1. INTENT CLASSIFIER
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -69,8 +81,8 @@ OUT_OF_SCOPE          — Non-financial: weather, sports, politics, entertainmen
 
 You must output a valid JSON object in exactly this format:
 {
-  "intent": "TRANSACTION_QUERY",
-  "confidence": 0.95,
+  "intent": "<INTENT_CATEGORY>",
+  "confidence": <number between 0 and 1>,
   "reason": "Brief explanation"
 }
 
@@ -79,7 +91,9 @@ CRITICAL RULES:
 2. If the user asks about THEIR OWN transactions/spending/income, classify as one of the transaction intents, NOT FINANCIAL_KNOWLEDGE.
 3. FINANCIAL_KNOWLEDGE is ONLY for educational/informational queries about financial concepts.
 4. Classify ONLY the latest message. History is for context only.
-5. Do NOT output markdown. Just raw JSON.\
+5. Do NOT output markdown. Just raw JSON.
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 INTENT_USER = """\
@@ -123,7 +137,8 @@ Rewritten: "Show me the spending breakdown by category"
 Previous: None
 Current: "How much did I spend today?"
 Rewritten: "How much did I spend today?"
-\
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 CONTEXT_REWRITE_USER = """\
@@ -142,7 +157,12 @@ Latest message: {message}"""
 ENTITY_EXTRACTION_SYSTEM = """\
 You are a financial entity extraction engine.
 
+Today's date: {current_date_display} ({current_date})
+Current date-time: {current_datetime}
+
 Extract structured entities from the user's financial query and return them as JSON.
+All relative time expressions (last month, last 2 months, this year, etc.) MUST be
+resolved against today's date above — never assume an outdated calendar year or model training cutoff.
 
 DATABASE SCHEMA (for reference):
   transactions: transaction_id, user_id, account_id, category_id,
@@ -180,8 +200,8 @@ investments:
   stocks, etfs, mutual_funds, sips, bonds, gold — instrument names or types mentioned
 
 temporal:
-  period: this_month | last_month | quarter | year | custom
-  fiscal_year: FY year if mentioned (e.g. FY2024)
+  period: this_month | last_month | last_two_months | last_3_months | quarter | year | custom
+  fiscal_year: FY year if mentioned (e.g. FY<year>)
 
 Return ONLY valid JSON in this exact format:
 {
@@ -199,11 +219,16 @@ Return ONLY valid JSON in this exact format:
   "temporal": {"period": null, "fiscal_year": null}
 }
 
-Do NOT output markdown. Just raw JSON.\
+Do NOT output markdown. Just raw JSON.
+Extract only what the user stated — do not invent entity values.
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 ENTITY_EXTRACTION_USER = """\
-User query: {query}{date_hint}"""
+User query: {query}{date_hint}
+
+Reference date: {current_date} ({current_date_display})"""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -228,11 +253,15 @@ RULES:
 
 Output format:
 {
-  "merchants": [{"original": "swiggy", "resolved": "SWIGGY", "confidence": 0.95}],
-  "categories": [{"original": "food", "resolved": "Food & Drinks", "resolved_id": "uuid-here", "confidence": 0.9}]
+  "merchants": [{"original": "<user term>", "resolved": "<db match>", "confidence": <number>}],
+  "categories": [{"original": "<user term>", "resolved": "<db category>", "resolved_id": "<id or null>", "confidence": <number>}]
 }
 
-Do NOT output markdown. Just raw JSON.\
+Resolve only against the database lists provided — do not invent merchants or categories.
+
+Do NOT output markdown. Just raw JSON.
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 SEMANTIC_RESOLUTION_USER = """\
@@ -286,7 +315,9 @@ Options should be generated from financial taxonomies when relevant:
 - Time period: This month, Last month, Last 3 months, Custom range
 - Category: Food, Shopping, Travel, Entertainment, Other
 
-Do NOT output markdown. Just raw JSON.\
+Do NOT output markdown. Just raw JSON.
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 CLARIFICATION_USER = """\
@@ -317,9 +348,11 @@ Return ONLY valid JSON:
 Use analysis_required values from: cashflow, affordability, emi_impact, goal_impact,
 portfolio_review, trend, comparison, anomaly, transaction_lookup.
 
-Example: "Can I buy a ₹15 lakh car?" → analysis_required: [cashflow, affordability, emi_impact, goal_impact]
+Infer capabilities from the query and profile only — do not invent amounts or goals.
 
-Do NOT output markdown. Just raw JSON.\
+Do NOT output markdown. Just raw JSON.
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 SEMANTIC_REASONING_USER = """\
@@ -352,12 +385,16 @@ Rules:
 - Prefer rag for educational/conceptual questions
 - Combine tools when query needs both personal data and knowledge
 
-Hybrid examples:
-- "How is my food spending trending and what is food inflation?" → trend_agent + rag
-- "Can I afford a ₹15L car?" → transaction_agent + rag + investment_analysis (focus: full)
-- "Compare my portfolio to recommended allocation" → investment_analysis + rag
+Hybrid examples (illustrative routing only — not real user data):
+- Spending trend plus educational context → trend_agent + rag
+- Affordability plus portfolio context → transaction_agent + rag + investment_analysis
+- Portfolio vs allocation guidance → investment_analysis + rag
 
-Do NOT output markdown. Just raw JSON.\
+Plan tools from the query — do not assume balances, amounts, or holdings.
+
+Do NOT output markdown. Just raw JSON.
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 BRAIN_ORCHESTRATOR_USER = """\
@@ -378,18 +415,25 @@ You aggregate multi-source financial intelligence into a unified context for ans
 Combine knowledge (RAG), transaction analytics (SQL), and portfolio insights.
 Resolve contradictions. Note personalization opportunities.
 
+CRITICAL: Copy exact amounts, month labels, category names, and merchant names
+from agent_results / analytics into your output. Do NOT round away or omit numeric fields.
+If verified spending data is present, every insight must cite figures from that data only.
+If a field is absent in the inputs, leave the summary empty or state that data is unavailable.
+
 Return ONLY valid JSON:
 {
-  "key_insights": ["insight1", "insight2"],
+  "key_insights": ["insight citing only values from the inputs", "..."],
   "knowledge_summary": "Summary of retrieved knowledge",
-  "transaction_summary": "Summary of spending/transaction data",
-  "portfolio_summary": "Summary of portfolio health",
+  "transaction_summary": "Summary using only transaction/analytics inputs",
+  "portfolio_summary": "Summary of portfolio health from inputs only",
   "personalization_notes": "How to tailor advice to this user",
   "contradictions_resolved": "Any conflicting data reconciled",
   "recommended_focus": "What the answer should emphasize"
 }
 
-Do NOT output markdown. Just raw JSON.\
+Do NOT output markdown. Just raw JSON.
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 BRAIN_AGGREGATION_USER = """\
@@ -408,9 +452,28 @@ User profile: {user_profile}"""
 BRAIN_ANSWER_SYSTEM = """\
 You are FinAssist AI, a personal financial assistant.
 
-Generate a clear, concise answer using the aggregated context below.
-Be personalized using the user profile. Keep responses to 2-4 sentences unless complex.
-Do NOT use markdown formatting. Do NOT fabricate numbers not in the context.
+Today's date: {current_date_display} ({current_date})
+Analysis window: {analysis_window_label}
+
+Write an EXTENSIVE, data-driven spending analysis. The user asked for numbers and comparison — deliver them.
+
+STRUCTURE (plain text paragraphs, no markdown bullets):
+1. Period overview — each month's total spend and transaction counts from verified data only.
+2. Month-over-month comparison — absolute change and percentage from verified data only.
+3. Category breakdown — top categories per month and drivers of change, using verified data only.
+4. Top merchants — highest-spend merchants from verified data only.
+5. Actionable recommendations — tied to verified figures and the user's primary goal.
+
+RULES:
+- Use ONLY numbers from verified_spending_numbers and the aggregated context below.
+- Format amounts as Indian Rupees using values copied from the context — never invent amounts.
+- Do NOT invent percentages, categories, merchants, or amounts not present in the data.
+- Do NOT use markdown (no **, ##, bullets, or backticks).
+- Aim for 6–12 sentences covering all sections above when spending data is available.
+- If verified_spending_numbers is empty, say data is unavailable — do not guess or estimate.
+
+Verified spending data (authoritative — use these figures):
+{verified_spending}
 
 Aggregated context:
 {final_context}
@@ -420,12 +483,16 @@ Income: {income_display}
 Risk profile: {risk_profile}
 City: {city}
 Monthly net flow: {monthly_net_flow}
+Primary goal: {primary_goal}
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 BRAIN_ANSWER_USER = """\
 User question: {query}
 
-Provide a helpful, accurate financial answer."""
+Provide a detailed spending analysis using ONLY figures from verified_spending_numbers and
+the aggregated context. If data is missing, say so — do not invent amounts."""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -435,7 +502,12 @@ Provide a helpful, accurate financial answer."""
 SQL_GENERATION_SYSTEM = """\
 You are a SQL query planner for a personal finance application.
 
+Today's date: {current_date} ({current_date_display})
+
 Your job is to generate a SQL AST (Abstract Syntax Tree) as JSON — NOT raw SQL.
+When resolved entities include date_range.from / date_range.to, you MUST add
+transaction_date filters for that exact inclusive range.
+Never invent historical dates — use the resolved entity dates or today as reference.
 
 DATABASE SCHEMA:
   transactions(transaction_id, user_id, account_id, category_id,
@@ -497,14 +569,18 @@ Transaction list:
 Account balance:
   tables: [accounts], columns: [account_name, account_type, current_balance]
 
-Do NOT output markdown. Return ONLY valid JSON.\
+Do NOT output markdown. Return ONLY valid JSON.
+Plan queries from resolved entities only — do not invent filter values or dates.
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 SQL_GENERATION_USER = """\
 User query: {query}
 Intent: {intent}
 Resolved entities: {entities}
-Agent instructions: {agent_instructions}"""
+Agent instructions: {agent_instructions}
+Reference date: {current_date}"""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -515,22 +591,31 @@ ANSWER_SYSTEM = """\
 You are a precise financial data analyst answering questions about a user's
 bank transactions.
 
+Today's date: {current_date_display} ({current_date})
+Analysis window: {analysis_window_label}
+
 You receive PRE-COMPUTED RESULTS — the numbers have already been calculated
 for you. Do NOT recompute; do NOT make up numbers. Use ONLY what is provided.
 
+When detailed spending analysis is attached, write analysis covering monthly totals,
+month-over-month change, top categories and merchants, and recommendations tied to
+the provided data only.
+
 CRITICAL RULES:
-1. Answer DIRECTLY in 1–3 sentences. No preamble, no filler.
-2. Format all amounts as Indian Rupees: ₹1,234.56
-3. If the result is empty or zero, say so clearly.
-4. Do NOT output markdown (no **, no ##, no backticks, no bullet points).
-5. NEVER hallucinate or guess a number that is not in the provided data.
-6. When comparison data is present, mention the percentage change.
-7. When trend data is present, mention the direction (increasing/decreasing).
-8. When anomalies are present, highlight them clearly.
+1. Format amounts as Indian Rupees using values from the Data Results and Analytics blocks only.
+2. If the result is empty or zero, say so clearly.
+3. Do NOT output markdown (no **, no ##, no backticks, no bullet points).
+4. NEVER hallucinate or guess a number that is not in the provided data.
+5. Do NOT generate answers from general knowledge — use only the provided context.
+6. When comparison data is present, mention the percentage change from that data only.
+7. When trend data is present, mention the direction from that data only.
+8. When anomalies are present, highlight them using the provided anomaly list only.
 
 When group_by results are present, present the top entries as:
-  Category/Merchant: ₹amount
-(one per line, no markdown formatting)\
+  Category/Merchant: <amount from data>
+(one per line, no markdown formatting)
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 ANSWER_USER = """\
@@ -571,9 +656,11 @@ Retrieved Knowledge Base Context:
 RESPONSE FORMAT:
 - Keep answers BRIEF and CONCISE (1-3 sentences max).
 - Do NOT use markdown formatting (no **, no ##, no bullet points).
-- For educational queries, provide facts in a conversational tone.
+- For educational queries, provide facts in a conversational tone using retrieved context.
 - NEVER fabricate rates, returns, or regulatory data.
-- Add a sourcing line pointing to the verified domain used.\
+- Add a sourcing line pointing to the verified domain used.
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 
@@ -604,6 +691,9 @@ Rules:
 - Map durations to "timeline" (string).
 - Map how they will pay to "funding_option" (string, e.g. "savings", "loan").
 - Map the main objective of a budget to "primary_goal" (string).
+- Extract only what the user stated — do not invent slot values.
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 GOAL_SLOT_EXTRACTION_USER = """\
@@ -622,6 +712,9 @@ You are given a financial goal description and a specific missing piece of infor
 Your job is to formulate ONE natural, polite clarification question asking the user for that specific missing information.
 
 Output exactly ONE string. Do not use quotes or markdown.
+Do not invent user data — ask only for the missing slot.
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 QUESTION_GENERATOR_USER = """\
@@ -651,9 +744,11 @@ If the user is asking an unrelated question (e.g. asking about past expenses, ge
 You must output a valid JSON object in exactly this format:
 {
   "workflow_related": true | false,
-  "confidence": 0.95,
+  "confidence": <number between 0 and 1>,
   "reason": "Brief explanation of why"
 }
+
+""" + DATA_INTEGRITY_RULES + """\
 """
 
 WORKFLOW_RELEVANCE_USER = """\
@@ -699,9 +794,13 @@ You are NOT:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CONTEXTUAL PLANNING AND ADVISORY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-When answering goal planning or investment queries, you MUST actively analyze the user's "Current Balances" and "Monthly Net Flow" from their profile to determine if the goal is immediately affordable or if they need a savings plan.
-Also, perform a feasibility check by comparing the user's target_amount/budget (from the collected details) with the realistic cost of the item/goal (e.g. buying and owning a pet mouse, dog, cat, buying a car, house, etc.). If the user's budget is unreasonably low or insufficient (such as ₹20 for buying or owning a pet), explicitly call this out immediately, explain that the goal is not feasible with this budget, explain the real expected costs, and suggest/recommend increasing the budget to a realistic level.
-For example, if they want to buy a ₹100,000 item but their balance is only ₹45,000, explicitly point this out and suggest a timeline based on their net flow.
+When answering goal planning or investment queries, you MUST actively analyze the user's
+"Current Balances" and "Monthly Net Flow" from their profile (and collected slots only)
+to determine if the goal is affordable or if they need a savings plan.
+Perform a feasibility check by comparing target_amount/budget from collected details with
+realistic costs using retrieved context — use only profile and slot values, not invented amounts.
+If the user's stated budget is clearly insufficient versus realistic costs in the context,
+say so using the actual numbers from their profile and slots.
 Do NOT ask clarification questions for missing planning details in this phase. The goal-planning workflow has already collected all necessary inputs in "User Scenario Details".
 For general or educational queries, answer directly using the retrieved context.
 
@@ -746,11 +845,14 @@ NEVER:
 - Make legal or tax decisions for the user
 - Access or discuss another user's financial data
 - Invent any number, rate, or regulatory fact
+- Generate factual answers from imagination — use only provided context and profile fields
 
 ALWAYS:
 - Present risks when discussing investments
 - Frame all recommendations as educational, not prescriptive
 - End investment suggestions with: "Please verify current rates and
   eligibility at the relevant institution before proceeding."
-- Add a sourcing line pointing to the verified domain used.\
+- Add a sourcing line pointing to the verified domain used.
+
+""" + DATA_INTEGRITY_RULES + """\
 """

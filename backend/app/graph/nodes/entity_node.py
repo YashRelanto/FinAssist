@@ -19,6 +19,12 @@ from app.core.config import settings
 from app.graph.logging_utils import graph_chat_completion
 from app.graph.state import AgentState
 from app.utils.prompts import ENTITY_EXTRACTION_SYSTEM, ENTITY_EXTRACTION_USER
+from app.utils.temporal_context import (
+    analysis_window_from_range,
+    get_time_context,
+    resolve_period_token,
+    resolve_relative_dates_from_query,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +65,10 @@ def _resolve_dates(question: str) -> Dict[str, Optional[str]]:
     if "this week" in q:
         monday = today - timedelta(days=today.weekday())
         return {"from": monday.isoformat(), "to": today.isoformat()}
+
+    relative_months = resolve_relative_dates_from_query(question, reference=today)
+    if relative_months["from"] and relative_months["to"]:
+        return relative_months
 
     if "last month" in q:
         first_this = today.replace(day=1)
@@ -135,14 +145,18 @@ def entity_node(state: AgentState) -> dict:
 
     # Step 1: Resolve dates in pure Python
     resolved_dates = _resolve_dates(query)
+    time_ctx = get_time_context()
 
-    # Build date hint for LLM
-    date_hint = ""
+    # Build date hint for LLM — always include today's date
+    date_hint = (
+        f"\n\n[TIME CONTEXT: Today is {time_ctx['current_date_display']} "
+        f"({time_ctx['current_date']}). All relative dates must be computed from this date. "
+        f"Do not assume 2024 or any stale year unless the user explicitly names it.]"
+    )
     if resolved_dates["from"] or resolved_dates["to"]:
-        date_hint = (
-            f"\n\n[SYSTEM NOTE — pre-resolved dates: "
-            f"from={resolved_dates['from']}, to={resolved_dates['to']}. "
-            f"Use these exact values in date_range fields.]"
+        date_hint += (
+            f"\n[PRE-RESOLVED date_range: from={resolved_dates['from']}, "
+            f"to={resolved_dates['to']}. Use these exact values.]"
         )
 
     # Step 2: LLM extraction
@@ -152,9 +166,9 @@ def entity_node(state: AgentState) -> dict:
             purpose="entity_extraction",
             model=settings.active_chat_model,
             messages=[
-                {"role": "system", "content": ENTITY_EXTRACTION_SYSTEM},
+                {"role": "system", "content": ENTITY_EXTRACTION_SYSTEM.format(**time_ctx)},
                 {"role": "user", "content": ENTITY_EXTRACTION_USER.format(
-                    query=query, date_hint=date_hint)},
+                    query=query, date_hint=date_hint, **time_ctx)},
             ],
             response_format={"type": "json_object"},
             max_tokens=300,
@@ -163,7 +177,15 @@ def entity_node(state: AgentState) -> dict:
         raw = response.choices[0].message.content.strip()
         entities = json.loads(raw)
 
-        # Step 3: Python dates override LLM
+        # Step 3: Resolve temporal.period tokens (e.g. last_two_months) if needed
+        temporal = entities.get("temporal") or {}
+        period_token = temporal.get("period")
+        if period_token and not (resolved_dates["from"] and resolved_dates["to"]):
+            token_dates = resolve_period_token(period_token)
+            if token_dates.get("from") and token_dates.get("to"):
+                resolved_dates = token_dates
+
+        # Python-resolved dates always override LLM hallucinations
         if resolved_dates["from"]:
             entities.setdefault("date_range", {})["from"] = resolved_dates["from"]
         if resolved_dates["to"]:
@@ -199,5 +221,9 @@ def entity_node(state: AgentState) -> dict:
 
     metadata = dict(state.get("metadata") or {})
     metadata["last_entities"] = entities
+    metadata["time_context"] = time_ctx
+    metadata["analysis_window"] = analysis_window_from_range(
+        entities.get("date_range") if isinstance(entities, dict) else None
+    )
     return {"entities": entities, "metadata": metadata}
 
