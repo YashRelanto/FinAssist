@@ -47,7 +47,7 @@ def context_node(state: AgentState) -> dict:
     # If no history, skip rewriting
     if not history_lines:
         logger.info("[Node:context] No history — using original query")
-        return {"rewritten_query": message}
+        return {"rewritten_query": message, "standalone_query": message}
 
     try:
         response = graph_chat_completion(
@@ -77,8 +77,8 @@ def context_node(state: AgentState) -> dict:
             rewritten = message
             logger.info("[Node:context] No rewrite needed")
 
-        return {"rewritten_query": rewritten}
+        return {"rewritten_query": rewritten, "standalone_query": rewritten}
 
     except Exception as exc:
         logger.error("[Node:context] Rewrite failed: %s — using original", exc)
-        return {"rewritten_query": message}
+        return {"rewritten_query": message, "standalone_query": message}

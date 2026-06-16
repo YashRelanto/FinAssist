@@ -20,3 +20,43 @@ export async function apiFetch(
     headers,
   });
 }
+
+export interface ChatMessageResponse {
+  answer: string;
+  intent: string;
+  sources: string[];
+  needs_clarification: boolean;
+  clarification_options: string[];
+  thread_id: string;
+  user_id: string;
+}
+
+export async function sendChatMessage(
+  userId: string,
+  message: string,
+  threadId: string
+): Promise<ChatMessageResponse> {
+  const response = await apiFetch('/api/chat/message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: userId,
+      message,
+      thread_id: threadId,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Chat API failed (${response.status})`);
+  }
+  return response.json();
+}
+
+const THREAD_STORAGE_KEY = 'finassist_chat_thread_id';
+
+export function getOrCreateChatThreadId(): string {
+  const existing = sessionStorage.getItem(THREAD_STORAGE_KEY);
+  if (existing) return existing;
+  const id = crypto.randomUUID();
+  sessionStorage.setItem(THREAD_STORAGE_KEY, id);
+  return id;
+}

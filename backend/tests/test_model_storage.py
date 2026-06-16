@@ -6,9 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
-from app.services import model_storage_service as ms
+from app.services.prophet import storage as storage_mod
 
 
 def test_upload_production_artifacts_calls_storage(monkeypatch, tmp_path):
@@ -20,10 +18,10 @@ def test_upload_production_artifacts_calls_storage(monkeypatch, tmp_path):
     mock_storage = MagicMock()
     mock_client = MagicMock()
     mock_client.storage.from_.return_value = mock_storage
-    monkeypatch.setattr(ms, "_storage_client", lambda: mock_client)
-    monkeypatch.setattr(ms, "ensure_forecast_bucket", lambda: "forecast-models")
+    monkeypatch.setattr(storage_mod, "_storage_client", lambda: mock_client)
+    monkeypatch.setattr(storage_mod, "ensure_forecast_bucket", lambda: "forecast-models")
 
-    refs = ms.upload_production_artifacts(bundle_path=bundle, manifest_path=manifest)
+    refs = storage_mod.upload_production_artifacts(bundle_path=bundle, manifest_path=manifest)
     assert refs["bucket"] == "forecast-models"
     assert mock_storage.upload.call_count == 2
 
@@ -39,8 +37,8 @@ def test_download_production_artifacts_writes_local(monkeypatch, tmp_path):
     ]
     mock_client = MagicMock()
     mock_client.storage.from_.return_value = mock_storage
-    monkeypatch.setattr(ms, "_storage_client", lambda: mock_client)
+    monkeypatch.setattr(storage_mod, "_storage_client", lambda: mock_client)
 
-    result = ms.download_production_artifacts(bundle_path=bundle, manifest_path=manifest)
+    result = storage_mod.download_production_artifacts(bundle_path=bundle, manifest_path=manifest)
     assert bundle.read_bytes() == b"model-bytes"
     assert result["manifest"]["trained_at"] == "2026-01-02"

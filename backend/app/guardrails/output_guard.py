@@ -4,11 +4,23 @@ from .pii_masking import PIIMasker
 
 logger = logging.getLogger(__name__)
 
+INVESTMENT_DISCLAIMER = (
+    "\n\n---\n"
+    "Disclaimer: This is general financial information, not SEBI-registered investment advice. "
+    "Consult a qualified advisor before making investment decisions."
+)
+
+INVESTMENT_KEYWORDS = (
+    "invest", "portfolio", "mutual fund", "sip", "stock", "equity",
+    "rebalance", "asset allocation", "cagr", "nav",
+)
+
+
 class OutputGuard:
     """
     Validates and cleans LLM outputs before they are delivered to users to prevent leakages of system credentials or code.
     """
-    
+
     SENSITIVE_PATTERNS = {
         "api_key": r'(api[_\s-]?keys?|secret[_\s-]?keys?|token)["\s:=]+[a-zA-Z0-9_-]{16,}',
         "password": r'(password|passwd|pwd)["\s:=]+\S+',
@@ -45,6 +57,17 @@ class OutputGuard:
         return False
     
     @staticmethod
+    def needs_investment_disclaimer(response: str) -> bool:
+        lower = response.lower()
+        return any(kw in lower for kw in INVESTMENT_KEYWORDS)
+
+    @staticmethod
+    def append_disclaimer_if_needed(response: str) -> str:
+        if OutputGuard.needs_investment_disclaimer(response) and INVESTMENT_DISCLAIMER.strip() not in response:
+            return response.rstrip() + INVESTMENT_DISCLAIMER
+        return response
+
+    @staticmethod
     def validate_and_clean(response: str, user_id: str) -> tuple[bool, str]:
         """
         Validates LLM output, masks any leftover PII, and strips or flags hazardous elements.
@@ -73,5 +96,8 @@ class OutputGuard:
             
         # 3. Mask any remaining PII in the output
         response = PIIMasker.mask_all(response)
-        
+
+        # 4. Append regulatory disclaimer for investment-related content
+        response = OutputGuard.append_disclaimer_if_needed(response)
+
         return True, response

@@ -15,14 +15,30 @@ from app.core.config import settings
 from app.graph.logging_utils import graph_chat_completion
 from app.graph.state import AgentState
 from app.utils.workflow_logic import WorkflowLogic
+from app.utils.temporal_context import analysis_window_from_range, get_time_context
+from app.services.spending_analysis_service import (
+    render_spending_analysis_answer,
+    resolve_spending_analysis,
+    SPENDING_ANALYSIS_INTENTS,
+)
 from app.utils.prompts import (
     ANSWER_SYSTEM,
     ANSWER_USER,
     ANSWER_KNOWLEDGE_SYSTEM,
     FINASSIST_SYSTEM_PROMPT,
+    BRAIN_ANSWER_SYSTEM,
+    BRAIN_ANSWER_USER,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_verified_from_agents(state: AgentState) -> dict | None:
+    for agent_result in state.get("agent_results") or []:
+        detailed = (agent_result.get("analytics_results") or {}).get("detailed_analysis")
+        if detailed:
+            return detailed
+    return None
 
 
 def answer_node(state: AgentState) -> dict:
@@ -35,13 +51,106 @@ def answer_node(state: AgentState) -> dict:
     intent = state.get("intent") or "FINANCIAL_KNOWLEDGE"
     selected_agent = state.get("selected_agent") or "knowledge"
     user_query = state.get("user_query") or ""
+    standalone_query = state.get("standalone_query") or state.get("rewritten_query") or user_query
     lc_messages = state.get("messages") or []
+    final_context = state.get("final_context") or {}
+    execution_plan = state.get("execution_plan") or {}
 
-    # Check if we should use the advisor/knowledge path
+    is_brain_path = bool(execution_plan.get("tools")) and bool(final_context)
     is_knowledge_path = (intent == "GOAL_PLANNING" or selected_agent == "knowledge")
 
     try:
-        if is_knowledge_path:
+        metadata = state.get("metadata") or {}
+        time_ctx = metadata.get("time_context") or get_time_context()
+        resolved_entities = state.get("resolved_entities") or state.get("entities") or {}
+        analysis_window = (
+            metadata.get("analysis_window")
+            or (state.get("analytics_results") or {}).get("analysis_window")
+            or analysis_window_from_range(resolved_entities.get("date_range"))
+        )
+        window_label = analysis_window.get("period_label", "All time")
+
+        if intent in SPENDING_ANALYSIS_INTENTS:
+            verified_spending = resolve_spending_analysis(state)
+            if verified_spending and verified_spending.get("monthly_comparison"):
+                answer = render_spending_analysis_answer(
+                    verified_spending,
+                    user_profile=state.get("user_profile") or {},
+                )
+                logger.info(
+                    "[Node:answer] Deterministic expense-only spending analysis "
+                    "(intent=%s, months=%d)",
+                    intent,
+                    len(verified_spending["monthly_comparison"]),
+                )
+                return {
+                    "raw_answer": answer,
+                    "sources": ["Supabase Transactions"],
+                    "final_intent": intent,
+                }
+
+        if is_brain_path and intent != "GOAL_PLANNING":
+            profile = state.get("user_profile") or {}
+            income = profile.get("income", "unknown")
+            annual_income = profile.get("annual_income", income)
+            income_display = (
+                f"₹{annual_income:,.0f} per annum"
+                if isinstance(annual_income, (int, float))
+                else str(annual_income)
+            )
+
+            verified = (
+                final_context.get("verified_spending_numbers")
+                or (state.get("analytics_results") or {}).get("detailed_analysis")
+                or _extract_verified_from_agents(state)
+            )
+
+            if verified and verified.get("monthly_comparison"):
+                answer = render_spending_analysis_answer(verified, user_profile=profile)
+                logger.info("[Node:answer] Used deterministic spending analysis (verified DB figures)")
+            else:
+                verified_json = json.dumps(verified, indent=2, default=str) if verified else "No transaction data available."
+
+                system_prompt = BRAIN_ANSWER_SYSTEM.format(
+                    final_context=json.dumps(
+                        {k: v for k, v in final_context.items() if k != "verified_spending_numbers"},
+                        indent=2,
+                        default=str,
+                    ),
+                    verified_spending=verified_json,
+                    income_display=income_display,
+                    risk_profile=profile.get("risk_profile", "Moderate"),
+                    city=profile.get("city", "India"),
+                    monthly_net_flow=profile.get("monthly_net_flow", "N/A"),
+                    primary_goal=profile.get("primary_goal") or "Not specified",
+                    current_date=time_ctx["current_date"],
+                    current_date_display=time_ctx["current_date_display"],
+                    analysis_window_label=window_label,
+                )
+
+                completion = graph_chat_completion(
+                    node="answer_node",
+                    purpose="brain_answer",
+                    model=settings.active_chat_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": BRAIN_ANSWER_USER.format(query=standalone_query)},
+                    ],
+                    max_tokens=1400,
+                    temperature=0.0,
+                )
+                answer = completion.choices[0].message.content.strip()
+
+            sources = []
+            if state.get("rag_results", {}).get("sources"):
+                sources.extend(state["rag_results"]["sources"])
+            if state.get("agent_results"):
+                sources.append("Supabase Transactions")
+            if state.get("portfolio_results", {}).get("portfolio_health"):
+                sources.append("Portfolio Analysis")
+            sources = sources or ["FinAssist Brain"]
+
+        elif is_knowledge_path:
             # ── 1. RAG / Advisor / Goal Planning Path ──
             profile = state.get("user_profile") or {}
             context_blocks = state.get("retrieved_context") or []
@@ -128,18 +237,37 @@ def answer_node(state: AgentState) -> dict:
                     analytics=json.dumps(analytics_results, indent=2),
                 )
 
-                completion = graph_chat_completion(
-                    node="answer_node",
-                    purpose="sql_analytics_answer",
-                    model=settings.active_chat_model,
-                    messages=[
-                        {"role": "system", "content": ANSWER_SYSTEM},
-                        {"role": "user", "content": user_msg},
-                    ],
-                    max_tokens=300,
-                    temperature=0.0,
-                )
-                answer = completion.choices[0].message.content.strip()
+                detailed = analytics_results.get("detailed_analysis")
+                if detailed and detailed.get("monthly_comparison"):
+                    answer = render_spending_analysis_answer(
+                        detailed,
+                        user_profile=state.get("user_profile") or {},
+                    )
+                    logger.info("[Node:answer] Used deterministic spending analysis (SQL path)")
+                else:
+                    system_content = ANSWER_SYSTEM.format(
+                        current_date=time_ctx["current_date"],
+                        current_date_display=time_ctx["current_date_display"],
+                        analysis_window_label=window_label,
+                    )
+                    if detailed:
+                        system_content += (
+                            "\n\nDetailed spending analysis (use these exact figures):\n"
+                            + json.dumps(detailed, indent=2, default=str)
+                        )
+
+                    completion = graph_chat_completion(
+                        node="answer_node",
+                        purpose="sql_analytics_answer",
+                        model=settings.active_chat_model,
+                        messages=[
+                            {"role": "system", "content": system_content},
+                            {"role": "user", "content": user_msg},
+                        ],
+                        max_tokens=1200 if detailed else 300,
+                        temperature=0.0,
+                    )
+                    answer = completion.choices[0].message.content.strip()
                 sources = ["Supabase Transactions"]
 
     except Exception as exc:

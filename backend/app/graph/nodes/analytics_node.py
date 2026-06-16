@@ -9,6 +9,13 @@ import math
 from typing import Dict, Any
 
 from app.graph.state import AgentState
+from app.utils.analysis_period import filter_rows_by_date
+from app.utils.temporal_context import analysis_window_from_range
+from app.services.spending_analysis_service import (
+    build_detailed_spending_analysis,
+    fetch_expenses_in_window,
+    filter_expense_rows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +27,60 @@ def analytics_node(state: AgentState) -> dict:
     """
     sql_results = state.get("sql_results") or []
     selected_agent = state.get("selected_agent") or "transaction"
-    resolved_entities = state.get("resolved_entities") or {}
+    resolved_entities = state.get("resolved_entities") or state.get("entities") or {}
 
-    analytics_results = {}
+    date_range = resolved_entities.get("date_range") or {}
+    start_date = date_range.get("from")
+    end_date = date_range.get("to")
+    if not start_date and not end_date:
+        meta_window = (state.get("metadata") or {}).get("analysis_window") or {}
+        start_date = meta_window.get("start_date")
+        end_date = meta_window.get("end_date")
+
+    analysis_window = analysis_window_from_range(
+        {"from": start_date, "to": end_date} if (start_date or end_date) else None
+    )
+    user_id = state.get("user_id") or ""
+
+    # Authoritative expense-only fetch — runs even when SQL returned no rows
+    if user_id and start_date and end_date:
+        db_rows = fetch_expenses_in_window(user_id, start_date, end_date)
+        if db_rows:
+            sql_results = db_rows
+            logger.info(
+                "[Node:analytics] Using %d expense rows from direct DB fetch",
+                len(sql_results),
+            )
 
     if not sql_results:
-        logger.info("[Node:analytics] No SQL results to analyze")
-        return {"analytics_results": {"status": "no_data"}}
+        logger.info("[Node:analytics] No data to analyze")
+        return {"analytics_results": {"status": "no_data", "analysis_window": analysis_window}}
+
+    if isinstance(sql_results, list):
+        sql_results = filter_expense_rows(sql_results)
+        if start_date or end_date:
+            before = len(sql_results)
+            sql_results = filter_rows_by_date(
+                sql_results,
+                start_date=start_date,
+                end_date=end_date,
+            )
+            logger.info(
+                "[Node:analytics] Filtered expense rows by date window %s–%s: %d → %d",
+                start_date,
+                end_date,
+                before,
+                len(sql_results),
+            )
+
+    analytics_results: Dict[str, Any] = {
+        "analysis_window": analysis_window,
+    }
+
+    if not sql_results:
+        logger.info("[Node:analytics] No expense rows after filters")
+        analytics_results["status"] = "no_data"
+        return {"analytics_results": analytics_results, "sql_results": sql_results}
 
     # Support dict type (e.g. split comparison results)
     if isinstance(sql_results, dict):
@@ -124,7 +178,37 @@ def analytics_node(state: AgentState) -> dict:
         comp_info = resolved_entities.get("comparison") or {}
         targets = comp_info.get("targets") or []
 
-        if len(targets) >= 2:
+        labeled_a = [
+            r for r in sql_results
+            if isinstance(r, dict)
+            and str(r.get("comparison_target") or "").lower() in ("target_a", "a", "query_a")
+        ]
+        labeled_b = [
+            r for r in sql_results
+            if isinstance(r, dict)
+            and str(r.get("comparison_target") or "").lower() in ("target_b", "b", "query_b")
+        ]
+
+        if labeled_a or labeled_b:
+            sum_a = sum(float(r.get("amount") or 0.0) for r in labeled_a)
+            sum_b = sum(float(r.get("amount") or 0.0) for r in labeled_b)
+            diff = sum_a - sum_b
+            pct_change = (diff / sum_b * 100.0) if sum_b != 0 else 0.0
+            analytics_results["comparison"] = {
+                "target_a_name": targets[0] if targets else "period_a",
+                "target_b_name": targets[1] if len(targets) > 1 else "period_b",
+                "target_a_total": sum_a,
+                "target_b_total": sum_b,
+                "difference": diff,
+                "pct_change": pct_change,
+            }
+            logger.info(
+                "[Node:analytics] Computed labeled comparison: A=%f B=%f diff=%f",
+                sum_a,
+                sum_b,
+                diff,
+            )
+        elif len(targets) >= 2:
             target_a, target_b = targets[0], targets[1]
             part_a = []
             part_b = []
@@ -222,4 +306,14 @@ def analytics_node(state: AgentState) -> dict:
         if merchant_totals:
             analytics_results["merchant_breakdown"] = sorted(merchant_totals.items(), key=lambda x: x[1], reverse=True)
 
-    return {"analytics_results": analytics_results}
+    if isinstance(sql_results, list) and sql_results:
+        analytics_results["detailed_analysis"] = build_detailed_spending_analysis(
+            sql_results,
+            analysis_window=analysis_window,
+            user_profile=state.get("user_profile") or {},
+        )
+
+    result: Dict[str, Any] = {"analytics_results": analytics_results}
+    if isinstance(sql_results, list):
+        result["sql_results"] = sql_results
+    return result

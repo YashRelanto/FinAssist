@@ -1,7 +1,7 @@
 """
 graph/graph.py
 ==============
-Assembles, compiles, and exports the FinAssist v2 LangGraph StateGraph.
+Assembles, compiles, and exports the FinAssist Brain-Centric LangGraph StateGraph.
 """
 
 from __future__ import annotations
@@ -40,8 +40,6 @@ from app.graph.edges import (
     route_after_input_guardrail,
     route_after_intent,
     route_after_clarification,
-    route_after_router,
-    route_after_sql_validator,
 )
 from app.graph.checkpointer import get_checkpointer
 from app.graph.logging_utils import wrap_graph_node
@@ -53,14 +51,19 @@ _w = wrap_graph_node
 
 def build_graph():
     """
-    Builds the FinAssist LangGraph StateGraph.
+    Builds the FinAssist Brain-Centric LangGraph StateGraph.
+
+    Flow:
+      Input Guardrails → Intent → Context → Clarification → Entity → Semantic
+      → Brain Orchestrator → Tool Execution → Brain Aggregation → Answer → Output Guardrails
     """
     builder = StateGraph(AgentState)
 
-    # ── 1. Register Core Nodes ──────────────────────────────────────────
+    # ── Core pipeline nodes ─────────────────────────────────────────────
     builder.add_node("input_guardrail", _w("input_guardrail", input_guardrail_node))
     builder.add_node("intent_node", _w("intent_node", intent_node))
     builder.add_node("context_node", _w("context_node", context_node))
+    builder.add_node("clarification_node", _w("clarification_node", clarification_node))
     builder.add_node("entity_node", _w("entity_node", entity_node))
     builder.add_node("semantic_node", _w("semantic_node", semantic_node))
     builder.add_node("clarification_node", _w("clarification_node", clarification_node))
@@ -85,14 +88,11 @@ def build_graph():
     # ── 4. Set entry edge ───────────────────────────────────────────────
     builder.add_edge(START, "input_guardrail")
 
-    # ── 5. Setup Conditional / Routing Edges ───────────────────────────
+    # ── Conditional routing ─────────────────────────────────────────────
     builder.add_conditional_edges(
         "input_guardrail",
         route_after_input_guardrail,
-        {
-            "intent_node": "intent_node",
-            "__end__": END,
-        },
+        {"intent_node": "intent_node", "output_guardrail": "output_guardrail"},
     )
 
     builder.add_conditional_edges(
@@ -126,17 +126,8 @@ def build_graph():
         },
     )
 
-    builder.add_conditional_edges(
-        "sql_validator",
-        route_after_sql_validator,
-        {
-            "sql_executor": "sql_executor",
-            "answer_node": "answer_node",
-        },
-    )
-
-    # ── 6. Fixed Edges ──────────────────────────────────────────────────
-    builder.add_edge("context_node", "entity_node")
+    # ── Brain-centric linear flow ───────────────────────────────────────
+    builder.add_edge("context_node", "clarification_node")
     builder.add_edge("entity_node", "semantic_node")
     builder.add_edge("semantic_node", "clarification_node")
 
@@ -158,13 +149,11 @@ def build_graph():
     builder.add_edge("answer_node", "output_guardrail")
     builder.add_edge("output_guardrail", END)
 
-    # ── 7. Compile with checkpointer ────────────────────────────────────
     checkpointer = get_checkpointer()
     graph = builder.compile(checkpointer=checkpointer)
 
-    logger.info("[Graph] FinAssist LangGraph v2 compiled successfully")
+    logger.info("[Graph] FinAssist Brain-Centric LangGraph compiled successfully")
     return graph
 
 
-# Singleton instance used by routes/chatbot.py
 finassist_graph = build_graph()

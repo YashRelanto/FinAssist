@@ -10,6 +10,7 @@ import logging
 from app.core.config import settings
 from app.graph.logging_utils import graph_chat_completion
 from app.graph.state import AgentState
+from app.graph.agents._sql_prompt import sql_prompt_kwargs
 from app.utils.prompts import SQL_GENERATION_SYSTEM, SQL_GENERATION_USER
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,10 @@ def comparison_agent(state: AgentState) -> dict:
     query = state.get("rewritten_query") or state.get("user_query") or ""
     intent = state.get("intent") or "COMPARISON"
     entities = state.get("resolved_entities") or state.get("entities") or {}
+    time_ctx = sql_prompt_kwargs()
 
     agent_instructions = (
+        f"Today's reference date is {time_ctx['current_date']}. "
         "Generate exactly TWO SQL ASTs inside a single JSON object. The keys of the outer object must be "
         "'query_a' and 'query_b' representing the two targets/periods being compared. "
         "For example, if comparing Food vs Travel, query_a should select Food expenses and query_b "
@@ -43,12 +46,13 @@ def comparison_agent(state: AgentState) -> dict:
             purpose="comparison_sql_ast_generation",
             model=settings.active_chat_model,
             messages=[
-                {"role": "system", "content": SQL_GENERATION_SYSTEM},
+                {"role": "system", "content": SQL_GENERATION_SYSTEM.format(**time_ctx)},
                 {"role": "user", "content": SQL_GENERATION_USER.format(
                     query=query,
                     intent=intent,
                     entities=json.dumps(entities),
                     agent_instructions=agent_instructions,
+                    **time_ctx,
                 )},
             ],
             response_format={"type": "json_object"},

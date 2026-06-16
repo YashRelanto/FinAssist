@@ -175,6 +175,13 @@ def wrap_graph_node(node_name: str, fn: Callable[[Any], dict[str, Any]]) -> Call
             elapsed_ms,
             summarize_node_updates(result),
         )
+        if isinstance(result, dict):
+            meta = dict(state.get("metadata") or {})
+            meta.update(result.get("metadata") or {})
+            timings = dict(meta.get("node_timings") or {})
+            timings[node_name] = round(elapsed_ms, 1)
+            meta["node_timings"] = timings
+            result = {**result, "metadata": meta}
         return result
 
     return wrapper

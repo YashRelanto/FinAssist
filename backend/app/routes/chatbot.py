@@ -78,6 +78,14 @@ class ChatResponse(BaseModel):
             "(e.g. 'BankBazaar', 'MoneyControl', 'Supabase: transactions')."
         ),
     )
+    needs_clarification: bool = Field(
+        default=False,
+        description="True when the assistant needs more information before answering.",
+    )
+    clarification_options: list[str] = Field(
+        default_factory=list,
+        description="Suggested options for clarification questions when needs_clarification is true.",
+    )
     thread_id: str = Field(
         ...,
         description="Echo of the thread_id used for this turn.",
@@ -88,30 +96,98 @@ class ChatResponse(BaseModel):
     )
 
 
-# ─── Default Mock User Profile ────────────────────────────────────────────────
+# ─── User Profile Builder (real Supabase data) ───────────────────────────────
 
-def _get_default_user_profile() -> dict:
+def _fetch_user_profile_row(user_id: str) -> Dict[str, Any]:
+    """Load user_profiles row from Supabase; empty dict if missing."""
+    try:
+        res = (
+            supabase.table("user_profiles")
+            .select("*")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        return (res.data or [{}])[0]
+    except Exception as e:
+        logger.warning("Failed to fetch user_profiles for %s: %s", user_id, e)
+        return {}
+
+
+def _fetch_user_goals(user_id: str) -> List[Dict[str, Any]]:
+    try:
+        res = (
+            supabase.table("goals")
+            .select("goal_name, target_amount, current_amount, target_date, status")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return res.data or []
+    except Exception:
+        return []
+
+
+def build_chat_user_profile(user_id: str) -> Dict[str, Any]:
     """
-    Returns a mock user profile dictionary that simulates variables sourced
-    from the Supabase users / profiles table.
+    Build user_profile for the LangGraph pipeline from real Supabase data.
+    No mock defaults — missing fields remain empty/zero.
     """
-    return {
-        "income": 55000,                         # Monthly net income in INR
-        "annual_income": 660000,                 # Annual (12 × monthly)
-        "segment": "High Income Low Spender",    # Customer segment from analytics
-        "city": "Tier 1",                        # City tier classification
-        "age": 32,                               # Estimated age
-        "risk_profile": "Moderate",              # Risk tolerance: Conservative / Moderate / Aggressive
-        "primary_bank": "HDFC Bank",             # Primary bank name
-        "existing_investments": [                # Known investment vehicles
-            "Mutual Funds (SIP ₹10,000/mo)",
-            "PPF (₹1.5L/year)",
-            "EPF (employer + employee)",
-        ],
-        "outstanding_loans": [],                 # Active loan facilities
-        "credit_score": 780,                     # CIBIL / Experian score
-        "preferred_language": "English",
+    profile_row = _fetch_user_profile_row(user_id)
+    monthly_income = float(profile_row.get("income") or 0)
+    fixed_emi = float(profile_row.get("fixed_emi") or 0)
+    fixed_rent = float(profile_row.get("fixed_rent") or 0)
+
+    user_profile: Dict[str, Any] = {
+        "income": monthly_income,
+        "annual_income": monthly_income * 12 if monthly_income else 0,
+        "city": profile_row.get("city_tier") or "",
+        "city_tier": profile_row.get("city_tier") or "",
+        "risk_profile": profile_row.get("risk_profile") or "",
+        "fixed_emi": fixed_emi,
+        "fixed_rent": fixed_rent,
+        "monthly_obligations": fixed_emi + fixed_rent,
+        "primary_goal": profile_row.get("primary_goal") or "",
+        "biggest_category": profile_row.get("biggest_category") or "",
+        "onboarded": bool(profile_row.get("onboarded")),
+        "goals": _fetch_user_goals(user_id),
+        "existing_investments": [],
+        "real_time_balances": "N/A",
+        "monthly_net_flow": "N/A",
     }
+
+    try:
+        user_data = _fetch_user_data(user_id)
+        summary = _build_summary(user_data.get("transactions", []), user_data.get("accounts", []))
+        if summary:
+            user_profile["transaction_summary"] = summary
+            balances = summary.get("account_balances", [])
+            user_profile["real_time_balances"] = (
+                "\n  - " + "\n  - ".join(balances) if balances else "N/A"
+            )
+            net_flow = summary.get("net_flow_inr", 0)
+            user_profile["monthly_net_flow"] = f"₹{net_flow:,.2f}"
+            if not monthly_income and summary.get("monthly_summary"):
+                recent = summary["monthly_summary"][0]
+                inc = recent.get("money_RECEIVED_income_only_inr", 0)
+                if inc:
+                    user_profile["income"] = inc
+                    user_profile["annual_income"] = inc * 12
+    except Exception as e:
+        logger.error("Failed to build transaction summary for profile: %s", e)
+
+    try:
+        from app.services.investment_analysis_service import analyze_portfolio
+
+        portfolio = analyze_portfolio(user_id, user_profile=user_profile)
+        user_profile["portfolio_summary"] = portfolio.get("portfolio_health", {})
+        user_profile["existing_investments"] = [
+            h.get("scheme_name") or h.get("name") or h.get("symbol", "Unknown")
+            for h in portfolio.get("holdings", [])
+        ]
+    except Exception as e:
+        logger.warning("Failed to fetch portfolio for profile: %s", e)
+
+    return user_profile
 
 
 # ─── Local Helpers for User Profile Context ───────────────────────────────
@@ -262,23 +338,8 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
     """
     Main chat endpoint orchestrator.
     """
-    # 1. Build user profile
-    user_profile = _get_default_user_profile()
-
-    # 1b. Fetch real-time transaction summary for live balances
-    try:
-        user_data = _fetch_user_data(request.user_id)
-        summary = _build_summary(user_data.get("transactions", []), user_data.get("accounts", []))
-
-        balances = summary.get("account_balances", [])
-        user_profile["real_time_balances"] = "\n  - " + "\n  - ".join(balances) if balances else "N/A"
-
-        net_flow = summary.get("net_flow_inr", 0)
-        user_profile["monthly_net_flow"] = f"₹{net_flow:,.2f}"
-    except Exception as e:
-        logger.error("Failed to fetch real-time balance for profile: %s", e)
-        user_profile["real_time_balances"] = "N/A"
-        user_profile["monthly_net_flow"] = "N/A"
+    # 1. Build user profile from real Supabase data
+    user_profile = build_chat_user_profile(request.user_id)
 
     # 2. Call the core engine (LangGraph)
     try:
@@ -304,12 +365,13 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
         state_snapshot = await finassist_graph.aget_state(config)
         wf_state = {}
         wf_active = False
+        clarification_history = []
 
         if state_snapshot and state_snapshot.values:
             wf_state = state_snapshot.values.get("workflow_state") or {}
             wf_active = state_snapshot.values.get("workflow_active", False)
+            clarification_history = state_snapshot.values.get("clarification_history") or []
 
-        # Initialize state with correct argument names
         initial_state = make_initial_state(
             user_id=request.user_id,
             session_id=request.thread_id,
@@ -318,13 +380,19 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
             workflow_state=wf_state,
             workflow_active=wf_active,
         )
+        if clarification_history:
+            initial_state["clarification_history"] = clarification_history
 
         final_state = await finassist_graph.ainvoke(initial_state, config=config)
 
-        # Retrieve outputs from the final state
         answer = final_state.get("final_answer") or final_state.get("raw_answer") or ""
-        intent = final_state.get("final_intent") or final_state.get("intent") or "FINANCIAL_KNOWLEDGE"
+        from app.graph.nodes.intent_node import to_brd_intent
+
+        raw_intent = final_state.get("final_intent") or final_state.get("intent") or "FINANCIAL_KNOWLEDGE"
+        intent = raw_intent if "_" in raw_intent and raw_intent == raw_intent.lower() else to_brd_intent(raw_intent)
         sources = final_state.get("sources") or []
+        needs_clarification = bool(final_state.get("clarification_needed"))
+        clarification_options = final_state.get("clarification_options") or []
         log_graph_run_end(
             user_id=request.user_id,
             thread_id=request.thread_id,
@@ -374,8 +442,10 @@ async def post_chat_message(request: ChatRequest) -> ChatResponse:
     # 3. Build and return the response model
     return ChatResponse(
         answer=answer,
-        intent=intent.lower(),  # Convert to lowercase to match expected frontend schema
+        intent=intent.lower(),
         sources=sources,
+        needs_clarification=needs_clarification,
+        clarification_options=clarification_options,
         thread_id=request.thread_id,
         user_id=request.user_id,
     )

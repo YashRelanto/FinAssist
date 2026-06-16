@@ -21,6 +21,28 @@ VALID_INTENTS = {
     "FINANCIAL_KNOWLEDGE", "OUT_OF_SCOPE", "PORTFOLIO_ANALYSIS",
 }
 
+# BRD intent taxonomy → internal classifier labels
+BRD_INTENT_MAP = {
+    "TREND_ANALYSIS": "trend_analysis",
+    "TRANSACTION_QUERY": "transaction_analysis",
+    "SPENDING_SUMMARY": "transaction_analysis",
+    "CATEGORY_ANALYSIS": "transaction_analysis",
+    "MERCHANT_ANALYSIS": "transaction_analysis",
+    "ACCOUNT_QUERY": "transaction_analysis",
+    "COMPARISON": "comparison_analysis",
+    "ANOMALY_DETECTION": "anomaly_detection",
+    "INVESTMENT_ANALYSIS": "investment_analysis",
+    "FINANCIAL_KNOWLEDGE": "financial_guidance",
+    "GOAL_PLANNING": "financial_guidance",
+    "HYBRID_QUERY": "hybrid_query",
+    "OUT_OF_SCOPE": "out_of_scope",
+}
+
+
+def to_brd_intent(intent: str) -> str:
+    """Normalize internal intent enum to BRD/API snake_case label."""
+    return BRD_INTENT_MAP.get((intent or "").upper(), "financial_guidance")
+
 
 def intent_node(state: AgentState) -> dict:
     """
@@ -70,6 +92,7 @@ def intent_node(state: AgentState) -> dict:
     result = {
         "intent": intent,
         "confidence": confidence,
+        "final_intent": to_brd_intent(intent),
     }
 
     if intent == "OUT_OF_SCOPE":
@@ -77,7 +100,6 @@ def intent_node(state: AgentState) -> dict:
             "This assistant specialises in personal finance and financial planning. "
             "Please ask a finance-related question."
         )
-        result["final_intent"] = "OUT_OF_SCOPE"
         result["sources"] = ["Domain Scope Validator"]
 
     return result

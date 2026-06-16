@@ -1,7 +1,7 @@
 """
 graph/nodes/__init__.py
 =======================
-Exports all node functions for the FinAssist v2 LangGraph pipeline.
+Exports all node functions for the FinAssist Brain-Centric LangGraph pipeline.
 """
 
 from app.graph.nodes.guardrail_node import input_guardrail_node, output_guardrail_node
