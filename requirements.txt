@@ -31,3 +31,4 @@ asyncpg
 ddgs
 better_profanity
 colorlog
+dotenv

@@ -1,12 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend 
 } from 'recharts';
-import { Calendar, ChevronLeft, Filter, Loader2 } from 'lucide-react';
+import { Calendar, ChevronLeft, Filter } from 'lucide-react';
 import { useAppContext } from '../../context/AppContext';
-import { activeUserId } from '../../lib/activeUserId';
-import { apiFetch } from '../../lib/api';
-import { cn, formatCurrency } from '../../lib/utils';
+import { formatCurrency } from '../../lib/utils';
 import { type AnalysisPeriod, resolveAnalysisWindow } from '../../lib/analysisPeriod';
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -41,45 +39,19 @@ interface ExpenseBreakdownProps {
 }
 
 export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ analysisPeriod }) => {
-  const { user } = useAppContext();
-  const [loading, setLoading] = useState(false);
-  const [transactions, setTransactions] = useState<any[]>([]);
+  const { transactions } = useAppContext();
   const [drillDown, setDrillDown] = useState<string | null>(null);
-
-  const fetchTransactions = async (startDate: string, endDate: string) => {
-    setLoading(true);
-    try {
-      const uid = activeUserId(user);
-      const response = await apiFetch(
-        `/api/transactions?user_id=${encodeURIComponent(uid)}&start_date=${startDate}&end_date=${endDate}`,
-      );
-      const data = await response.json();
-      if (data.success) {
-        setTransactions(data.data.filter((t: any) => t.type === 'expense'));
-      }
-    } catch (error) {
-      console.error("Failed to fetch transactions for breakdown", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    const uid = activeUserId(user);
-    if (!uid) return;
-
-    const { startDate, endDate } = resolveAnalysisWindow(analysisPeriod);
-    if (!startDate) {
-      fetchTransactions('2000-01-01', endDate);
-      return;
-    }
-    fetchTransactions(startDate, endDate);
-  }, [analysisPeriod, user]);
 
   const chartData = useMemo(() => {
     const groups: Record<string, number> = {};
+    const { startDate, endDate } = resolveAnalysisWindow(analysisPeriod);
     
     transactions.forEach(t => {
+      if (t.type !== 'expense') return;
+      const d = t.date.slice(0, 10);
+      if (startDate && d < startDate) return;
+      if (d > endDate) return;
+
       const key = drillDown ? t.subCategory : t.category;
       if (drillDown && t.category !== drillDown) return;
       
@@ -89,7 +61,7 @@ export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ analysisPeri
     return Object.entries(groups)
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value);
-  }, [transactions, drillDown]);
+  }, [transactions, drillDown, analysisPeriod]);
 
   const totalExpense = useMemo(() => chartData.reduce((sum, item) => sum + item.value, 0), [chartData]);
 
@@ -126,11 +98,7 @@ export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ analysisPeri
       </div>
 
       <div className="flex-1 relative min-h-[350px]">
-        {loading ? (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <Loader2 className="w-8 h-8 animate-spin text-primary opacity-20" />
-          </div>
-        ) : chartData.length === 0 ? (
+        {chartData.length === 0 ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6">
             <div className="w-16 h-16 bg-surface-container-low rounded-full flex items-center justify-center mb-4 text-outline/30">
               <Calendar className="w-8 h-8" />

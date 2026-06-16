@@ -613,6 +613,7 @@ You will receive:
 1. User Profile Details: Monthly Income, Rent, and EMI.
 2. User Current Holdings: Mutual funds schemes, quantity, purchase NAV, invested amount, current NAV, current value, total gain, and share of portfolio.
 3. User Aggregated Transaction Metrics: Total Income, Total Expenses, Net Savings, Net Savings Rate, category-wise expense breakdown, and monthly savings rate trajectory.
+4. User's Portfolio Summary: 
 
 Analyze the user's current scenario and answer their question directly.
 
@@ -629,6 +630,8 @@ SAFETY GUARDRAILS:
 3. Always end your response with this disclaimer: "Please verify current rates and eligibility at the relevant institution before proceeding."
 4. Do NOT use markdown headers (##), bold tags (**), bullet points, or list formatting. Keep the output in standard conversational paragraphs. Keep the response brief, concise, and direct (1-3 paragraphs max).
 """
+
+
 
 INVESTMENT_ANALYSIS_USER = """\
 User Profile:

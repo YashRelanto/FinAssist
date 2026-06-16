@@ -81,7 +81,7 @@ export const FinancialPerformanceChart: React.FC<FinancialPerformanceChartProps>
         });
       }
       const accountId = tx.account_id;
-      const amount = tx.transaction_type === 'expense' ? -(tx.amount || 0) : (tx.amount || 0);
+      const amount = tx.type === 'expense' ? -(tx.amount || 0) : (tx.amount || 0);
       dayMap[dateKey][accountId] = (dayMap[dateKey][accountId] || 0) + amount;
     });
 

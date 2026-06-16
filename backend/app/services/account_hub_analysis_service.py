@@ -226,6 +226,7 @@ def _call_llm(payload: dict[str, Any]) -> dict[str, Any] | None:
         client = openai.OpenAI(
             api_key=settings.NVIDIA_API_KEY,
             base_url=NVIDIA_NIM_BASE_URL,
+            timeout=5.0,
         )
         completion = client.chat.completions.create(**request_body)
         raw = (completion.choices[0].message.content or "").strip()

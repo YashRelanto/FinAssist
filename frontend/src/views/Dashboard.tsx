@@ -116,7 +116,10 @@ export const Dashboard: React.FC = () => {
         />
 
         {/* Expense Breakdown */}
-        <ExpenseBreakdown analysisPeriod={analysisPeriod} />
+        <ExpenseBreakdown
+          analysisPeriod={analysisPeriod}
+          initialData={dashboardData?.expense_breakdown_month}
+        />
       </div>
 
       {/* Budget + Recent Transactions */}
