@@ -9,8 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.services.forecast_service import reload_models  # noqa: E402
-from app.services.model_training_service import run_training_sync  # noqa: E402
+from app.services.prophet.inference import reload_models  # noqa: E402
+from app.services.prophet.jobs import run_training_sync  # noqa: E402
 
 
 def main() -> int:

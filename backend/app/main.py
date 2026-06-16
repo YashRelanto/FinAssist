@@ -69,7 +69,7 @@ app.include_router(internal.router)
 @app.on_event("startup")
 async def sync_forecast_models_on_startup():
     from app.core.config import settings
-    from app.services.forecast_service import reload_models
+    from app.services.prophet.inference import reload_models
 
     if settings.FORECAST_SYNC_ON_STARTUP and settings.FORECAST_STORAGE_ENABLED:
         reload_models(force_storage_sync=False)

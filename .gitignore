@@ -11,9 +11,9 @@ build/
 .DS_Store
 .venv/
 # ── FinAssist runtime-generated artifacts (do NOT commit) ─────────────────────
-models/staging/
-models/runs/
-models/production/*.joblib
+models/prophet/staging/
+models/prophet/runs/
+models/prophet/production/*.joblib
 models/jobs/
 data/new data/
 backend/chroma_db/

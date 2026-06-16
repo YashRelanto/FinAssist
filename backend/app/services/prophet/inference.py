@@ -1,44 +1,34 @@
-"""Production expense forecasting using a global Prophet model."""
+"""Production expense forecasting API (global Prophet + user share scaling)."""
 
 from __future__ import annotations
 
+import calendar
 import json
 import logging
-import calendar
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import joblib
 import pandas as pd
 
-from app.services.forecast_features import (
+from app.services.prophet.features import (
     MIN_MONTHS_FOR_FORECAST,
-    MIN_WEEKS_FOR_FORECAST,
     category_weekly_breakdown,
+    create_user_monthly,
     daily_expense_series,
-    expenses_to_daily,
+    drop_incomplete_current_month,
     expenses_to_monthly,
     expenses_to_weekly,
-    prophet_future_frame_daily,
-    model_uses_monthly_regressors,
-    prophet_predict_months,
-    prophet_predict_weeks,
-    safe_mape,
-    sanitize_daily_predictions,
-    sanitize_monthly_predictions,
-    dow_spending_ratios,
+    forecast_next_month,
+    predict_user_amount,
     top_merchants,
+    user_has_enough_history,
 )
-from app.services.prophet_training_service import (
-    PRODUCTION_BUNDLE_PATH,
-    PRODUCTION_MANIFEST_PATH,
-    PRODUCTION_DIR,
-)
+from app.services.prophet.paths import PRODUCTION_BUNDLE_PATH, PRODUCTION_MANIFEST_PATH
 from app.utils.analysis_period import (
     add_months,
     month_start,
-    normalize_period,
     resolve_analysis_window,
     sum_expenses_in_window,
 )
@@ -46,7 +36,6 @@ from app.utils.analysis_period import (
 logger = logging.getLogger(__name__)
 
 MODEL_NAME = "Prophet (global)"
-HORIZON_WEEKS = 4
 MAX_HISTORY_WEEKS = 104
 MAX_HISTORY_MONTHS = 36
 
@@ -54,9 +43,7 @@ _prophet_bundle: dict[str, Any] | None = None
 
 
 def _resolve_bundle_path() -> Path | None:
-    if PRODUCTION_BUNDLE_PATH.is_file():
-        return PRODUCTION_BUNDLE_PATH
-    return None
+    return PRODUCTION_BUNDLE_PATH if PRODUCTION_BUNDLE_PATH.is_file() else None
 
 
 def _load_prophet_bundle() -> dict[str, Any] | None:
@@ -68,7 +55,7 @@ def _load_prophet_bundle() -> dict[str, Any] | None:
     if path is None:
         try:
             from app.core.config import settings
-            from app.services.model_storage_service import sync_production_from_storage
+            from app.services.prophet.storage import sync_production_from_storage
 
             if settings.FORECAST_STORAGE_ENABLED:
                 sync_production_from_storage(force=False)
@@ -88,16 +75,9 @@ def _load_prophet_bundle() -> dict[str, Any] | None:
         return None
 
 
-def _bundle_has_model(bundle: dict[str, Any] | None) -> bool:
-    if not bundle:
-        return False
-    if bundle.get("model") is not None:
-        return True
-    return bool(bundle.get("per_user"))
-
-
 def model_is_loaded() -> bool:
-    return _bundle_has_model(_load_prophet_bundle())
+    bundle = _load_prophet_bundle()
+    return bool(bundle and bundle.get("model") is not None)
 
 
 def reload_models(*, force_storage_sync: bool = False) -> dict[str, Any]:
@@ -106,7 +86,7 @@ def reload_models(*, force_storage_sync: bool = False) -> dict[str, Any]:
 
     try:
         from app.core.config import settings
-        from app.services.model_storage_service import sync_production_from_storage
+        from app.services.prophet.storage import sync_production_from_storage
 
         if settings.FORECAST_STORAGE_ENABLED:
             sync_production_from_storage(force=force_storage_sync)
@@ -118,20 +98,17 @@ def reload_models(*, force_storage_sync: bool = False) -> dict[str, Any]:
     storage_manifest: dict[str, Any] = {}
     try:
         from app.core.config import settings
+
         if settings.FORECAST_STORAGE_ENABLED:
-            from app.services.model_storage_service import storage_manifest as read_storage_manifest
+            from app.services.prophet.storage import storage_manifest as read_storage_manifest
 
             storage_manifest = read_storage_manifest()
     except Exception:
         pass
 
-    training_users = 0
-    if bundle:
-        training_users = bundle.get("training_users") or bundle.get("trained_users") or len(
-            bundle.get("per_user", {})
-        )
+    training_users = bundle.get("training_users", 0) if bundle else 0
     return {
-        "loaded": _bundle_has_model(bundle),
+        "loaded": model_is_loaded(),
         "trained_users": training_users,
         "trained_at": bundle.get("trained_at") if bundle else None,
         "manifest": manifest,
@@ -152,29 +129,19 @@ def get_model_status() -> dict[str, Any]:
     bundle = _load_prophet_bundle()
     manifest = get_production_manifest()
     path = _resolve_bundle_path()
-    training_users = 0
-    scope = "global"
-    if bundle:
-        scope = bundle.get("scope") or ("per_user" if bundle.get("per_user") else "global")
-        training_users = bundle.get("training_users") or bundle.get("trained_users") or len(
-            bundle.get("per_user", {})
-        )
+    training_users = bundle.get("training_users", 0) if bundle else 0
+    test_mape = bundle.get("test_mape") if bundle else manifest.get("test_mape")
     return {
-        "model_type": bundle.get("model_type", "prophet") if bundle else manifest.get("model_type", "prophet"),
-        "training_mode": bundle.get("training_mode") if bundle else manifest.get("training_mode"),
+        "model_type": "prophet",
         "model_name": MODEL_NAME,
-        "scope": scope,
-        "loaded": _bundle_has_model(bundle),
-        "granularity": bundle.get("granularity", "monthly") if bundle else "monthly",
+        "scope": "global",
+        "loaded": model_is_loaded(),
+        "granularity": "monthly",
         "trained_users": training_users,
         "trained_at": bundle.get("trained_at") if bundle else manifest.get("trained_at"),
-        "test_mape": bundle.get("test_mape") if bundle else manifest.get("test_mape"),
-        "accuracy_pct": _accuracy_from_mape(
-            bundle.get("test_mape") if bundle else manifest.get("test_mape"),
-        ),
+        "test_mape": test_mape,
+        "accuracy_pct": _accuracy_from_mape(test_mape),
         "bundle_path": str(path) if path else None,
-        "horizon_weeks": HORIZON_WEEKS,
-        "min_weeks_required": MIN_WEEKS_FOR_FORECAST,
         "min_months_required": MIN_MONTHS_FOR_FORECAST,
         "manifest": manifest,
         "storage_enabled": _storage_enabled(),
@@ -193,7 +160,7 @@ def _storage_enabled() -> bool:
 
 def _safe_storage_manifest() -> dict[str, Any]:
     try:
-        from app.services.model_storage_service import storage_manifest
+        from app.services.prophet.storage import storage_manifest
 
         return storage_manifest()
     except Exception:
@@ -207,240 +174,36 @@ def _accuracy_from_mape(mape: float | None) -> float | None:
     return round((1.0 - capped) * 100, 1)
 
 
-def _is_global_bundle() -> bool:
+def _predict_next_month(user_id: str, expenses_df: pd.DataFrame) -> float:
     bundle = _load_prophet_bundle()
-    if bundle is None:
-        return False
-    if bundle.get("scope") == "global":
-        return True
-    return bundle.get("model") is not None and not bundle.get("per_user")
-
-
-def _is_default_prophet_bundle() -> bool:
-    """True when production bundle uses plain Prophet (ds/y only, no regressors)."""
-    bundle = _load_prophet_bundle()
-    if bundle is None:
-        return False
-    if bundle.get("training_mode") == "default":
-        return True
-    if bundle.get("model_type") == "prophet_default":
-        return True
-    return not bool(bundle.get("regressor_columns"))
-
-
-def _bundle_uses_regressors() -> bool:
-    bundle = _load_prophet_bundle()
-    if bundle is None:
-        return True
-    if _is_default_prophet_bundle():
-        return False
-    model = bundle.get("model")
-    if model is not None:
-        return model_uses_monthly_regressors(model)
-    return bool(bundle.get("regressor_columns"))
-
-
-def _global_monthly_from_bundle(bundle: dict[str, Any]) -> pd.DataFrame:
-    records = bundle.get("global_monthly") or []
-    if not records:
-        raise RuntimeError("Global model bundle is missing global_monthly history")
-    monthly = pd.DataFrame(records)
-    monthly["month_start"] = pd.to_datetime(monthly["month_start"])
-    return monthly.sort_values("month_start").reset_index(drop=True)
-
-
-def _scale_global_prediction_to_user(
-    global_pred: float,
-    user_monthly: pd.DataFrame,
-    global_monthly: pd.DataFrame,
-) -> float:
-    """Apply the global forecast trend to the user's recent spending level."""
-    user_recent = float(user_monthly["monthly_expense"].tail(3).mean())
-    global_recent = float(global_monthly["monthly_expense"].tail(3).mean())
-    if global_recent <= 0:
-        return max(user_recent, global_pred)
-    return global_pred * (user_recent / global_recent)
-
-
-def _user_has_trained_model(user_id: str) -> bool:
-    """Global model serves all users; legacy bundles still require a per-user entry."""
-    bundle = _load_prophet_bundle()
-    if not bundle or not _bundle_has_model(bundle):
-        return False
-    if _is_global_bundle():
-        return True
-    return str(user_id) in bundle.get("per_user", {})
-
-
-def _load_prophet_model(user_id: str):
-    bundle = _load_prophet_bundle()
-    if bundle is None:
+    if bundle is None or bundle.get("model") is None:
         raise RuntimeError(
             "Forecast model not loaded. Run the nightly training job or POST /api/admin/train-from-db"
         )
-    if _is_global_bundle():
-        model = bundle.get("model")
-        if model is None:
-            raise RuntimeError("Global forecast model is missing from bundle")
-        return model
-    model = bundle.get("per_user", {}).get(str(user_id))
-    if model is None:
-        raise KeyError(
-            f"No trained Prophet model for user {user_id}. "
-            "User needs more expense history or wait for the next nightly train."
-        )
-    return model
+
+    user_monthly = drop_incomplete_current_month(
+        create_user_monthly(expenses_df.assign(user_id=str(user_id))),
+        date_col="month_start",
+    )
+    return predict_user_amount(
+        forecast_next_month(bundle["model"]),
+        user_id,
+        user_monthly,
+        user_shares=bundle.get("user_shares") or {},
+    )
 
 
 def _trim_weekly_history(weekly: pd.DataFrame) -> pd.DataFrame:
     w = weekly.sort_values("week_start").reset_index(drop=True)
-    if len(w) <= MAX_HISTORY_WEEKS:
-        return w
-    return w.tail(MAX_HISTORY_WEEKS).reset_index(drop=True)
+    return w.tail(MAX_HISTORY_WEEKS).reset_index(drop=True) if len(w) > MAX_HISTORY_WEEKS else w
 
 
 def _trim_monthly_history(monthly: pd.DataFrame) -> pd.DataFrame:
     m = monthly.sort_values("month_start").reset_index(drop=True)
-    if len(m) <= MAX_HISTORY_MONTHS:
-        return m
-    return m.tail(MAX_HISTORY_MONTHS).reset_index(drop=True)
-
-
-def _prophet_forecast_for_user(weekly: pd.DataFrame, user_id: str, steps: int) -> list[float]:
-    """Weekly-model prediction — kept for holdout MAPE evaluation on legacy bundles."""
-    model = _load_prophet_model(user_id)
-    w = weekly.copy().sort_values("week_start").reset_index(drop=True)
-    return prophet_predict_weeks(model, w, steps)
-
-
-def _is_monthly_bundle() -> bool:
-    """True when the loaded bundle was trained on monthly data."""
-    bundle = _load_prophet_bundle()
-    return bundle is not None and bundle.get("granularity") == "monthly"
-
-
-def _is_daily_bundle() -> bool:
-    """True when the loaded bundle was trained on daily data (legacy)."""
-    bundle = _load_prophet_bundle()
-    return bundle is not None and bundle.get("granularity") == "daily"
-
-
-def _get_monthly_prediction(
-    expenses_df: pd.DataFrame,
-    weekly: pd.DataFrame,
-    user_id: str,
-    *,
-    target_month_start: date,
-) -> float:
-    """
-    Return predicted spend for the calendar month starting at target_month_start.
-
-    • Global monthly bundle → pooled Prophet trend scaled to the user's level.
-    • Per-user monthly bundle → legacy direct monthly prediction.
-    • Daily / weekly bundles → legacy day-level fallbacks aggregated to a month.
-    """
-    model = _load_prophet_model(user_id)
-    user_monthly = _trim_monthly_history(expenses_to_monthly(expenses_df))
-
-    use_regressors = _bundle_uses_regressors()
-
-    if _is_global_bundle() and _is_monthly_bundle():
-        bundle = _load_prophet_bundle()
-        assert bundle is not None
-        global_monthly = _global_monthly_from_bundle(bundle)
-        global_preds = prophet_predict_months(
-            model,
-            global_monthly,
-            1,
-            use_regressors=use_regressors,
-        )
-        return _scale_global_prediction_to_user(
-            float(global_preds[0]),
-            user_monthly,
-            global_monthly,
-        )
-
-    if _is_monthly_bundle() and not _is_global_bundle():
-        preds = prophet_predict_months(
-            model,
-            user_monthly,
-            1,
-            use_regressors=use_regressors,
-        )
-        return float(preds[0])
-
-    last_day = calendar.monthrange(target_month_start.year, target_month_start.month)[1]
-    target_end = date(target_month_start.year, target_month_start.month, last_day)
-    daily_df = expenses_to_daily(expenses_df)
-    last_hist = pd.Timestamp(daily_df["date"].iloc[-1]).date()
-    pred_days = max((target_end - last_hist).days, 28)
-    daily_preds = _get_daily_predictions(expenses_df, weekly, user_id, days=pred_days, model=model)
-    total = 0.0
-    for offset, amount in enumerate(daily_preds):
-        dt = last_hist + timedelta(days=offset + 1)
-        if dt < target_month_start:
-            continue
-        if dt > target_end:
-            break
-        total += float(amount)
-    return total
-
-
-def _get_daily_predictions(
-    expenses_df: pd.DataFrame,
-    weekly: pd.DataFrame,
-    user_id: str,
-    days: int = 28,
-    *,
-    model=None,
-) -> list[float]:
-    """
-    Return `days` daily spend predictions.
-
-    • Daily bundle  → Prophet predicts each day directly (real Mon–Sun variation).
-    • Weekly bundle → Prophet predicts 4 weekly totals, then distributes them
-      across the 7 days of each week using historical day-of-week ratios
-      (backward-compatible fallback until a retrain is triggered).
-    """
-    bundle = _load_prophet_bundle()
-    if bundle is None:
-        raise RuntimeError(
-            "Forecast model not loaded. Run the nightly training job or POST /api/admin/train-from-db"
-        )
-    if model is None:
-        bundle = _load_prophet_bundle()
-        if bundle and not _is_global_bundle():
-            model = bundle.get("per_user", {}).get(str(user_id))
-    if model is None:
-        raise KeyError(
-            f"No trained Prophet model for user {user_id}. "
-            "User needs more expense history or wait for the next nightly train."
-        )
-
-    if _is_daily_bundle():
-        daily_df = expenses_to_daily(expenses_df)
-        future = prophet_future_frame_daily(
-            pd.Timestamp(daily_df["date"].iloc[-1]), days
-        )
-        fc = model.predict(future)
-        return sanitize_daily_predictions(fc["yhat"].values, daily_df)
-    else:
-        # Weekly model fallback: distribute each weekly total via historical DoW
-        n_weeks = (days + 6) // 7
-        weekly_preds = prophet_predict_weeks(model, weekly, n_weeks)
-        ratios = dow_spending_ratios(expenses_df)
-        daily_preds: list[float] = []
-        last_week_start = pd.Timestamp(weekly["week_start"].iloc[-1])
-        for i, w_total in enumerate(weekly_preds):
-            week_start = last_week_start + timedelta(weeks=i + 1)
-            for d in range(7):
-                dow = (week_start + timedelta(days=d)).weekday()
-                daily_preds.append(w_total * ratios[dow])
-        return daily_preds[:days]
+    return m.tail(MAX_HISTORY_MONTHS).reset_index(drop=True) if len(m) > MAX_HISTORY_MONTHS else m
 
 
 def _build_predicted_month(amount: float, pred_start: date) -> dict[str, Any]:
-    """One calendar month prediction (monthly total only)."""
     last_day = calendar.monthrange(pred_start.year, pred_start.month)[1]
     pred_end = date(pred_start.year, pred_start.month, last_day)
     return {
@@ -450,22 +213,6 @@ def _build_predicted_month(amount: float, pred_start: date) -> dict[str, Any]:
         "month_end": pred_end.isoformat(),
         "amount": round(float(amount), 2),
     }
-
-
-def _build_predicted_month_from_daily(
-    daily_preds: list[float],
-    pred_start: date,
-) -> dict[str, Any]:
-    """Legacy helper: aggregate daily predictions into a monthly total."""
-    last_day = calendar.monthrange(pred_start.year, pred_start.month)[1]
-    pred_end = date(pred_start.year, pred_start.month, last_day)
-    total = 0.0
-    for offset, amount in enumerate(daily_preds):
-        dt = pred_start + timedelta(days=offset)
-        if dt > pred_end:
-            break
-        total += float(amount)
-    return _build_predicted_month(total, pred_start)
 
 
 def _next_calendar_month_bounds(reference: date) -> tuple[date, date]:
@@ -480,7 +227,6 @@ def _expenses_by_calendar_month(
     start: date | None,
     end: date,
 ) -> list[dict[str, Any]]:
-    """Monthly expense totals from `start` through `end` (partial current month allowed)."""
     if expenses.empty:
         return []
     df = expenses.copy()
@@ -553,10 +299,7 @@ def _detect_recurring(expenses: pd.DataFrame) -> dict | None:
                 recurring.append(amt_mean)
     if not recurring:
         return None
-    return {
-        "count": len(recurring),
-        "monthly_total": round(float(sum(recurring)), 2),
-    }
+    return {"count": len(recurring), "monthly_total": round(float(sum(recurring)), 2)}
 
 
 def _model_meta() -> dict[str, Any]:
@@ -583,7 +326,6 @@ def generate_forecast(
 ) -> dict[str, Any]:
     meta = _model_meta()
     window = resolve_analysis_window(period)
-    period_key = window["period"]
     today = date.today()
     period_end = window["end_date"]
     period_start = window["start_date"]
@@ -594,11 +336,7 @@ def generate_forecast(
     tx_df = pd.DataFrame(transactions) if transactions else pd.DataFrame()
 
     if tx_df.empty:
-        return _empty_response(
-            "Not enough transaction history to forecast.",
-            meta,
-            window=window,
-        )
+        return _empty_response("Not enough transaction history to forecast.", meta, window=window)
 
     tx_df = tx_df[tx_df["transaction_type"] == "expense"].copy()
     if account_id:
@@ -618,17 +356,13 @@ def generate_forecast(
 
     tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"])
     tx_rows = tx_df.to_dict(orient="records")
-    total_recent = sum_expenses_in_window(
-        tx_rows, start_date=period_start, end_date=period_end
-    )
+    total_recent = sum_expenses_in_window(tx_rows, start_date=period_start, end_date=period_end)
     total_prev = (
         sum_expenses_in_window(tx_rows, start_date=comp_start, end_date=comp_end)
         if comp_start and comp_end
         else 0.0
     )
-    change_pct = (
-        round((total_recent - total_prev) / total_prev * 100, 1) if total_prev > 0 else 0.0
-    )
+    change_pct = round((total_recent - total_prev) / total_prev * 100, 1) if total_prev > 0 else 0.0
 
     period_start_date = (
         datetime.strptime(period_start, "%Y-%m-%d").date()
@@ -645,7 +379,6 @@ def generate_forecast(
     weekly = _trim_weekly_history(weekly_full)
     monthly_full = expenses_to_monthly(tx_df)
     monthly = _trim_monthly_history(monthly_full)
-    enough_history = len(monthly) >= MIN_MONTHS_FOR_FORECAST
 
     period_partial = {
         **window,
@@ -660,7 +393,7 @@ def generate_forecast(
         ),
     }
 
-    if not enough_history:
+    if not user_has_enough_history(tx_df):
         return _empty_response(
             f"Need at least {MIN_MONTHS_FOR_FORECAST} months of expenses. "
             f"Currently have {len(monthly)} month(s).",
@@ -677,25 +410,9 @@ def generate_forecast(
             window=window,
         )
 
-    if not _user_has_trained_model(user_id):
-        return _empty_response(
-            "Forecast model is not available yet. "
-            f"You need at least {MIN_MONTHS_FOR_FORECAST} months of expenses; "
-            "models are refreshed every night after the training job runs.",
-            meta,
-            partial=period_partial,
-            window=window,
-        )
-
-    next_start, _next_end = _next_calendar_month_bounds(today)
-
+    next_start, _ = _next_calendar_month_bounds(today)
     try:
-        predicted_amount = _get_monthly_prediction(
-            tx_df,
-            weekly,
-            user_id,
-            target_month_start=next_start,
-        )
+        predicted_amount = _predict_next_month(user_id, tx_df)
     except (RuntimeError, KeyError) as exc:
         return _empty_response(str(exc), meta, window=window)
 
@@ -704,52 +421,6 @@ def generate_forecast(
     prev_period_spend = total_prev if total_prev > 0 else total_recent
     budget_alert = predicted_month > prev_period_spend * 1.1 and prev_period_spend > 0
 
-    holdout_mape = None
-    if _is_global_bundle() and _is_monthly_bundle() and len(monthly) >= MIN_MONTHS_FOR_FORECAST:
-        bundle = _load_prophet_bundle()
-        assert bundle is not None
-        global_monthly = _global_monthly_from_bundle(bundle)
-        hold = float(monthly.iloc[-1]["monthly_expense"])
-        try:
-            model = _load_prophet_model(user_id)
-            global_preds = prophet_predict_months(
-                model,
-                global_monthly.iloc[:-1],
-                1,
-                use_regressors=_bundle_uses_regressors(),
-            )
-            pred_hold = _scale_global_prediction_to_user(
-                global_preds[0],
-                monthly.iloc[:-1],
-                global_monthly.iloc[:-1],
-            )
-            holdout_mape = safe_mape([hold], [pred_hold])
-        except (RuntimeError, KeyError):
-            holdout_mape = None
-    elif _is_monthly_bundle() and not _is_global_bundle() and len(monthly) >= MIN_MONTHS_FOR_FORECAST:
-        hold = float(monthly.iloc[-1]["monthly_expense"])
-        train_m = monthly.iloc[:-1]
-        try:
-            model = _load_prophet_model(user_id)
-            pred_hold = prophet_predict_months(
-                model, train_m, 1, use_regressors=_bundle_uses_regressors(),
-            )[0]
-            holdout_mape = safe_mape([hold], [pred_hold])
-        except (RuntimeError, KeyError):
-            holdout_mape = None
-    elif not _is_monthly_bundle() and not _is_daily_bundle() and len(weekly) >= 10:
-        hold = float(weekly.iloc[-1]["weekly_expense"])
-        train_w = weekly.iloc[:-1]
-        try:
-            pred_hold = _prophet_forecast_for_user(train_w, user_id, 1)
-            if pred_hold:
-                holdout_mape = safe_mape([hold], pred_hold)
-        except (RuntimeError, KeyError):
-            holdout_mape = None
-
-    actual_months = _expenses_by_calendar_month(
-        recent, start=period_start_date, end=period_end_date
-    )
     monthly_chart = [
         {
             "name": m["label"],
@@ -761,7 +432,7 @@ def generate_forecast(
             "is_forecast": False,
             "is_partial": m.get("is_partial", False),
         }
-        for m in actual_months
+        for m in _expenses_by_calendar_month(recent, start=period_start_date, end=period_end_date)
     ]
     monthly_chart.append(
         {
@@ -789,10 +460,6 @@ def generate_forecast(
                 all_cats[cat] = all_cats.get(cat, 0.0) + val
         top_cats = sorted(all_cats.items(), key=lambda x: -x[1])[:3]
 
-    display_accuracy = (
-        _accuracy_from_mape(holdout_mape) if holdout_mape is not None else meta.get("accuracy_pct")
-    )
-
     comp_label = (
         f"previous {window['months_in_window']} month(s)"
         if window.get("months_in_window")
@@ -803,7 +470,7 @@ def generate_forecast(
         "success": True,
         **meta,
         **window,
-        "accuracy_pct": display_accuracy,
+        "accuracy_pct": meta.get("accuracy_pct"),
         "model_status": get_model_status(),
         "user_model_available": True,
         "enough_history": True,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Header, HTTPException
 
 from app.core.config import settings
-from app.services.model_training_service import run_training_sync
+from app.services.prophet.jobs import run_training_sync
 
 router = APIRouter(prefix="/api/internal", tags=["internal"])
 
