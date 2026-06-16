@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from typing import Any
 
 # ── Bootstrap: ensure .env is loaded before reading env-vars ──────────────────
@@ -60,24 +59,6 @@ KNOWN_COLLECTIONS: list[str] = [
 
 # ─── Embedding function factory ───────────────────────────────────────────────
 
-_WARMUP_TEXT = "FinAssist startup warmup"
-
-
-def _warm_up_embedding_function(embedding_function) -> None:
-    """Eagerly load the embedding model (ONNX download + inference) at startup."""
-    if embedding_function is None:
-        return
-
-    started = time.perf_counter()
-    try:
-        embedding_function([_WARMUP_TEXT])
-    except TypeError:
-        embedding_function.embed_query(_WARMUP_TEXT)
-
-    elapsed_ms = (time.perf_counter() - started) * 1000
-    logger.info("[ChromaStore] Embedding model loaded and warmed up (%.0fms)", elapsed_ms)
-
-
 def _build_embedding_function():
     """
     Returns the best available embedding function for this runtime.
@@ -104,7 +85,6 @@ def _build_embedding_function():
                     model_name="text-embedding-3-small",
                 )
                 logger.info("[ChromaStore] Embedding: OpenAI text-embedding-3-small ✅")
-                _warm_up_embedding_function(ef)
                 return ef
             except Exception as exc:
                 logger.warning(
@@ -117,7 +97,6 @@ def _build_embedding_function():
         from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
         ef = DefaultEmbeddingFunction()
         logger.info("[ChromaStore] Embedding: Local ONNX DefaultEmbeddingFunction ✅")
-        _warm_up_embedding_function(ef)
         return ef
     except Exception as exc:
         logger.critical(

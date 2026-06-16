@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from app.graph.state import AgentState
-from app.guardrails.input_guard import InputGuard, normalize_query
+from app.guardrails.input_guard import InputGuard
 from app.guardrails.output_guard import OutputGuard
 from app.utils.security_logger import log_security_event
 
@@ -31,7 +31,7 @@ def input_guardrail_node(state: AgentState) -> dict:
     """
     user_id = state["user_id"]
     session_id = state["session_id"]
-    message = normalize_query(state["user_query"])
+    message = state["user_query"]
 
     is_safe, error_message = InputGuard.validate(message, user_id)
 
@@ -48,19 +48,12 @@ def input_guardrail_node(state: AgentState) -> dict:
             "input_blocked": True,
             "input_error": error_message,
             "final_answer": error_message,
-            "final_intent": "out_of_scope",
+            "final_intent": "OUT_OF_SCOPE",
             "sources": ["Security Guardrails"],
         }
 
     logger.info("[Node:input_guardrail] PASSED | user=%s", user_id)
-    metadata = dict(state.get("metadata") or {})
-    metadata["validated_query"] = message
-    metadata["input_status"] = "approved"
-    return {
-        "input_blocked": False,
-        "validated_query": message,
-        "metadata": metadata,
-    }
+    return {"input_blocked": False}
 
 
 def output_guardrail_node(state: AgentState) -> dict:

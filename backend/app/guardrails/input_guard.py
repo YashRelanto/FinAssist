@@ -1,5 +1,4 @@
 import re
-import unicodedata
 from typing import Tuple
 import logging
 from better_profanity import profanity
@@ -107,36 +106,17 @@ def contains_profanity(message: str) -> Tuple[bool, str]:
         return False, "Message contains inappropriate language"
     return True, ""
 
-# Common unicode homoglyphs → ASCII equivalents
-_HOMOGLYPHS = str.maketrans({
-    "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
-    "\u00a0": " ", "\u200b": "", "\u200c": "", "\u200d": "",
-    "\uff01": "!", "\uff1f": "?",
-})
-
-
-def normalize_query(message: str) -> str:
-    """Normalize whitespace and unicode homoglyphs for consistent validation."""
-    if not message:
-        return ""
-    text = unicodedata.normalize("NFKC", message).translate(_HOMOGLYPHS)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
 class InputGuard:
     """
     Validates user input before it reaches the LLM
     """
-
+    
     @staticmethod
     def validate(message: str, user_id: str) -> Tuple[bool, str]:
         """
         Run all input validation checks
         Returns (is_safe, error_message)
         """
-        message = normalize_query(message)
-
         # 1. Check for prompt injection
         is_safe, reason = detect_prompt_injection(message)
         if not is_safe:

@@ -12,7 +12,6 @@ import openai
 
 from app.constants.categories import PREDEFINED_MAIN_CATEGORIES
 from app.core.config import settings
-from app.utils.prompts import DATA_INTEGRITY_RULES
 from app.services.accounts_service import fetch_user_accounts
 from app.utils.supabase_client import supabase
 
@@ -195,14 +194,12 @@ def _call_llm(payload: dict[str, Any]) -> dict[str, Any] | None:
         "Use severity \"warning\" when near/at limit.\n"
         "- For account_spending, use ONLY the current-month expense transactions. "
         "For each account with expenses, pick the category with the highest total amount "
-        "as majority_category and write a one-sentence analysis naming the account and "
-        "category from the JSON data only.\n"
+        "as majority_category and write a one-sentence analysis like: "
+        "\"You are spending the most amount from HDFC on Food & Drinks.\"\n"
         "- If there are no credit cards or no near-limit cards, return an empty "
         "credit_card_alerts array.\n"
         "- If there are no transactions, return an empty account_spending array.\n"
-        "- Do not invent accounts, amounts, or categories.\n"
-        "- Do not generate answers on your own — use only the JSON provided.\n\n"
-        + DATA_INTEGRITY_RULES
+        "- Do not invent accounts, amounts, or categories."
     )
 
     user_content = json.dumps(

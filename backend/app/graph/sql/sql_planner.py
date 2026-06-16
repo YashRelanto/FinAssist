@@ -4,13 +4,11 @@ SQL Planner — Converts SQL AST dictionaries to raw SQL strings.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Dict, Any, List
 import json
 
 from app.graph.state import AgentState
-from app.graph.sql.date_filters import apply_entity_date_filters_to_ast
 
 logger = logging.getLogger(__name__)
 
@@ -133,13 +131,10 @@ def sql_planner(state: AgentState) -> dict:
     """
     sql_ast = state.get("sql_ast") or {}
     user_id = state.get("user_id") or ""
-    entities = state.get("resolved_entities") or state.get("entities") or {}
 
     if not sql_ast:
         logger.info("[Node:sql_planner] Empty AST")
         return {"sql_query": ""}
-
-    sql_ast = apply_entity_date_filters_to_ast(sql_ast, entities)
 
     if "query_a" in sql_ast and "query_b" in sql_ast:
         query_a_sql = generate_sql(sql_ast["query_a"], user_id)
@@ -149,8 +144,8 @@ def sql_planner(state: AgentState) -> dict:
             "query_b": query_b_sql,
         }
         logger.info("[Node:sql_planner] Generated comparison queries: %s", json.dumps(result))
-        return {"sql_query": result, "sql_ast": sql_ast}
+        return {"sql_query": result}
     else:
         sql_query = generate_sql(sql_ast, user_id)
         logger.info("[Node:sql_planner] Generated SQL query: %s", sql_query)
-        return {"sql_query": sql_query, "sql_ast": sql_ast}
+        return {"sql_query": sql_query}

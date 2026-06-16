@@ -28,7 +28,7 @@ def _verify_cron_secret(authorization: str | None) -> None:
 async def internal_train_forecast(authorization: str | None = Header(default=None)):
     """
     Triggered by Supabase Edge Function on schedule.
-    Trains the global Prophet model from DB into staging.
+    Trains per-user Prophet models from DB, uploads to Storage, reloads cache.
     """
     _verify_cron_secret(authorization)
     try:
