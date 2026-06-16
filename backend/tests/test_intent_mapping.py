@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from app.graph.nodes.intent_node import to_brd_intent
+from app.graph.intent_mapping import to_brd_intent
 
 
 class TestIntentMapping(unittest.TestCase):

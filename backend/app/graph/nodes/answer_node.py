@@ -1,5 +1,17 @@
 """
-Answer Node — Generates final natural language answers based on intent and query results.
+Answer Node — synthesises the final structured response from collected evidence.
+
+Produces:
+  - final_answer : concise natural-language text
+  - artifacts    : visualization specs (chart data filled deterministically from
+                   evidence so no numbers are hallucinated)
+  - sources      : attribution list
+
+Mode is chosen from the evidence:
+  goal_planner   → feasibility plan (FINASSIST_SYSTEM_PROMPT) + net-flow/savings bar
+  investment     → tool-authored narrative + portfolio-allocation pie
+  knowledge      → RAG answer (ANSWER_KNOWLEDGE_SYSTEM)
+  nl2sql / data  → ANSWER_VIZ_SYSTEM (concise text + chart-type choice)
 """
 
 from __future__ import annotations
@@ -7,276 +19,189 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any, Dict, List, Optional
 
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import AIMessage
 
 from app.core.config import settings
 from app.graph.logging_utils import graph_chat_completion
 from app.graph.state import AgentState
-from app.utils.workflow_logic import WorkflowLogic
-from app.utils.temporal_context import analysis_window_from_range, get_time_context
-from app.services.spending_analysis_service import (
-    render_spending_analysis_answer,
-    resolve_spending_analysis,
-    SPENDING_ANALYSIS_INTENTS,
-)
 from app.utils.prompts import (
-    ANSWER_SYSTEM,
-    ANSWER_USER,
+    ANSWER_VIZ_SYSTEM,
     ANSWER_KNOWLEDGE_SYSTEM,
     FINASSIST_SYSTEM_PROMPT,
-    BRAIN_ANSWER_SYSTEM,
-    BRAIN_ANSWER_USER,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _extract_verified_from_agents(state: AgentState) -> dict | None:
-    for agent_result in state.get("agent_results") or []:
-        detailed = (agent_result.get("analytics_results") or {}).get("detailed_analysis")
-        if detailed:
-            return detailed
+# ── chart builders (deterministic — data comes only from evidence) ───────────
+
+def _chart(chart_type: str, title: str, x: str, y: str, data: List[Dict]) -> Dict[str, Any]:
+    return {"type": "chart", "chart_type": chart_type, "title": title,
+            "x_field": x, "y_field": y, "data": data}
+
+
+def _artifacts_from_analytics(analytics: Dict[str, Any], chart_type: str, title: str) -> List[Dict]:
+    """Build a chart artifact from nl2sql analytics, honouring the requested type."""
+    if not analytics or chart_type in (None, "none", ""):
+        return []
+
+    # Trend → line over time
+    if chart_type == "line" and analytics.get("trend"):
+        data = [{"period": p["period"], "amount": round(p["amount"], 2)} for p in analytics["trend"]]
+        return [_chart("line", title or "Trend", "period", "amount", data)]
+
+    # Comparison → two bars
+    comp = analytics.get("comparison")
+    if chart_type == "bar" and comp:
+        data = [
+            {"label": comp.get("target_a_name", "A"), "amount": round(comp.get("target_a_total", 0), 2)},
+            {"label": comp.get("target_b_name", "B"), "amount": round(comp.get("target_b_total", 0), 2)},
+        ]
+        return [_chart("bar", title or "Comparison", "label", "amount", data)]
+
+    # Category / merchant breakdown → bar or pie
+    breakdown = analytics.get("category_breakdown") or analytics.get("merchant_breakdown")
+    if breakdown and chart_type in ("bar", "pie"):
+        data = [{"label": str(k), "amount": round(float(v), 2)} for k, v in breakdown[:10]]
+        return [_chart(chart_type, title or "Breakdown", "label", "amount", data)]
+
+    return []
+
+
+def _portfolio_pie(inv_data: Dict[str, Any]) -> List[Dict]:
+    holdings = inv_data.get("holdings") or []
+    if not holdings:
+        return []
+    data = [{"label": h["name"], "value": h["share_pct"]} for h in holdings if h.get("share_pct")]
+    return [_chart("pie", "Portfolio Allocation", "label", "value", data)] if data else []
+
+
+def _goal_bar(goal: Dict[str, Any]) -> List[Dict]:
+    needed = goal.get("monthly_savings_needed")
+    net_flow = goal.get("monthly_net_flow")
+    if needed is None or net_flow is None:
+        return []
+    return [_chart("bar", "Monthly Capacity vs. Savings Needed", "label", "amount", [
+        {"label": "Net flow / month", "amount": round(net_flow, 2)},
+        {"label": "Savings needed / month", "amount": round(needed, 2)},
+    ])]
+
+
+# ── profile helpers ──────────────────────────────────────────────────────────
+
+def _profile_fields(profile: Dict[str, Any]) -> Dict[str, str]:
+    income = profile.get("income", "unknown")
+    income_display = f"₹{income:,.0f} per month" if isinstance(income, (int, float)) else str(income)
+    return {
+        "current_date": datetime.now().strftime("%d %B %Y"),
+        "income_display": income_display,
+        "city": str(profile.get("city", "India")),
+        "real_time_balances": str(profile.get("real_time_balances", "N/A")),
+        "monthly_net_flow": str(profile.get("monthly_net_flow", "N/A")),
+    }
+
+
+def _find(evidence: List[Dict], tool: str) -> Optional[Dict]:
+    for e in evidence:
+        if e.get("tool") == tool:
+            return e
     return None
 
 
-def answer_node(state: AgentState) -> dict:
-    """
-    Generates the final natural language answer using LLM.
-    Routes to two distinct formatting pipelines:
-      1. RAG/Knowledge + Goal Planning -> uses ANSWER_KNOWLEDGE_SYSTEM
-      2. Transaction Agents -> uses ANSWER_SYSTEM + SQL + Analytics
-    """
-    intent = state.get("intent") or "FINANCIAL_KNOWLEDGE"
-    selected_agent = state.get("selected_agent") or "knowledge"
-    user_query = state.get("user_query") or ""
-    standalone_query = state.get("standalone_query") or state.get("rewritten_query") or user_query
-    lc_messages = state.get("messages") or []
-    final_context = state.get("final_context") or {}
-    execution_plan = state.get("execution_plan") or {}
+# ── node ───────────────────────────────────────────────────────────────────
 
-    is_brain_path = bool(execution_plan.get("tools")) and bool(final_context)
-    is_knowledge_path = (intent == "GOAL_PLANNING" or selected_agent == "knowledge")
+def answer_node(state: AgentState) -> dict:
+    evidence = state.get("evidence") or []
+    user_query = state.get("user_query") or ""
+    profile = state.get("user_profile") or {}
+    sources = state.get("sources") or []
+
+    goal_ev = _find(evidence, "goal_planner")
+    inv_ev = _find(evidence, "investment")
+    nl2sql_evs = [e for e in evidence if e.get("tool") == "nl2sql"]
+    retrieved = state.get("retrieved_context") or []
+
+    answer = ""
+    artifacts: List[Dict] = []
+    intent = "FINANCIAL_KNOWLEDGE"
 
     try:
-        metadata = state.get("metadata") or {}
-        time_ctx = metadata.get("time_context") or get_time_context()
-        resolved_entities = state.get("resolved_entities") or state.get("entities") or {}
-        analysis_window = (
-            metadata.get("analysis_window")
-            or (state.get("analytics_results") or {}).get("analysis_window")
-            or analysis_window_from_range(resolved_entities.get("date_range"))
-        )
-        window_label = analysis_window.get("period_label", "All time")
-
-        if intent in SPENDING_ANALYSIS_INTENTS:
-            verified_spending = resolve_spending_analysis(state)
-            if verified_spending and verified_spending.get("monthly_comparison"):
-                answer = render_spending_analysis_answer(
-                    verified_spending,
-                    user_profile=state.get("user_profile") or {},
-                )
-                logger.info(
-                    "[Node:answer] Deterministic expense-only spending analysis "
-                    "(intent=%s, months=%d)",
-                    intent,
-                    len(verified_spending["monthly_comparison"]),
-                )
-                return {
-                    "raw_answer": answer,
-                    "sources": ["Supabase Transactions"],
-                    "final_intent": intent,
-                }
-
-        if is_brain_path and intent != "GOAL_PLANNING":
-            profile = state.get("user_profile") or {}
-            income = profile.get("income", "unknown")
-            annual_income = profile.get("annual_income", income)
-            income_display = (
-                f"₹{annual_income:,.0f} per annum"
-                if isinstance(annual_income, (int, float))
-                else str(annual_income)
-            )
-
-            verified = (
-                final_context.get("verified_spending_numbers")
-                or (state.get("analytics_results") or {}).get("detailed_analysis")
-                or _extract_verified_from_agents(state)
-            )
-
-            if verified and verified.get("monthly_comparison"):
-                answer = render_spending_analysis_answer(verified, user_profile=profile)
-                logger.info("[Node:answer] Used deterministic spending analysis (verified DB figures)")
-            else:
-                verified_json = json.dumps(verified, indent=2, default=str) if verified else "No transaction data available."
-
-                system_prompt = BRAIN_ANSWER_SYSTEM.format(
-                    final_context=json.dumps(
-                        {k: v for k, v in final_context.items() if k != "verified_spending_numbers"},
-                        indent=2,
-                        default=str,
-                    ),
-                    verified_spending=verified_json,
-                    income_display=income_display,
-                    risk_profile=profile.get("risk_profile", "Moderate"),
-                    city=profile.get("city", "India"),
-                    monthly_net_flow=profile.get("monthly_net_flow", "N/A"),
-                    primary_goal=profile.get("primary_goal") or "Not specified",
-                    current_date=time_ctx["current_date"],
-                    current_date_display=time_ctx["current_date_display"],
-                    analysis_window_label=window_label,
-                )
-
-                completion = graph_chat_completion(
-                    node="answer_node",
-                    purpose="brain_answer",
-                    model=settings.active_chat_model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": BRAIN_ANSWER_USER.format(query=standalone_query)},
-                    ],
-                    max_tokens=1400,
-                    temperature=0.0,
-                )
-                answer = completion.choices[0].message.content.strip()
-
-            sources = []
-            if state.get("rag_results", {}).get("sources"):
-                sources.extend(state["rag_results"]["sources"])
-            if state.get("agent_results"):
-                sources.append("Supabase Transactions")
-            if state.get("portfolio_results", {}).get("portfolio_health"):
-                sources.append("Portfolio Analysis")
-            sources = sources or ["FinAssist Brain"]
-
-        elif is_knowledge_path:
-            # ── 1. RAG / Advisor / Goal Planning Path ──
-            profile = state.get("user_profile") or {}
-            context_blocks = state.get("retrieved_context") or []
-            source_refs = state.get("context_sources") or []
-            min_distance = state.get("rag_confidence") or 1.0
-            workflow_state = state.get("workflow_state") or {}
-
-            # Construct context text
-            if context_blocks and min_distance <= 0.6:
-                context_text = "\n\n---\n\n".join(context_blocks)
-                sources = source_refs if source_refs else ["FinAssist Knowledge Base"]
-            else:
-                logger.info("[Node:answer] Low RAG confidence (%.3f) — using LLM general knowledge", min_distance)
-                context_text = (
-                    "No highly relevant documents found in the knowledge base. "
-                    "Use your general financial expertise to answer, while maintaining safety guidelines."
-                )
-                sources = ["FinAssist General Knowledge"]
-
-            # If coming from a completed HITL workflow, inject the collected slots
-            if workflow_state and workflow_state.get("collected_information"):
-                slots_str = WorkflowLogic.format_filled_slots(workflow_state["collected_information"])
-                context_text = (
-                    f"User Scenario Details (ALL these details are already provided):\n{slots_str}\n\n{context_text}"
-                )
-
-            # Format user profile values
-            income = profile.get("income", "unknown")
-            monthly_income = profile.get("income", income)
-            city = profile.get("city", "India")
-            current_date = datetime.now().strftime("%d %B %Y")
-            income_display = f"₹{monthly_income:,.0f} per month" if isinstance(monthly_income, (int, float)) else str(monthly_income)
-            real_time_balances = profile.get("real_time_balances", "N/A")
-            monthly_net_flow = profile.get("monthly_net_flow", "N/A")
-
-            system_prompt_template = FINASSIST_SYSTEM_PROMPT if intent == "GOAL_PLANNING" else ANSWER_KNOWLEDGE_SYSTEM
-            system_prompt = system_prompt_template.format(
-                current_date=current_date,
-                income_display=income_display,
-                city=city,
-                real_time_balances=real_time_balances,
-                monthly_net_flow=monthly_net_flow,
-                context_text=context_text,
-            )
-
-            # Build messages list including last 10 turns of history
-            recent_history = []
-            for m in lc_messages[-11:-1]:
-                if isinstance(m, HumanMessage) or m.__class__.__name__ == "HumanMessage":
-                    recent_history.append({"role": "user", "content": m.content})
-                elif isinstance(m, AIMessage) or m.__class__.__name__ == "AIMessage":
-                    recent_history.append({"role": "assistant", "content": m.content})
-
-            messages_for_llm = [{"role": "system", "content": system_prompt}]
-            messages_for_llm.extend(recent_history)
-            messages_for_llm.append({"role": "user", "content": user_query})
-
+        # ── Goal planning ──
+        if goal_ev:
+            intent = "GOAL_PLANNING"
+            g = goal_ev.get("data") or {}
+            ctx = json.dumps(g, indent=2, default=str)
+            fields = _profile_fields(profile)
+            system_prompt = FINASSIST_SYSTEM_PROMPT.format(context_text=ctx, **fields)
             completion = graph_chat_completion(
-                node="answer_node",
-                purpose="knowledge_answer",
-                model=settings.active_chat_model,
-                messages=messages_for_llm,
-                max_tokens=700,
-                temperature=0.2,
+                node="answer_node", purpose="goal_plan", model=settings.active_chat_model,
+                messages=[{"role": "system", "content": system_prompt},
+                          {"role": "user", "content": user_query}],
+                max_tokens=600, temperature=0.2,
             )
             answer = completion.choices[0].message.content.strip()
+            artifacts = _goal_bar(g)
 
-        else:
-            # ── 2. Transaction / SQL / Analytics Path ──
-            sql_query = state.get("sql_query") or "No query executed"
-            sql_results = state.get("sql_results") or []
-            analytics_results = state.get("analytics_results") or {}
+        # ── Investment ──
+        elif inv_ev:
+            intent = "PORTFOLIO_ANALYSIS"
+            data = inv_ev.get("data") or {}
+            answer = data.get("narrative") or "Here is your portfolio analysis."
+            artifacts = _portfolio_pie(data)
 
-            # Fallback message if query execution failed or no database connection
-            sql_error = state.get("sql_error")
-            if sql_error:
-                answer = f"I encountered an error while retrieving your transaction details: {sql_error}"
-                sources = ["Supabase Database Connection"]
-            else:
-                user_msg = ANSWER_USER.format(
-                    question=user_query,
-                    sql_summary=sql_query,
-                    results=json.dumps(sql_results, indent=2),
-                    analytics=json.dumps(analytics_results, indent=2),
-                )
-
-                detailed = analytics_results.get("detailed_analysis")
-                if detailed and detailed.get("monthly_comparison"):
-                    answer = render_spending_analysis_answer(
-                        detailed,
-                        user_profile=state.get("user_profile") or {},
-                    )
-                    logger.info("[Node:answer] Used deterministic spending analysis (SQL path)")
-                else:
-                    system_content = ANSWER_SYSTEM.format(
-                        current_date=time_ctx["current_date"],
-                        current_date_display=time_ctx["current_date_display"],
-                        analysis_window_label=window_label,
-                    )
-                    if detailed:
-                        system_content += (
-                            "\n\nDetailed spending analysis (use these exact figures):\n"
-                            + json.dumps(detailed, indent=2, default=str)
-                        )
-
-                    completion = graph_chat_completion(
-                        node="answer_node",
-                        purpose="sql_analytics_answer",
-                        model=settings.active_chat_model,
-                        messages=[
-                            {"role": "system", "content": system_content},
-                            {"role": "user", "content": user_msg},
-                        ],
-                        max_tokens=1200 if detailed else 300,
-                        temperature=0.0,
-                    )
-                    answer = completion.choices[0].message.content.strip()
+        # ── Data (nl2sql) ──
+        elif nl2sql_evs:
+            intent = "TRANSACTION_QUERY"
+            evidence_blob = json.dumps(
+                [{"task": e.get("task"), "summary": e.get("summary"), "data": e.get("data")} for e in nl2sql_evs],
+                indent=2, default=str,
+            )
+            completion = graph_chat_completion(
+                node="answer_node", purpose="data_answer", model=settings.active_chat_model,
+                messages=[{"role": "system", "content": ANSWER_VIZ_SYSTEM},
+                          {"role": "user", "content": f"User question: {user_query}\n\nEvidence:\n{evidence_blob}"}],
+                response_format={"type": "json_object"}, max_tokens=600, temperature=0.1,
+            )
+            parsed = json.loads(completion.choices[0].message.content.strip())
+            answer = parsed.get("answer", "")
+            chart = parsed.get("chart") or {}
+            if parsed.get("needs_visualization") and chart.get("chart_type") not in (None, "none"):
+                # Use the last nl2sql analytics (most complete) for chart data.
+                analytics = (nl2sql_evs[-1].get("data") or {}).get("analytics") or {}
+                artifacts = _artifacts_from_analytics(analytics, chart.get("chart_type"), chart.get("title", ""))
+            if not sources:
                 sources = ["Supabase Transactions"]
 
-    except Exception as exc:
-        logger.error("[Node:answer] LLM call failed: %s", exc)
-        answer = "I encountered a temporary issue generating your response. Please try again in a moment."
-        sources = ["System Fallback"]
+        # ── Knowledge / general fallback ──
+        else:
+            intent = "FINANCIAL_KNOWLEDGE"
+            context_text = "\n\n---\n\n".join(retrieved) if retrieved else (
+                "No specific documents retrieved. Use your general financial expertise to answer safely."
+            )
+            fields = _profile_fields(profile)
+            system_prompt = ANSWER_KNOWLEDGE_SYSTEM.format(context_text=context_text, **fields)
+            completion = graph_chat_completion(
+                node="answer_node", purpose="knowledge_answer", model=settings.active_chat_model,
+                messages=[{"role": "system", "content": system_prompt},
+                          {"role": "user", "content": user_query}],
+                max_tokens=600, temperature=0.2,
+            )
+            answer = completion.choices[0].message.content.strip()
+            if not sources:
+                sources = ["FinAssist Knowledge Base"]
 
+    except Exception as exc:
+        logger.error("[Node:answer] Synthesis failed: %s", exc)
+        answer = "I encountered a temporary issue generating your response. Please try again in a moment."
+        sources = sources or ["System Fallback"]
+
+    logger.info("[Node:answer] intent=%s artifacts=%d", intent, len(artifacts))
     return {
-        "raw_answer": answer,
+        "final_answer": answer,
+        "artifacts": artifacts,
         "sources": sources,
         "final_intent": intent,
+        "messages": [AIMessage(content=answer)],
     }

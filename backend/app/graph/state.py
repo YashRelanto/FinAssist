@@ -1,11 +1,17 @@
 """
 graph/state.py
 ==============
-Defines the AgentState TypedDict that flows through the FinAssist LangGraph v2
-pipeline. Every node reads from and writes a subset of these fields.
+Minimal AgentState for the FinAssist Brain (Supervisor) + tool-loop graph.
 
-The `messages` field uses LangGraph's `add_messages` reducer — messages are
-automatically appended rather than replaced on each node update.
+The Brain is a supervisor node that decides, each pass, which tool to call
+(nl2sql / goal_planner / investment / knowledge) — accumulating results into
+`evidence` — until it has enough information to `finish`, at which point the
+answer node synthesises the final structured response. Clarification is handled
+inside the Brain via LangGraph `interrupt` (HITL pause/resume), so it is not a
+state machine of its own.
+
+The `messages` field uses LangGraph's `add_messages` reducer and `evidence`
+uses an additive reducer — both append rather than replace across nodes.
 """
 
 from __future__ import annotations
@@ -17,110 +23,64 @@ from typing_extensions import TypedDict
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph.message import add_messages
 
-from app.utils.temporal_context import get_time_context
+
+def merge_evidence(current: List[Dict[str, Any]] | None,
+                   update: List[Dict[str, Any]] | None) -> List[Dict[str, Any]]:
+    """
+    Reducer for `evidence`.
+
+    Tools append one or more non-empty items during a turn, so those accumulate.
+    An empty (or None) update is the per-turn RESET signal — only
+    `make_initial_state` sends `evidence=[]`, which must CLEAR last turn's evidence
+    rather than merge with it (the checkpointer persists state across turns, and a
+    plain `operator.add` reducer would otherwise keep stale evidence forever).
+    """
+    if not update:
+        return []
+    return (current or []) + list(update)
 
 
 class AgentState(TypedDict, total=False):
-    """
-    Complete state object passed between every node in the FinAssist v2 graph.
+    """Lean state passed between nodes in the supervisor graph."""
 
-    Fields are grouped by pipeline stage:
-      - Input           : set once by chatbot route before graph invocation
-      - Messages        : LangGraph-managed conversation history (append-only)
-      - Guardrail       : input/output security check results
-      - Intent          : classification result
-      - Context         : follow-up query resolution
-      - Entities        : structured extraction from query
-      - Semantic        : DB-normalized entities
-      - Clarification   : ambiguity detection
-      - Agent Routing   : which agent handles the query
-      - Goal Planning   : HITL slot-filling workflow state
-      - SQL Pipeline    : AST → validated SQL → execution results
-      - Analytics       : computed aggregates, trends, anomalies
-      - RAG             : ChromaDB retrieval results (for knowledge queries)
-      - Answer          : raw and final answers
-      - Observability   : execution metrics
-    """
-
-    # ── Input (set once by the chatbot route) ─────────────────────────
+    # ── Input (set once per turn by the chatbot route) ────────────────
     user_id:      str               # Supabase user UUID
-    session_id:   str               # Conversation thread UUID (from frontend)
-    user_query:   str               # Latest user message text (raw)
-    user_profile: Dict[str, Any]    # Income, segment, risk_profile, city, etc.
+    session_id:   str               # Conversation thread UUID
+    user_query:   str               # Latest user message text
+    user_profile: Dict[str, Any]    # Income, balances, net flow, etc.
 
-    # ── Conversation history (LangGraph-managed, append-only reducer) ─
+    # ── Conversation history (append-only reducer) ───────────────────
     messages: Annotated[List[BaseMessage], add_messages]
 
-    # ── Security — Input Guard ────────────────────────────────────────
-    input_blocked: bool              # True when InputGuard blocks the message
-    input_error:   Optional[str]     # Human-readable reason for the block
-    validated_query: str             # Normalized query after input guard (FR-1)
+    # ── Input Guardrail ──────────────────────────────────────────────
+    input_blocked: bool
 
-    # ── Intent Classification ─────────────────────────────────────────
-    intent:     str                  # TRANSACTION_QUERY, SPENDING_SUMMARY, etc.
-    confidence: float                # Classification confidence score
+    # ── Brain supervisor loop ────────────────────────────────────────
+    next_action: str                # nl2sql | goal_planner | investment | knowledge | out_of_scope | finish
+    brain_task:  Dict[str, Any]     # instruction for the chosen tool
+    iterations:  int                # number of Brain passes this turn
+    evidence:    Annotated[List[Dict[str, Any]], merge_evidence]  # [{tool, task, summary, data}]
 
-    # ── Context Resolution (follow-up handling) ───────────────────────
-    rewritten_query: str             # Resolved query after follow-up merging
-    standalone_query: str            # BRD alias for rewritten_query
+    # ── NL2SQL scratch (consumed by the reused SQL chain) ────────────
+    sql_ast:       Dict[str, Any]
+    sql_query:     Any                  # str, or {"query_a","query_b"} for comparisons
+    sql_valid:     bool
+    sql_results:   List[Dict[str, Any]]
+    sql_error:     Optional[str]
+    analysis_type: str                  # basic | trend | comparison | anomaly
 
-    # ── Entity Extraction ─────────────────────────────────────────────
-    entities: Dict[str, Any]         # Structured: merchant, category, dates, metric, etc.
+    # ── Knowledge tool scratch ───────────────────────────────────────
+    retrieved_context: List[str]
 
-    # ── Semantic Resolution ───────────────────────────────────────────
-    resolved_entities: Dict[str, Any]  # DB-normalized entities (fuzzy → exact names)
+    # ── Output ───────────────────────────────────────────────────────
+    final_answer:   Optional[str]
+    artifacts:      List[Dict[str, Any]]   # visualization specs for the frontend
+    sources:        List[str]
+    final_intent:   Optional[str]
+    output_blocked: bool
 
-    # ── Clarification ─────────────────────────────────────────────────
-    clarification_needed:   bool
-    clarification_question: str
-    clarification_options:  List[str]
-    clarification_history:  List[Dict[str, Any]]
-    clarification_complete: bool
-
-    # ── Semantic Reasoning (Brain prep) ───────────────────────────────
-    semantic_context: Dict[str, Any]
-
-    # ── Brain Orchestration ───────────────────────────────────────────
-    execution_plan: Dict[str, Any]
-    rag_results: Dict[str, Any]
-    agent_results: List[Dict[str, Any]]
-    portfolio_results: Dict[str, Any]
-    final_context: Dict[str, Any]
-
-    # ── Agent Routing (legacy + tool execution) ───────────────────────
-    selected_agent: str              # transaction, comparison, trend, anomaly, knowledge
-    agent_context:  Dict[str, Any]   # Agent-specific parameters / instructions
-
-    # ── Goal Planning / HITL Workflow ─────────────────────────────────
-    workflow_state:   Dict[str, Any]   # Slot-filling state (type, collected_info, missing)
-    workflow_active:  bool             # True when HITL workflow is in progress
-    workflow_related: Optional[bool]   # True if message continues active workflow
-
-    # ── SQL Pipeline ──────────────────────────────────────────────────
-    sql_ast:               Dict[str, Any]   # Structured query specification (AST)
-    sql_query:             str              # Generated SQL string
-    sql_valid:             bool             # Whether SQL passed validation
-    sql_validation_errors: List[str]        # Validation error messages
-    sql_results:           List[Dict]       # Raw Supabase query results
-    sql_error:             Optional[str]    # Execution error message
-
-    # ── Analytics ─────────────────────────────────────────────────────
-    analytics_results: Dict[str, Any]  # Computed aggregates, trends, anomalies
-
-    # ── RAG Retrieval (preserved for knowledge queries) ───────────────
-    retrieved_context: List[str]    # Text chunks from ChromaDB (deduplicated)
-    context_sources:   List[str]   # Source labels for each chunk
-    rag_confidence:    float       # Minimum cosine distance across retrieved chunks
-
-    # ── Answer Production ─────────────────────────────────────────────
-    raw_answer:     Optional[str]   # LLM-generated answer before output guardrail
-    final_answer:   Optional[str]   # Cleaned and PII-masked answer
-    final_intent:   Optional[str]   # Resolved intent sent in ChatResponse
-    sources:        List[str]       # Source attribution list
-    output_blocked: bool            # True when OutputGuard hard-blocks the response
-
-    # ── Observability ─────────────────────────────────────────────────
-    metadata: Dict[str, Any]        # execution_time, token_usage, node timings
+    # ── Observability ────────────────────────────────────────────────
+    metadata: Dict[str, Any]            # iterations, tools_used, token usage
 
 
 def make_initial_state(
@@ -128,13 +88,8 @@ def make_initial_state(
     session_id: str,
     user_query: str,
     user_profile: Dict[str, Any],
-    workflow_state: Optional[Dict[str, Any]] = None,
-    workflow_active: bool = False,
 ) -> AgentState:
-    """
-    Build a clean initial AgentState dict for the start of each graph invocation.
-    Called by the chatbot route before calling graph.ainvoke().
-    """
+    """Build a clean initial AgentState for the start of each graph invocation."""
     return AgentState(
         # Input
         user_id=user_id,
@@ -143,70 +98,33 @@ def make_initial_state(
         user_profile=user_profile,
         messages=[HumanMessage(content=user_query)],
 
-        # Security
+        # Guardrail
         input_blocked=False,
-        input_error=None,
-        validated_query="",
 
-        # Intent
-        intent="",
-        confidence=0.0,
+        # Brain loop
+        next_action="",
+        brain_task={},
+        iterations=0,
+        evidence=[],
 
-        # Context
-        rewritten_query="",
-        standalone_query="",
-
-        # Entities
-        entities={},
-        resolved_entities={},
-
-        # Clarification
-        clarification_needed=False,
-        clarification_question="",
-        clarification_options=[],
-        clarification_history=[],
-        clarification_complete=True,
-
-        # Semantic / Brain
-        semantic_context={},
-        execution_plan={},
-        rag_results={},
-        agent_results=[],
-        portfolio_results={},
-        final_context={},
-
-        # Routing
-        selected_agent="",
-        agent_context={},
-
-        # Workflow
-        workflow_state=workflow_state or {},
-        workflow_active=workflow_active,
-        workflow_related=None,
-
-        # SQL
+        # SQL scratch
         sql_ast={},
         sql_query="",
         sql_valid=False,
-        sql_validation_errors=[],
         sql_results=[],
         sql_error=None,
+        analysis_type="basic",
 
-        # Analytics
-        analytics_results={},
-
-        # RAG
+        # Knowledge scratch
         retrieved_context=[],
-        context_sources=[],
-        rag_confidence=1.0,
 
-        # Answer
-        raw_answer=None,
+        # Output
         final_answer=None,
-        final_intent=None,
+        artifacts=[],
         sources=[],
+        final_intent=None,
         output_blocked=False,
 
         # Observability
-        metadata={"start_time": time.time(), "time_context": get_time_context()},
+        metadata={"start_time": time.time()},
     )

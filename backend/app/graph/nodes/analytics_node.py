@@ -9,13 +9,6 @@ import math
 from typing import Dict, Any
 
 from app.graph.state import AgentState
-from app.utils.analysis_period import filter_rows_by_date
-from app.utils.temporal_context import analysis_window_from_range
-from app.services.spending_analysis_service import (
-    build_detailed_spending_analysis,
-    fetch_expenses_in_window,
-    filter_expense_rows,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -26,61 +19,25 @@ def analytics_node(state: AgentState) -> dict:
     A/B differences, and z-score anomaly detection) in pure Python.
     """
     sql_results = state.get("sql_results") or []
-    selected_agent = state.get("selected_agent") or "transaction"
-    resolved_entities = state.get("resolved_entities") or state.get("entities") or {}
+    analysis_type = state.get("analysis_type") or "basic"
+    brain_task = state.get("brain_task") or {}
+    resolved_entities = brain_task.get("entities") or {}
+    sub_question = brain_task.get("sub_question") or state.get("user_query")
 
-    date_range = resolved_entities.get("date_range") or {}
-    start_date = date_range.get("from")
-    end_date = date_range.get("to")
-    if not start_date and not end_date:
-        meta_window = (state.get("metadata") or {}).get("analysis_window") or {}
-        start_date = meta_window.get("start_date")
-        end_date = meta_window.get("end_date")
-
-    analysis_window = analysis_window_from_range(
-        {"from": start_date, "to": end_date} if (start_date or end_date) else None
-    )
-    user_id = state.get("user_id") or ""
-
-    # Authoritative expense-only fetch — runs even when SQL returned no rows
-    if user_id and start_date and end_date:
-        db_rows = fetch_expenses_in_window(user_id, start_date, end_date)
-        if db_rows:
-            sql_results = db_rows
-            logger.info(
-                "[Node:analytics] Using %d expense rows from direct DB fetch",
-                len(sql_results),
-            )
+    analytics_results = {}
 
     if not sql_results:
-        logger.info("[Node:analytics] No data to analyze")
-        return {"analytics_results": {"status": "no_data", "analysis_window": analysis_window}}
-
-    if isinstance(sql_results, list):
-        sql_results = filter_expense_rows(sql_results)
-        if start_date or end_date:
-            before = len(sql_results)
-            sql_results = filter_rows_by_date(
-                sql_results,
-                start_date=start_date,
-                end_date=end_date,
-            )
-            logger.info(
-                "[Node:analytics] Filtered expense rows by date window %s–%s: %d → %d",
-                start_date,
-                end_date,
-                before,
-                len(sql_results),
-            )
-
-    analytics_results: Dict[str, Any] = {
-        "analysis_window": analysis_window,
-    }
-
-    if not sql_results:
-        logger.info("[Node:analytics] No expense rows after filters")
-        analytics_results["status"] = "no_data"
-        return {"analytics_results": analytics_results, "sql_results": sql_results}
+        logger.info("[Node:analytics] No SQL results to analyze")
+        return {
+            "analytics_results": {"status": "no_data"},
+            "evidence": [{
+                "tool": "nl2sql",
+                "task": sub_question,
+                "summary": "Query returned no rows.",
+                "data": {"rows": [], "analytics": {"status": "no_data"},
+                         "sql_error": state.get("sql_error")},
+            }],
+        }
 
     # Support dict type (e.g. split comparison results)
     if isinstance(sql_results, dict):
@@ -100,7 +57,14 @@ def analytics_node(state: AgentState) -> dict:
             "pct_change": pct_change,
         }
         logger.info("[Node:analytics] Computed dict comparison: A=%f B=%f diff=%f pct=%.2f%%", sum_a, sum_b, diff, pct_change)
-        return {"analytics_results": analytics_results}
+        return {
+            "analytics_results": analytics_results,
+            "evidence": [{
+                "tool": "nl2sql", "task": sub_question,
+                "summary": f"Comparison: A=₹{sum_a:,.2f} vs B=₹{sum_b:,.2f} ({pct_change:+.1f}%).",
+                "data": {"rows": sql_results, "analytics": analytics_results},
+            }],
+        }
 
     # Extract amounts if present in results
     amounts = []
@@ -141,7 +105,7 @@ def analytics_node(state: AgentState) -> dict:
             analytics_results["count"] = len(sql_results)
 
     # ── 1. Trend Calculations ──
-    if selected_agent == "trend":
+    if analysis_type == "trend":
         monthly_data = {}
         for r in sql_results:
             if not isinstance(r, dict):
@@ -174,41 +138,11 @@ def analytics_node(state: AgentState) -> dict:
         logger.info("[Node:analytics] Computed trends for %d periods", len(trend_list))
 
     # ── 2. Comparison Calculations ──
-    elif selected_agent == "comparison":
+    elif analysis_type == "comparison":
         comp_info = resolved_entities.get("comparison") or {}
         targets = comp_info.get("targets") or []
 
-        labeled_a = [
-            r for r in sql_results
-            if isinstance(r, dict)
-            and str(r.get("comparison_target") or "").lower() in ("target_a", "a", "query_a")
-        ]
-        labeled_b = [
-            r for r in sql_results
-            if isinstance(r, dict)
-            and str(r.get("comparison_target") or "").lower() in ("target_b", "b", "query_b")
-        ]
-
-        if labeled_a or labeled_b:
-            sum_a = sum(float(r.get("amount") or 0.0) for r in labeled_a)
-            sum_b = sum(float(r.get("amount") or 0.0) for r in labeled_b)
-            diff = sum_a - sum_b
-            pct_change = (diff / sum_b * 100.0) if sum_b != 0 else 0.0
-            analytics_results["comparison"] = {
-                "target_a_name": targets[0] if targets else "period_a",
-                "target_b_name": targets[1] if len(targets) > 1 else "period_b",
-                "target_a_total": sum_a,
-                "target_b_total": sum_b,
-                "difference": diff,
-                "pct_change": pct_change,
-            }
-            logger.info(
-                "[Node:analytics] Computed labeled comparison: A=%f B=%f diff=%f",
-                sum_a,
-                sum_b,
-                diff,
-            )
-        elif len(targets) >= 2:
+        if len(targets) >= 2:
             target_a, target_b = targets[0], targets[1]
             part_a = []
             part_b = []
@@ -251,7 +185,7 @@ def analytics_node(state: AgentState) -> dict:
             logger.info("[Node:analytics] Computed comparison: A=%s (total=%f) B=%s (total=%f)", target_a, sum_a, target_b, sum_b)
 
     # ── 3. Anomaly Detection ──
-    elif selected_agent == "anomaly":
+    elif analysis_type == "anomaly":
         if amounts and len(amounts) >= 3:
             mean = sum(amounts) / len(amounts)
             variance = sum((x - mean) ** 2 for x in amounts) / len(amounts)
@@ -306,14 +240,24 @@ def analytics_node(state: AgentState) -> dict:
         if merchant_totals:
             analytics_results["merchant_breakdown"] = sorted(merchant_totals.items(), key=lambda x: x[1], reverse=True)
 
-    if isinstance(sql_results, list) and sql_results:
-        analytics_results["detailed_analysis"] = build_detailed_spending_analysis(
-            sql_results,
-            analysis_window=analysis_window,
-            user_profile=state.get("user_profile") or {},
-        )
+    # Build a compact summary for the Brain's evidence log.
+    summary_bits = []
+    if "total_amount" in analytics_results:
+        summary_bits.append(f"total=₹{analytics_results['total_amount']:,.2f}")
+    if "count" in analytics_results:
+        summary_bits.append(f"count={analytics_results['count']}")
+    if analytics_results.get("trend"):
+        summary_bits.append(f"trend over {len(analytics_results['trend'])} periods")
+    if analytics_results.get("anomalies") is not None:
+        summary_bits.append(f"{len(analytics_results['anomalies'])} anomalies")
+    summary = "NL2SQL: " + (", ".join(summary_bits) if summary_bits else f"{len(sql_results)} rows")
 
-    result: Dict[str, Any] = {"analytics_results": analytics_results}
-    if isinstance(sql_results, list):
-        result["sql_results"] = sql_results
-    return result
+    return {
+        "analytics_results": analytics_results,
+        "evidence": [{
+            "tool": "nl2sql",
+            "task": sub_question,
+            "summary": summary,
+            "data": {"rows": sql_results[:100], "analytics": analytics_results},
+        }],
+    }

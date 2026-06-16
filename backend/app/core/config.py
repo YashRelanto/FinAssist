@@ -33,7 +33,7 @@ class Settings:
     # ── NVIDIA NIM ────────────────────────────────────────────────────────────
     LLM_PROVIDER: str = "nvidia"
     NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
-    NVIDIA_CHAT_MODEL: str = os.getenv("NVIDIA_CHAT_MODEL", "meta/llama-3.1-8b-instruct")
+    NVIDIA_CHAT_MODEL: str = os.getenv("NVIDIA_CHAT_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
     NVIDIA_ACCOUNT_HUB_MODEL: str = os.getenv(
         "NVIDIA_ACCOUNT_HUB_MODEL",
         "meta/llama-3.1-70b-instruct",
