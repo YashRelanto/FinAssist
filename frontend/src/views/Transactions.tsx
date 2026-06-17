@@ -9,6 +9,7 @@ import { apiFetch } from '../lib/api';
 import { activeUserId } from '../lib/activeUserId';
 import { analyzeStatementFile } from '../lib/statementParser';
 import { isWithinAnalysisWindow } from '../lib/analysisPeriod';
+import { PageHeader, PageLoading, PageShell, lumio } from '../components/PageShell';
 
 export const Transactions: React.FC = () => {
   const {
@@ -181,7 +182,7 @@ export const Transactions: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `FinAssist_Transactions_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `FinAssist_AI_Transactions_${new Date().toISOString().slice(0, 10)}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -214,51 +215,37 @@ export const Transactions: React.FC = () => {
   }), [transactions, search, selectedAccount, selectedCategory, selectedType, analysisPeriod]);
 
   if (isLoading && authReady && user?.isAuthenticated) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
-      </div>
-    );
+    return <PageLoading />;
   }
 
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-        <div>
-          <h2 className="text-3xl font-bold text-on-surface">Transactions</h2>
-          <p className="text-on-surface-variant mt-1 text-sm font-medium">Manage and review your detailed financial ledger.</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setBulkUploadOpen(true)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-on-surface-variant bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low transition-all"
-          >
-            <Upload className="w-4 h-4" /> Bulk Upload
-          </button>
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileUpload}
-            accept=".pdf,.csv,.xls,.xlsx"
-            style={{ display: 'none' }}
-          />
-          <button
-            onClick={handleExportCSV}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-bold text-on-surface-variant bg-surface-container-lowest border border-outline-variant hover:bg-surface-container-low transition-all"
-          >
-            <Download className="w-4 h-4" /> Export CSV
-          </button>
-          <button
-            onClick={handleAdd}
-            className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-bold bg-primary text-white hover:bg-primary-container shadow-md transition-all"
-          >
-            <Plus className="w-4 h-4" /> Add Transaction
-          </button>
-        </div>
-      </div>
+    <PageShell>
+      <PageHeader
+        title="Transactions"
+        description="Manage and review your detailed financial ledger."
+        actions={
+          <>
+            <button type="button" onClick={() => setBulkUploadOpen(true)} className={lumio.btnSecondary}>
+              <Upload className="w-4 h-4" /> Bulk Upload
+            </button>
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileUpload}
+              accept=".pdf,.csv,.xls,.xlsx"
+              className="hidden"
+            />
+            <button type="button" onClick={handleExportCSV} className={lumio.btnSecondary}>
+              <Download className="w-4 h-4" /> Export
+            </button>
+            <button type="button" onClick={handleAdd} className={lumio.btnPrimary}>
+              <Plus className="w-4 h-4" /> Add
+            </button>
+          </>
+        }
+      />
 
-      {/* Filter Bar */}
-      <div className="bg-surface-container-lowest rounded-xl p-5 border border-outline-variant/30 soft-shadow">
+      <div className={cn(lumio.card, '!py-6')}>
         <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-6 items-end">
           <div className="space-y-2 lg:col-span-2">
             <label className="text-[10px] font-bold text-outline ml-1 uppercase tracking-widest">Search</label>
@@ -269,7 +256,7 @@ export const Transactions: React.FC = () => {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search merchant, category..."
-                className="w-full pl-10 pr-4 py-2.5 bg-surface-container-low border border-outline-variant rounded-lg text-sm focus:ring-2 focus:ring-primary outline-none transition-all"
+                className={lumio.input}
               />
             </div>
           </div>
@@ -279,7 +266,7 @@ export const Transactions: React.FC = () => {
             <select
               value={selectedAccount}
               onChange={(e) => setSelectedAccount(e.target.value)}
-              className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary transition-all outline-none appearance-none font-bold"
+              className={lumio.select}
             >
               <option value="All Accounts">All Accounts</option>
               {accounts.map((acc, idx) => (
@@ -293,7 +280,7 @@ export const Transactions: React.FC = () => {
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
-              className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary transition-all outline-none appearance-none font-bold"
+              className={lumio.select}
             >
               <option value="All Categories">All Categories</option>
               {(dbCategories.length > 0 ? dbCategories : categories.map(c => c.name)).map((cat, idx) => (
@@ -307,7 +294,7 @@ export const Transactions: React.FC = () => {
             <select
               value={selectedType}
               onChange={(e) => setSelectedType(e.target.value)}
-              className="w-full bg-surface-container-low border border-outline-variant rounded-lg px-3 py-2.5 text-sm focus:ring-2 focus:ring-primary transition-all outline-none appearance-none font-bold"
+              className={lumio.select}
             >
               <option value="All Types">All Types</option>
               <option value="expense">Expense</option>
@@ -344,8 +331,8 @@ export const Transactions: React.FC = () => {
                       <p className="text-[10px] text-outline font-bold uppercase tracking-widest mt-1">{t.date}</p>
                     </div>
                     <span className={cn(
-                      "text-lg font-black",
-                      isAnomaly ? "text-error" : "text-on-surface"
+                      'text-lg font-black',
+                      isAnomaly ? 'text-error' : t.type === 'income' ? 'text-success' : 'text-error',
                     )}>
                       {formatCurrency(t.amount)}
                     </span>
@@ -374,10 +361,10 @@ export const Transactions: React.FC = () => {
       )}
 
       {/* Main Transactions Table */}
-      <div className="bg-surface-container-lowest rounded-xl soft-shadow border border-outline-variant/30 overflow-hidden">
+      <div className={lumio.tableWrap}>
         <div className="overflow-x-auto">
           <table className="w-full text-left">
-            <thead className="bg-surface-container-low/50 border-b border-outline-variant/30">
+            <thead className={lumio.tableHead}>
               <tr className="text-[10px] text-outline font-bold uppercase tracking-widest">
                 <th className="px-6 py-4">Date</th>
                 <th className="px-6 py-4">Merchant</th>
@@ -390,7 +377,7 @@ export const Transactions: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-outline-variant/20">
               {filtered.map((row) => (
-                <tr key={row.id} className="hover:bg-surface-container-low transition-colors duration-200 group">
+                <tr key={row.id} className={lumio.tableRow}>
                   <td className="px-6 py-4 text-sm font-medium text-on-surface-variant">{row.date}</td>
                   <td className="px-6 py-4 text-sm font-bold text-on-surface">{row.merchant}</td>
                   <td className="px-6 py-4">
@@ -400,7 +387,10 @@ export const Transactions: React.FC = () => {
                     {row.subCategory && <span className="block text-[8px] text-outline mt-1 uppercase font-bold">{row.subCategory}</span>}
                   </td>
                   <td className="px-6 py-4 text-sm text-outline font-medium">{row.account}</td>
-                  <td className={`px-6 py-4 text-sm text-right font-bold ${row.type === 'income' ? 'text-secondary' : 'text-error'}`}>
+                  <td className={cn(
+                    'px-6 py-4 text-sm text-right font-bold',
+                    row.type === 'income' ? 'text-success' : 'text-error',
+                  )}>
                     {row.type === 'income' ? `+${formatCurrency(row.amount)}` : `-${formatCurrency(row.amount)}`}
                   </td>
                   <td className="px-6 py-4 text-sm text-right font-medium text-on-surface-variant/80">
@@ -454,6 +444,6 @@ export const Transactions: React.FC = () => {
           loadTransactions();
         }}
       />
-    </div>
+    </PageShell>
   );
 };

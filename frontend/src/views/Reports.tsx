@@ -2,6 +2,7 @@ import React, { useRef } from 'react';
 import { FileText, Download, Filter, Calendar, Upload, FileCheck } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { Report } from '../types';
+import { PageHeader, PageShell, lumio } from '../components/PageShell';
 
 export const Reports: React.FC = () => {
   const { reports, uploadReport } = useAppContext();
@@ -29,26 +30,25 @@ export const Reports: React.FC = () => {
   };
 
   return (
-    <div className="space-y-8">
-      <header className="flex justify-between items-end">
-        <div>
-          <h2 className="text-3xl font-bold text-on-surface">Financial Reports</h2>
-          <p className="text-on-surface-variant font-medium text-sm mt-1">Generated statements and analytics exports.</p>
-        </div>
-        <button 
-          onClick={() => fileInputRef.current?.click()}
-          className="flex items-center gap-2 px-6 py-2.5 bg-secondary text-white font-bold rounded-lg shadow-md hover:brightness-110 transition-all"
-        >
-          <Upload className="w-4 h-4" /> Upload Report
-        </button>
-        <input 
-          type="file" 
-          ref={fileInputRef} 
-          onChange={handleFileChange} 
-          className="hidden" 
-          accept=".pdf,.csv"
-        />
-      </header>
+    <PageShell>
+      <PageHeader
+        title="Financial Reports"
+        description="Generated statements and analytics exports."
+        actions={
+          <>
+            <button type="button" onClick={() => fileInputRef.current?.click()} className={lumio.btnPrimary}>
+              <Upload className="w-4 h-4" /> Upload Report
+            </button>
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              className="hidden"
+              accept=".pdf,.csv"
+            />
+          </>
+        }
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {reports.map((report) => (
@@ -62,9 +62,10 @@ export const Reports: React.FC = () => {
                 <p className="text-[10px] font-bold text-outline uppercase tracking-widest">{report.date} • {report.size}</p>
               </div>
             </div>
-            <button 
-              onClick={() => downloadFile(report.title)}
-              className="p-2 text-outline hover:text-primary transition-colors flex-shrink-0"
+            <button
+              type="button"
+              onClick={() => downloadFile(report)}
+              className="p-2 text-lumio-muted hover:text-lumio-text transition-colors flex-shrink-0"
             >
               <Download className="w-5 h-5" />
             </button>
@@ -78,8 +79,8 @@ export const Reports: React.FC = () => {
         </div>
         <h3 className="text-xl font-bold">Request Custom Period</h3>
         <p className="text-sm text-outline max-w-md mx-auto">Select a specific timeframe and data points to generate a comprehensive bespoke financial breakdown.</p>
-        <button className="mt-4 px-8 py-3 bg-primary text-white font-bold rounded-xl shadow-md hover:brightness-110 transition-all">Select Parameters</button>
+        <button type="button" className={lumio.btnPrimary}>Select Parameters</button>
       </div>
-    </div>
+    </PageShell>
   );
 };

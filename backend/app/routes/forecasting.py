@@ -2,13 +2,10 @@ from datetime import date, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.services.forecast_service import (
-    generate_forecast,
-    get_model_status,
-    reload_models,
-)
+from app.services.prophet.inference import generate_forecast, get_model_status, reload_models
 from app.utils.analysis_period import DEFAULT_PERIOD, normalize_period
 from app.utils.supabase_client import supabase
+from app.utils.tab_logging import is_tab_logging_enabled, mask_user_id, tab_error, tab_info
 
 router = APIRouter(prefix="/api")
 
@@ -21,8 +18,22 @@ async def get_forecast(
     merchant: str | None = None,
     period: str = Query(default=DEFAULT_PERIOD, description="1m, 3m, 6m, 1y, or all"),
 ):
+    log_tab = "analytics" if is_tab_logging_enabled("analytics") else (
+        "forecasting" if is_tab_logging_enabled("forecasting") else None
+    )
     try:
+        import time
+
         period_key = normalize_period(period)
+        if log_tab:
+            tab_info(
+                log_tab,
+                "forecast start user=%s period=%s filters=%s",
+                mask_user_id(user_id),
+                period_key,
+                {"account_id": account_id, "category_id": category_id, "merchant": merchant},
+            )
+        started = time.perf_counter()
         # Prophet training + comparisons need deep history; UI metrics use calendar months.
         lookback_days = 730 if period_key != "all" else 3650
         start_date = (date.today() - timedelta(days=lookback_days)).isoformat()
@@ -42,7 +53,7 @@ async def get_forecast(
         if category_id:
             tx_query = tx_query.eq("category_id", category_id)
         if merchant:
-            # Best-effort DB-side filter; forecast_service will also apply a contains filter.
+            # Best-effort DB-side filter; inference layer also applies a contains filter.
             tx_query = tx_query.ilike("merchant_name", f"%{merchant}%")
 
         trans_res = tx_query.execute()
@@ -68,8 +79,18 @@ async def get_forecast(
             "merchant": merchant,
             "period": period_key,
         }
+        if log_tab:
+            tab_info(
+                log_tab,
+                "forecast done user=%s elapsed_ms=%.0f predicted_next_month=%s",
+                mask_user_id(user_id),
+                (time.perf_counter() - started) * 1000,
+                result.get("predicted_next_month"),
+            )
         return result
     except Exception as exc:
+        if log_tab:
+            tab_error(log_tab, "forecast failed user=%s: %s", mask_user_id(user_id), exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

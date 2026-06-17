@@ -2,13 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.admin_auth import require_admin
-from app.services.model_monitoring_service import compute_drift_stats, get_production_performance
-from app.services.model_training_service import (
+from app.services.prophet.monitoring import compute_drift_stats, get_production_performance
+from app.services.prophet.jobs import (
     TRAINABLE_MODELS,
     MODEL_FILES,
     STAGING_DIR,
     deploy_staging_models,
     get_evaluation_data,
+    get_training_dataset_for_run,
     get_job_details,
     get_run_metrics,
     list_datasets,
@@ -24,16 +25,9 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 class TrainRequest(BaseModel):
     models: list[str] = Field(
         default_factory=lambda: ["prophet"],
-        description="Training mode: prophet (regressors) or prophet_default (ds/y only).",
+        description="Train global Prophet model from database.",
     )
     dataset_id: str = "database"
-
-
-class TrainFromDbRequest(BaseModel):
-    training_mode: str = Field(
-        default="prophet",
-        description="prophet | prophet_default",
-    )
 
 
 class DeployRequest(BaseModel):
@@ -75,18 +69,24 @@ async def admin_performance(_user=Depends(require_admin)):
 
 
 @router.get("/datasets")
-async def admin_list_datasets(_user=Depends(require_admin)):
+async def admin_list_datasets(
+    job_id: str | None = Query(default=None, description="Training job id for run-scoped data"),
+    _user=Depends(require_admin),
+):
+    if job_id:
+        try:
+            snapshot = get_training_dataset_for_run(job_id)
+            return {"success": True, "dataset": snapshot}
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"success": True, "datasets": list_datasets()}
 
 
 @router.post("/train-from-db")
-async def admin_train_from_db_sync(
-    body: TrainFromDbRequest = TrainFromDbRequest(),
-    _user=Depends(require_admin),
-):
-    """Train global Prophet model from Supabase and promote to production (blocking)."""
+async def admin_train_from_db_sync(_user=Depends(require_admin)):
+    """Train global Prophet model from Supabase (writes to staging; deploy separately)."""
     try:
-        result = run_training_sync(training_mode=body.training_mode)
+        result = run_training_sync()
         return {"success": True, **result}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

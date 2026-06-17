@@ -27,7 +27,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.services.forecast_features import MIN_MONTHS_FOR_PROPHET_USER  # noqa: E402
+from app.services.prophet import MIN_MONTHS_FOR_PROPHET_USER  # noqa: E402
 from app.utils.supabase_client import supabase  # noqa: E402
 
 DEFAULT_EMAIL = "suyash.bhadouria@relanto.ai"
@@ -608,10 +608,14 @@ def seed_user(
         supabase.table("transactions").upsert(batch, on_conflict="transaction_id").execute()
         print(f"  transactions {start + 1}-{min(start + batch_size, len(records))} / {len(records)}")
 
-    from app.services.forecast_features import expenses_to_daily
-
     expense_df = tx_df[tx_df["transaction_type"] == "expense"].copy()
-    daily = expenses_to_daily(expense_df)
+    expense_df["transaction_date"] = pd.to_datetime(expense_df["transaction_date"])
+    daily = (
+        expense_df.groupby(expense_df["transaction_date"].dt.normalize())["amount"]
+        .sum()
+        .reset_index(name="daily_expense")
+        .rename(columns={"transaction_date": "date"})
+    )
     weekend_avg = float(daily.loc[pd.to_datetime(daily["date"]).dt.dayofweek >= 5, "daily_expense"].mean())
     weekday_avg = float(daily.loc[pd.to_datetime(daily["date"]).dt.dayofweek < 5, "daily_expense"].mean())
     print(
@@ -623,14 +627,14 @@ def seed_user(
 
     if retrain:
         print("Training Prophet models from database…")
-        from app.services.forecast_service import reload_models
-        from app.services.prophet_training_service import run_training_pipeline
+        from app.services.prophet.inference import reload_models
+        from app.services.prophet.training import run_training_pipeline
 
-        result = run_training_pipeline(promote=True)
+        result = run_training_pipeline(promote=False)
         reload_models(force_storage_sync=False)
         print(
             f"Training done: users={result['trained_users']} mape={result.get('test_mape')} "
-            f"path={result.get('production_path')}",
+            f"staging={result.get('staging_path')} (deploy via Admin to publish)",
         )
 
     print("\nTest forecast:")

@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { User, Mail, ArrowLeft, Loader2, CheckCircle2, Shield, DollarSign, Building, Home, CreditCard, Compass, Sparkles } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
+import { apiFetch } from '../lib/api';
+import { parseApiError, readJsonResponse } from '../lib/apiErrors';
+import { PageHeader, PageShell, lumio } from '../components/PageShell';
+import type { UserProfile } from '../types';
 
 export const EditProfile: React.FC = () => {
   const { user, updateUser, setCurrentPage } = useAppContext();
@@ -34,12 +38,9 @@ export const EditProfile: React.FC = () => {
 
     try {
       if (user.userId) {
-        // Sync with Backend database
-        const res = await fetch(`http://localhost:8000/api/users/${user.userId}`, {
+        const res = await apiFetch(`/api/users/${user.userId}`, {
           method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             full_name: formData.name,
             email: formData.email,
@@ -52,18 +53,17 @@ export const EditProfile: React.FC = () => {
           }),
         });
 
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(data.detail || 'Failed to update profile on server.');
+        const data = await readJsonResponse(res);
+        if (!res.ok) {
+          throw new Error(parseApiError(data, 'Failed to update profile on server.'));
         }
       }
 
-      // Sync React App State Context
       updateUser({
         name: formData.name,
         email: formData.email,
         income: Number(formData.income),
-        cityTier: formData.cityTier as any,
+        cityTier: formData.cityTier as UserProfile['cityTier'],
         fixedRent: Number(formData.fixedRent),
         fixedEMI: Number(formData.fixedEMI),
         biggestCategory: formData.biggestCategory,
@@ -80,17 +80,11 @@ export const EditProfile: React.FC = () => {
   };
 
   return (
-    <div className="max-w-2xl mx-auto space-y-8 pb-20">
-      <header>
-        <button 
-          onClick={() => setCurrentPage('dashboard')}
-          className="flex items-center gap-2 text-xs font-black text-primary uppercase tracking-widest hover:underline mb-2 transition-all active:scale-95"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" /> Back to Dashboard
-        </button>
-        <h2 className="text-3xl font-bold text-on-surface">Edit Profile</h2>
-        <p className="text-on-surface-variant font-medium text-sm mt-1">Manage your public credentials and financial settings securely connected to your ledger database.</p>
-      </header>
+    <PageShell className="max-w-2xl mx-auto">
+      <PageHeader
+        title="Edit Profile"
+        description="Manage your credentials and financial settings connected to your ledger."
+      />
 
       {status && (
         <div className={`p-4 rounded-2xl border text-xs font-bold flex items-center gap-3 animate-in fade-in duration-300 ${
@@ -285,6 +279,6 @@ export const EditProfile: React.FC = () => {
           </div>
         </form>
       </section>
-    </div>
+    </PageShell>
   );
 };

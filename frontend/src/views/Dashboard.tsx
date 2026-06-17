@@ -1,155 +1,203 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 
 import { useAppContext } from '../context/AppContext';
-
-import { SummaryCards } from '../components/Dashboard/SummaryCards';
-import { FinancialPerformanceChart } from '../components/Dashboard/FinancialPerformanceChart';
-import { LinkedAccounts } from '../components/Dashboard/LinkedAccounts';
-import { QuickActionCard } from '../components/Dashboard/QuickActionCard';
 import { ExpenseBreakdown } from '../components/Dashboard/ExpenseBreakdown';
-import { BudgetUtilization } from '../components/Dashboard/BudgetUtilization';
 import { RecentTransactions } from '../components/Dashboard/RecentTransactions';
-import { QuickAddForm } from '../components/Dashboard/QuickAddForm';
-import { AIInsights } from '../components/Dashboard/AIInsights';
-import { ForecastPredictionCard } from '../components/Dashboard/ForecastPredictionCard';
-
+import { QuickAddModal } from '../components/Dashboard/QuickAddModal';
+import { LinkedAccounts } from '../components/Dashboard/LinkedAccounts';
 import { AccountModal } from '../components/AccountModal';
+import {
+  DashboardHero,
+  MonthlySpendTrend,
+  FinancialHealthCard,
+  AnomaliesCard,
+} from '../components/Dashboard/DashboardHero';
+import { PageShell } from '../components/PageShell';
+import { formatCurrency } from '../lib/utils';
+import {
+  type AnalysisPeriod,
+  getDashboardPeriodSlice,
+} from '../lib/analysisPeriod';
 
 export const Dashboard: React.FC = () => {
-  const { user, dashboardSummary, loadDashboardSummary, loadAccountHubAnalysis, transactions, accounts, analysisPeriod } = useAppContext();
+  const {
+    user,
+    dashboardSummary,
+    loadDashboardSummary,
+    loadFinancialHealthInsights,
+    dashboardSummaryLoading,
+    analysisPeriod,
+    setAnalysisPeriod,
+  } = useAppContext();
   const [isAccountModalOpen, setIsAccountModalOpen] = React.useState(false);
-  const hubAnalysisScheduledRef = React.useRef(false);
+  const [isQuickAddOpen, setIsQuickAddOpen] = React.useState(false);
+  const [healthInsights, setHealthInsights] = React.useState<any | null>(null);
+  const [healthInsightsLlmLoading, setHealthInsightsLlmLoading] = React.useState(false);
+
+  const periodData = useMemo(
+    () => getDashboardPeriodSlice(dashboardSummary, analysisPeriod),
+    [dashboardSummary, analysisPeriod],
+  );
+
+  const loadHealthInsightsPipeline = React.useCallback(
+    (force?: boolean) => {
+      void loadFinancialHealthInsights({ force, llm: false }).then((data) => {
+        if (data) setHealthInsights(data);
+      });
+      setHealthInsightsLlmLoading(true);
+      void loadFinancialHealthInsights({ force, llm: true }).then((data) => {
+        if (data?.source === 'llm') setHealthInsights(data);
+        setHealthInsightsLlmLoading(false);
+      });
+    },
+    [loadFinancialHealthInsights],
+  );
 
   const refreshDashboard = React.useCallback(
     async (options?: { force?: boolean }) => {
       await loadDashboardSummary({ force: options?.force });
+      loadHealthInsightsPipeline(options?.force);
     },
-    [loadDashboardSummary],
+    [loadDashboardSummary, loadHealthInsightsPipeline],
   );
+
+  React.useEffect(() => {
+    if (!user?.isAuthenticated) return;
+    loadHealthInsightsPipeline();
+  }, [user?.isAuthenticated, loadHealthInsightsPipeline]);
 
   const handleAccountCreated = () => {
     void refreshDashboard({ force: true });
-    void loadAccountHubAnalysis({ force: true });
   };
-
-  React.useEffect(() => {
-    if (!user?.isAuthenticated || hubAnalysisScheduledRef.current) return;
-    const hasAccounts = (dashboardSummary?.accounts?.length ?? 0) > 0;
-    if (!hasAccounts) return;
-    hubAnalysisScheduledRef.current = true;
-    void loadAccountHubAnalysis();
-  }, [user?.isAuthenticated, dashboardSummary?.accounts?.length, loadAccountHubAnalysis]);
 
   if (!dashboardSummary && user?.isAuthenticated) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-lumio-black" />
       </div>
     );
   }
 
-  const dashboardData = dashboardSummary;
+  const summary = periodData?.summary;
+  const chartData = periodData?.chart_data ?? [];
+  const recentTx = dashboardSummary?.recent_transactions ?? [];
+  const topSpending = periodData?.top_spending ?? [];
+  const anomalies = periodData?.spending_anomalies ?? [];
+  const financialHealth = dashboardSummary?.financial_health;
+  const expenseBreakdown = periodData?.expense_breakdown_month ?? [];
 
-  const mappedSummary = dashboardData?.summary
-    ? {
-        fixed_income: dashboardData.summary.monthly_income,
-        fixed_expense: dashboardData.summary.fixed_expense,
-        net_inflow: dashboardData.summary.net_inflow,
-        net_outflow: dashboardData.summary.net_outflow,
-        net_savings: dashboardData.summary.net_savings,
-        savings_rate: dashboardData.summary.savings_rate,
-      }
-    : undefined;
+  const totalExpense = summary?.net_outflow ?? 0;
+  const expenses = chartData.map((d) => d.expense ?? 0).filter((v) => v > 0);
+  const priorExpense = expenses.length >= 2 ? expenses[expenses.length - 2] : null;
+  const currentExpense = expenses.length >= 1 ? expenses[expenses.length - 1] : totalExpense;
+  const changePct =
+    summary?.expense_change_pct ??
+    (priorExpense && priorExpense > 0
+      ? Math.round(((currentExpense - priorExpense) / priorExpense) * 100)
+      : null);
 
   return (
-    <div className="space-y-8 pb-10">
-      
-      {/* Summary Cards */}
-      <SummaryCards
-        data={mappedSummary}
-        periodLabel={dashboardData?.period_label}
+    <PageShell>
+      <DashboardHero
+        onRefresh={() => void refreshDashboard({ force: true })}
+        loading={dashboardSummaryLoading}
       />
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <ForecastPredictionCard />
-      </div>
+      <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <div className="col-span-1 lg:col-span-8 flex flex-col gap-8">
+          <MonthlySpendTrend
+            chartData={chartData}
+            totalExpense={totalExpense}
+            predictedNextMonth={periodData?.predicted_next_month ?? dashboardSummary?.forecast?.predicted_next_month}
+            predictedMonthLabel={periodData?.predicted_month_label ?? dashboardSummary?.forecast?.predicted_month_label}
+            changePct={changePct}
+            analysisPeriod={analysisPeriod}
+            chartGranularity={periodData?.chart_granularity}
+            loading={dashboardSummaryLoading && !periodData}
+            onPeriodChange={(p: AnalysisPeriod) => setAnalysisPeriod(p)}
+          />
 
-      {/* Linked Accounts + Quick Actions */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        <div className="lg:col-span-12">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-black text-outline uppercase tracking-[0.2em] px-2">
-              Your Financial Hub
-            </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="bento-card !p-0 overflow-hidden">
+              <ExpenseBreakdown
+                analysisPeriod={analysisPeriod}
+                variant="bento"
+                breakdownData={expenseBreakdown}
+              />
+            </div>
 
-            <button
-              onClick={() => setIsAccountModalOpen(true)}
-              className="text-[10px] font-black text-primary uppercase tracking-widest hover:underline"
-            >
-              Manage Accounts
-            </button>
+            <div className="bento-card flex flex-col">
+              <h3 className="font-label text-[12px] font-semibold uppercase tracking-widest text-lumio-muted mb-6 border-b border-lumio-line pb-4">
+                Top Spending
+              </h3>
+              {topSpending.length === 0 ? (
+                <p className="text-sm text-lumio-muted">No spending data for this period.</p>
+              ) : (
+                <div className="flex flex-col">
+                  {topSpending.map((item) => (
+                    <div
+                      key={item.merchant}
+                      className="flex justify-between items-center py-4 border-b border-lumio-line/50 last:border-0"
+                    >
+                      <div className="flex items-center gap-4 min-w-0">
+                        <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center text-sm font-bold border border-white/60 shadow-sm shrink-0">
+                          {item.merchant.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <span className="font-medium text-sm block truncate">{item.merchant}</span>
+                          {item.count != null && item.count > 1 && (
+                            <span className="text-[10px] text-lumio-muted uppercase tracking-wider">
+                              {item.count} transactions
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <span className="text-lumio-muted text-sm font-medium shrink-0 ml-2">
+                        {formatCurrency(item.total)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
+
+          <LinkedAccounts
+            accounts={dashboardSummary?.accounts}
+            onAddAccount={() => setIsAccountModalOpen(true)}
+            variant="bento"
+          />
+
+          <RecentTransactions
+            transactions={recentTx}
+            variant="bento"
+            onAddTransaction={() => setIsQuickAddOpen(true)}
+          />
         </div>
 
-        {/* Linked Accounts */}
-        <LinkedAccounts 
-          accounts={dashboardData?.accounts} 
-          onAddAccount={() => setIsAccountModalOpen(true)}
-        />
-
-        {/* Quick Actions */}
-        <QuickActionCard
-          hasAccounts={(dashboardData?.accounts?.length ?? 0) > 0}
-        />
+        <div className="col-span-1 lg:col-span-4 flex flex-col gap-8">
+          <FinancialHealthCard
+            health={financialHealth}
+            summary={summary}
+            insights={healthInsights}
+            insightsLlmLoading={healthInsightsLlmLoading}
+          />
+          <AnomaliesCard anomalies={anomalies} />
+        </div>
       </div>
 
-      {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Financial Performance */}
-        <FinancialPerformanceChart
-          data={dashboardData?.chart_data}
-          accounts={accounts}
-          transactions={transactions}
-          analysisPeriod={analysisPeriod}
-        />
-
-        {/* Expense Breakdown */}
-        <ExpenseBreakdown analysisPeriod={analysisPeriod} />
-      </div>
-
-      {/* Budget + Recent Transactions */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Budget Utilization */}
-        <BudgetUtilization items={dashboardData?.budget_utilization} />
-
-        {/* Recent Transactions */}
-        <RecentTransactions
-          transactions={dashboardData?.recent_transactions}
-        />
-      </div>
-
-      {/* Quick Add + AI Insights */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        
-        {/* Quick Add Form */}
-        <QuickAddForm
-          onSuccess={() => refreshDashboard({ force: true })}
-          accounts={dashboardData?.accounts}
-        />
-
-        {/* AI Insights */}
-        <AIInsights />
-      </div>
-
-      {/* Account Modal */}
       <AccountModal
         isOpen={isAccountModalOpen}
         onClose={() => setIsAccountModalOpen(false)}
         onSuccess={handleAccountCreated}
       />
-    </div>
+
+      <QuickAddModal
+        isOpen={isQuickAddOpen}
+        onClose={() => setIsQuickAddOpen(false)}
+        onSuccess={() => void refreshDashboard({ force: true })}
+        accounts={dashboardSummary?.accounts}
+      />
+    </PageShell>
   );
 };

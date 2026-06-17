@@ -53,6 +53,47 @@ def test_build_chart_data_includes_current_month():
     assert chart[-1]["net"] == -0.0 or chart[-1]["income"] == 0
 
 
+def test_build_daily_chart_data_for_one_month_window():
+    from app.services.dashboard_metrics_service import build_daily_chart_data_for_window
+    from app.utils.analysis_period import resolve_analysis_window
+
+    transactions = [
+        {"transaction_date": "2026-06-01", "amount": 100, "transaction_type": "expense"},
+        {"transaction_date": "2026-06-03", "amount": 50, "transaction_type": "expense"},
+        {"transaction_date": "2026-06-03", "amount": 200, "transaction_type": "income"},
+        {"transaction_date": "2026-06-05", "amount": 75, "transaction_type": "expense"},
+    ]
+    window = resolve_analysis_window("1m", reference=datetime(2026, 6, 5).date())
+    chart = build_daily_chart_data_for_window(transactions, window=window)
+
+    assert len(chart) == 5
+    assert chart[0] == {
+        "name": "01",
+        "date": "2026-06-01",
+        "income": 0.0,
+        "expense": 100.0,
+        "net": -100.0,
+    }
+    assert chart[2]["expense"] == 50.0
+    assert chart[2]["income"] == 200.0
+    assert chart[4]["expense"] == 75.0
+
+
+def test_build_chart_data_for_window_uses_daily_points_for_one_month():
+    from app.services.dashboard_metrics_service import build_chart_data_for_window
+    from app.utils.analysis_period import resolve_analysis_window
+
+    window = resolve_analysis_window("1m", reference=datetime(2026, 6, 5).date())
+    transactions = [
+        {"transaction_date": "2026-06-02", "amount": 40, "transaction_type": "expense"},
+    ]
+    chart = build_chart_data_for_window({}, window=window, transactions=transactions)
+
+    assert len(chart) == 5
+    assert all(point.get("date") for point in chart)
+    assert chart[1]["expense"] == 40.0
+
+
 def test_format_recent_transactions_expense_sign():
     rows = [
         {
@@ -159,3 +200,161 @@ def test_savings_trajectory_from_transactions():
     assert trajectory["monthly_net_savings"] == 3000
     assert trajectory["previous_month_net"] == 1500
     assert trajectory["savings_growth_pct"] == 100
+
+
+def test_aggregate_top_spending_by_merchant():
+    from app.services.dashboard_metrics_service import aggregate_top_spending_by_merchant
+
+    rows = [
+        {
+            "transaction_date": "2026-05-01",
+            "amount": 100,
+            "transaction_type": "expense",
+            "merchant_name": "Swiggy",
+        },
+        {
+            "transaction_date": "2026-05-02",
+            "amount": 200,
+            "transaction_type": "expense",
+            "merchant_name": "Swiggy",
+        },
+        {
+            "transaction_date": "2026-05-03",
+            "amount": 50,
+            "transaction_type": "expense",
+            "merchant_name": "Amazon",
+        },
+    ]
+    top = aggregate_top_spending_by_merchant(
+        rows, start_date="2026-05-01", end_date="2026-05-31"
+    )
+    assert top[0]["merchant"] == "Swiggy"
+    assert top[0]["total"] == 300
+    assert top[0]["count"] == 2
+
+
+def test_build_dashboard_payload_includes_all_period_chart_data():
+    from unittest.mock import patch
+
+    from app.services.dashboard_metrics_service import (
+        build_dashboard_payload,
+        enrich_chart_data_with_forecast,
+    )
+
+    transactions = [
+        {"transaction_date": "2026-06-01", "amount": 100, "transaction_type": "expense"},
+        {"transaction_date": "2026-05-15", "amount": 200, "transaction_type": "expense"},
+        {"transaction_date": "2026-04-10", "amount": 50, "transaction_type": "expense"},
+    ]
+    forecast_meta = {
+        "predicted_next_month": 500.0,
+        "predicted_month_label": "July 2026",
+        "predicted_month": "2026-07",
+    }
+    with patch(
+        "app.services.prophet.inference.get_next_month_prediction",
+        return_value=forecast_meta,
+    ):
+        payload = build_dashboard_payload(
+            user_id="test-user",
+            accounts=[{"current_balance": 1000, "account_type": "checking"}],
+            transactions=transactions,
+            recent_rows=[],
+            budgets=[],
+            profile_income=50000,
+            reference=datetime(2026, 6, 5),
+            period="1m",
+        )
+
+    assert "period_data" in payload
+    for period in ("1m", "3m", "6m", "1y", "all"):
+        assert period in payload["period_data"]
+        assert "chart_data" in payload["period_data"][period]
+        assert len(payload["period_data"][period]["chart_data"]) > 0
+        assert "financial_health" not in payload["period_data"][period]
+
+    assert payload["period_data"]["1m"]["chart_granularity"] == "daily"
+    assert payload["period_data"]["3m"]["chart_granularity"] == "monthly"
+    assert "financial_health" in payload
+    assert payload["financial_health"]["score"] >= 0
+
+    chart = payload["period_data"]["3m"]["chart_data"]
+    forecast_point = chart[-1]
+    assert forecast_point.get("is_forecast") is True
+    assert forecast_point.get("predicted_expense") == 500.0
+
+
+def test_financial_health_identical_across_period_slices():
+    from unittest.mock import patch
+
+    from app.services.dashboard_metrics_service import build_dashboard_payload
+
+    transactions = [
+        {"transaction_date": "2026-06-01", "amount": 100, "transaction_type": "expense"},
+        {"transaction_date": "2026-05-15", "amount": 200, "transaction_type": "expense"},
+        {"transaction_date": "2026-04-10", "amount": 50, "transaction_type": "income"},
+    ]
+    with patch(
+        "app.services.prophet.inference.get_next_month_prediction",
+        return_value=None,
+    ):
+        payload = build_dashboard_payload(
+            user_id="test-user",
+            accounts=[{"current_balance": 10000, "account_type": "savings"}],
+            transactions=transactions,
+            recent_rows=[],
+            budgets=[],
+            profile_income=80000,
+            reference=datetime(2026, 6, 5),
+            period="1m",
+        )
+
+    root_health = payload["financial_health"]
+    for period in ("1m", "3m", "6m", "1y", "all"):
+        assert payload["period_data"][period].get("financial_health") is None
+    assert root_health == payload["financial_health"]
+
+
+def test_enrich_chart_data_with_forecast():
+    from app.services.dashboard_metrics_service import enrich_chart_data_with_forecast
+
+    chart = [
+        {"name": "Apr", "expense": 100},
+        {"name": "May", "expense": 200},
+    ]
+    enriched = enrich_chart_data_with_forecast(
+        chart,
+        predicted_next_month=250,
+        predicted_month_label="July 2026",
+        predicted_month="2026-07",
+        period="3m",
+    )
+    assert enriched[-1]["is_forecast"] is True
+    assert enriched[-1]["predicted_expense"] == 250
+    assert enriched[-2]["predicted_expense"] == 200
+    assert enriched[0]["actual_expense"] == 100
+
+
+def test_compute_financial_health_score():
+    from app.services.dashboard_metrics_service import compute_financial_health
+
+    summary = {
+        "monthly_income": 100000,
+        "net_savings": 20000,
+        "savings_rate": 20.0,
+        "fixed_expense": 25000,
+        "net_outflow": 80000,
+        "total_balance": 150000,
+    }
+    accounts = [
+        {"account_type": "savings", "current_balance": 150000},
+        {
+            "account_type": "credit_card",
+            "current_balance": -20000,
+            "credit_limit": 100000,
+        },
+    ]
+    health = compute_financial_health(summary, accounts)
+    assert 0 <= health["score"] <= 100
+    assert health["debt_to_income_pct"] == 25.0
+    assert health["emergency_buffer_months"] == 6.0

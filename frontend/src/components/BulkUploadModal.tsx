@@ -213,7 +213,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
                       <AlertTriangle className="w-5 h-5 text-primary shrink-0 mt-0.5" />
                       <p className="text-[11px] font-bold text-on-surface-variant leading-relaxed">
                         <span className="text-primary font-black uppercase tracking-wider mr-1">Smart Engine:</span> 
-                        FinAssist automatically parses transactional columns, auto-categorizes merchant descriptions, and screens for anomalies dynamically.
+                        FinAssist AI automatically parses transactional columns, auto-categorizes merchant descriptions, and screens for anomalies dynamically.
                       </p>
                     </div>
                   </>
@@ -231,7 +231,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
 
                   <div className="bg-surface-container-low p-5 rounded-2xl border border-outline-variant/20 flex flex-col justify-between">
                     <span className="text-[9px] font-bold text-outline uppercase tracking-widest">Total Credits</span>
-                    <span className="text-2xl font-black text-secondary mt-2 flex items-center gap-1">
+                    <span className="text-2xl font-black text-success mt-2 flex items-center gap-1">
                       <TrendingUp className="w-5 h-5 shrink-0" />
                       {formatCurrency(totalCredits)}
                     </span>
@@ -249,7 +249,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
                     <span className="text-[9px] font-bold text-outline uppercase tracking-widest">Net Flow</span>
                     <span className={cn(
                       "text-2xl font-black mt-2",
-                      netFlow >= 0 ? "text-secondary" : "text-error"
+                      netFlow >= 0 ? "text-success" : "text-error"
                     )}>
                       {netFlow >= 0 ? '+' : ''}{formatCurrency(netFlow)}
                     </span>
@@ -302,7 +302,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
                               </td>
                               <td className={cn(
                                 "px-5 py-3 text-xs font-extrabold text-right",
-                                tx.type === 'income' ? 'text-secondary' : 'text-error'
+                                tx.type === 'income' ? 'text-success' : 'text-error'
                               )}>
                                 {tx.type === 'income' ? '+' : '-'}{formatCurrency(Math.abs(tx.amount))}
                               </td>

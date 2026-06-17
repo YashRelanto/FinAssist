@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, Bell, Menu, User, Settings, LogOut, ChevronDown, RefreshCw } from 'lucide-react';
+import { Search, Bell, Menu, User, Settings, LogOut, ChevronDown } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { cn } from '../lib/utils';
 import { TimeframeSelector } from './TimeframeSelector';
@@ -9,7 +9,7 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
-  const { user, setCurrentPage, signOut, analysisPeriod, setAnalysisPeriod, loadDashboardSummary, dashboardSummaryLoading } = useAppContext();
+  const { user, setCurrentPage, signOut, analysisPeriod, setAnalysisPeriod } = useAppContext();
   const [isProfileOpen, setIsProfileOpen] = useState(false);
 
   return (
@@ -36,14 +36,8 @@ export const Header: React.FC<HeaderProps> = ({ onMenuClick }) => {
         <div className="flex items-center gap-2">
           <TimeframeSelector
             value={analysisPeriod}
-            onChange={(p) => {
-              setAnalysisPeriod(p);
-              void loadDashboardSummary({ force: true });
-            }}
+            onChange={setAnalysisPeriod}
           />
-          {dashboardSummaryLoading && (
-            <RefreshCw className="w-4 h-4 text-primary animate-spin" />
-          )}
         </div>
         
         <button className="relative p-2 text-on-surface-variant hover:text-primary transition-colors">

@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -18,6 +18,7 @@ import {
 import { useAppContext } from '../context/AppContext';
 import { loadAuthSession } from '../lib/authSession';
 import { activeUserId } from '../lib/activeUserId';
+import { PageHeader, PageShell } from '../components/PageShell';
 
 const API_BASE = 'http://localhost:8000/api/admin';
 
@@ -127,19 +128,18 @@ type TrainRun = {
   label?: string;
 };
 
-const PROPHET_MODES = [
-  { id: 'prophet', label: 'Prophet (regressors)' },
-  { id: 'prophet_default', label: 'Prophet (default ds/y)' },
-] as const;
+const PROPHET_MODES = [{ id: 'prophet', label: 'Prophet (global monthly)' }] as const;
 
 type ProphetModeId = (typeof PROPHET_MODES)[number]['id'];
 
 function modeLabel(mode: string | undefined): string {
+  if (mode === 'prophet_default') return 'Prophet (global monthly)';
   return PROPHET_MODES.find((m) => m.id === mode)?.label ?? mode ?? 'prophet';
 }
 
 function runMatchesMode(run: TrainRun, mode: ProphetModeId): boolean {
   const runMode = run.model_type ?? 'prophet';
+  if (mode === 'prophet') return runMode === 'prophet' || runMode === 'prophet_default';
   return runMode === mode;
 }
 
@@ -154,6 +154,34 @@ function formatRunOption(run: TrainRun): string {
 function formatMape(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return '—';
   return `${(value * 100).toFixed(1)}%`;
+}
+
+function defaultModeFromRuns(_runs: TrainRun[]): ProphetModeId {
+  return 'prophet';
+}
+
+function useInitialMode(runs: TrainRun[], mode: ProphetModeId, setMode: (m: ProphetModeId) => void) {
+  const initialized = useRef(false);
+  useEffect(() => {
+    if (initialized.current || runs.length === 0) return;
+    setMode(defaultModeFromRuns(runs));
+    initialized.current = true;
+  }, [runs, setMode]);
+}
+
+function useAutoSelectRun(
+  options: TrainRun[],
+  selectedJobId: string,
+  setSelectedJobId: (id: string) => void,
+) {
+  useEffect(() => {
+    if (selectedJobId && options.some((r) => r.job_id === selectedJobId)) {
+      return;
+    }
+    const first =
+      options.find((r) => r.status === 'completed') ?? options[0];
+    setSelectedJobId(first?.job_id ?? '');
+  }, [options, selectedJobId, setSelectedJobId]);
 }
 
 function RunSelector({
@@ -226,36 +254,39 @@ function OverviewSection() {
   const [error, setError] = useState('');
 
   const filteredRuns = runs.filter((r) => runMatchesMode(r, mode));
+  useInitialMode(runs, mode, setMode);
+  useAutoSelectRun(filteredRuns, selectedJobId, setSelectedJobId);
 
-  useEffect(() => {
+  const loadRuns = useCallback(() => {
     adminGet('/train/runs')
-      .then((d) => {
-        const list: TrainRun[] = d.runs ?? [];
-        setRuns(list);
-      })
+      .then((d) => setRuns(d.runs ?? []))
       .catch((e) => setError(e.message))
       .finally(() => setLoadingRuns(false));
   }, []);
 
   useEffect(() => {
-    const firstCompleted =
-      filteredRuns.find((r) => r.status === 'completed') ?? filteredRuns[0];
-    if (firstCompleted) {
-      setSelectedJobId(firstCompleted.job_id);
-    } else {
-      setSelectedJobId('');
-    }
-  }, [mode, runs]);
+    loadRuns();
+  }, [loadRuns]);
 
   useEffect(() => {
     if (!selectedJobId) return;
     setLoadingMetrics(true);
     setError('');
     adminGet(`/overview?job_id=${encodeURIComponent(selectedJobId)}`)
-      .then(setData)
+      .then((d) => {
+        setData(d);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoadingMetrics(false));
   }, [selectedJobId]);
+
+  const handleRunChange = (jobId: string) => {
+    setSelectedJobId(jobId);
+    const run = runs.find((r) => r.job_id === jobId);
+    if (run?.model_type === 'prophet' || run?.model_type === 'prophet_default') {
+      setMode(run.model_type);
+    }
+  };
 
   if (loadingRuns) return <LoadingSpinner />;
   if (error && !data) return <ErrorBox msg={error} />;
@@ -269,7 +300,7 @@ function OverviewSection() {
       <RunSelector
         runs={filteredRuns}
         value={selectedJobId}
-        onChange={setSelectedJobId}
+        onChange={handleRunChange}
         label="Training run (job id)"
       />
 
@@ -317,45 +348,95 @@ function OverviewSection() {
 }
 
 function DatasetsSection() {
-  const [datasets, setDatasets] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [runs, setRuns] = useState<TrainRun[]>([]);
+  const [mode, setMode] = useState<ProphetModeId>('prophet');
+  const [selectedJobId, setSelectedJobId] = useState('');
+  const [snapshot, setSnapshot] = useState<any>(null);
+  const [loadingRuns, setLoadingRuns] = useState(true);
+  const [loadingData, setLoadingData] = useState(false);
   const [error, setError] = useState('');
 
+  const filteredRuns = runs.filter(
+    (r) => r.job_id !== 'production' && runMatchesMode(r, mode),
+  );
+  useInitialMode(runs, mode, setMode);
+  useAutoSelectRun(filteredRuns, selectedJobId, setSelectedJobId);
+
   useEffect(() => {
-    adminGet('/datasets')
-      .then((d) => setDatasets(d.datasets ?? []))
+    adminGet('/train/runs')
+      .then((d) => setRuns(d.runs ?? []))
       .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
+      .finally(() => setLoadingRuns(false));
   }, []);
 
-  if (loading) return <LoadingSpinner />;
-  if (error) return <ErrorBox msg={error} />;
+  useEffect(() => {
+    if (!selectedJobId) return;
+    setLoadingData(true);
+    setError('');
+    adminGet(`/datasets?job_id=${encodeURIComponent(selectedJobId)}`)
+      .then((d) => {
+        setSnapshot(d.dataset ?? null);
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoadingData(false));
+  }, [selectedJobId]);
+
+  if (loadingRuns) return <LoadingSpinner />;
+  if (error && !snapshot) return <ErrorBox msg={error} />;
+
+  const sample: any[] = snapshot?.sample ?? [];
 
   return (
     <div className="space-y-6">
-      <div className="bg-surface-variant rounded-2xl overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-outline-variant text-left">
-              <th className="px-5 py-3 text-xs font-medium text-on-surface-variant">ID</th>
-              <th className="px-5 py-3 text-xs font-medium text-on-surface-variant">Rows</th>
-              <th className="px-5 py-3 text-xs font-medium text-on-surface-variant">Uploaded</th>
-            </tr>
-          </thead>
-          <tbody>
-            {datasets.length === 0 && (
-              <tr><td colSpan={3} className="px-5 py-6 text-center text-on-surface-variant text-xs">No datasets yet.</td></tr>
-            )}
-            {datasets.map((d: any) => (
-              <tr key={d.id} className="border-b border-outline-variant last:border-0 hover:bg-surface/50 transition">
-                <td className="px-5 py-3 font-mono text-xs">{d.id}</td>
-                <td className="px-5 py-3 text-on-surface-variant">{d.rows ?? '—'}</td>
-                <td className="px-5 py-3 text-on-surface-variant">{d.created_at ? new Date(d.created_at).toLocaleString() : '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ModeSelector value={mode} onChange={setMode} label="Model approach" />
+      <RunSelector
+        runs={filteredRuns}
+        value={selectedJobId}
+        onChange={setSelectedJobId}
+        label="Training run (job id)"
+      />
+
+      {loadingData ? (
+        <LoadingSpinner />
+      ) : snapshot ? (
+        <>
+          {error && <ErrorBox msg={error} />}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatCard icon={Database} label="Training rows" value={snapshot.training_rows?.toLocaleString() ?? '—'} sub="Eligible expense transactions" color="text-violet-500" />
+            <StatCard icon={Cpu} label="Training users" value={snapshot.training_users?.toLocaleString() ?? '—'} sub="Users with 6+ months history" color="text-emerald-500" />
+            <StatCard icon={BarChart2} label="Total expense rows" value={snapshot.total_expense_rows?.toLocaleString() ?? '—'} sub={`On or before ${snapshot.trained_at ? new Date(snapshot.trained_at).toLocaleString() : 'train time'}`} color="text-blue-500" />
+            <StatCard icon={Activity} label="Snapshot as of" value={snapshot.trained_at ? new Date(snapshot.trained_at).toLocaleDateString() : '—'} sub={`Job ${selectedJobId}`} color="text-primary" />
+          </div>
+          <div className="bg-surface-variant rounded-2xl overflow-hidden">
+            <div className="px-5 py-3 border-b border-outline-variant text-xs font-semibold text-on-surface">
+              Training data sample (up to {sample.length} rows)
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-outline-variant text-left">
+                  <th className="px-5 py-3 text-xs font-medium text-on-surface-variant">User</th>
+                  <th className="px-5 py-3 text-xs font-medium text-on-surface-variant">Date</th>
+                  <th className="px-5 py-3 text-xs font-medium text-on-surface-variant">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sample.length === 0 && (
+                  <tr><td colSpan={3} className="px-5 py-6 text-center text-on-surface-variant text-xs">No training rows for this run.</td></tr>
+                )}
+                {sample.map((row: any, idx: number) => (
+                  <tr key={`${row.user_id}-${row.transaction_date}-${idx}`} className="border-b border-outline-variant last:border-0 hover:bg-surface/50 transition">
+                    <td className="px-5 py-3 font-mono text-xs">{row.user_id}</td>
+                    <td className="px-5 py-3 text-on-surface-variant">{row.transaction_date}</td>
+                    <td className="px-5 py-3 text-on-surface-variant">{row.amount?.toLocaleString?.() ?? row.amount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : (
+        <p className="text-xs text-on-surface-variant">Select a training run to view its dataset snapshot.</p>
+      )}
     </div>
   );
 }
@@ -370,19 +451,31 @@ function TrainingSection() {
   const [starting, setStarting] = useState(false);
   const [startMsg, setStartMsg] = useState('');
 
-  const loadJobs = () =>
+  const loadJobs = useCallback(() =>
     adminGet('/train/jobs')
-      .then((d) => setJobs(d.jobs ?? []))
-      .catch(() => {});
+      .then((d) => {
+        const next = d.jobs ?? [];
+        setJobs(next);
+      })
+      .catch(() => {}), []);
 
   useEffect(() => {
     Promise.all([
-      adminGet('/train/jobs').then((d) => setJobs(d.jobs ?? [])),
+      loadJobs(),
       adminGet('/datasets').then((d) => setDatasets(d.datasets ?? [])),
     ])
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [loadJobs]);
+
+  useEffect(() => {
+    const hasActive = jobs.some(
+      (j) => j.status === 'running' || j.status === 'queued' || j.status === 'pending',
+    );
+    if (!hasActive) return;
+    const timer = window.setInterval(loadJobs, 3000);
+    return () => window.clearInterval(timer);
+  }, [jobs, loadJobs]);
 
   const startTrain = async () => {
     setStarting(true); setStartMsg('');
@@ -481,27 +574,26 @@ function DeploySection() {
   const [deploying, setDeploying] = useState(false);
   const [deployMsg, setDeployMsg] = useState('');
 
-  const deployableRuns = runs.filter(
-    (r) => r.deployable && r.status === 'completed' && runMatchesMode(r, mode),
+  const completedRuns = runs.filter(
+    (r) => r.job_id !== 'production' && r.status === 'completed',
   );
+  const selectableRuns = completedRuns.filter((r) => runMatchesMode(r, mode));
+  useInitialMode(runs, mode, setMode);
+  useAutoSelectRun(selectableRuns, selectedJobId, setSelectedJobId);
 
-  useEffect(() => {
+  const loadRuns = useCallback(() => {
     adminGet('/train/runs')
       .then((d) => {
-        setRuns(d.runs ?? []);
+        const list = d.runs ?? [];
+        setRuns(list);
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
-    const first = deployableRuns[0];
-    if (first) {
-      setSelectedJobId(first.job_id);
-    } else {
-      setSelectedJobId('');
-    }
-  }, [mode, runs]);
+    loadRuns();
+  }, [loadRuns]);
 
   const deploy = async () => {
     if (!selectedJobId) {
@@ -531,6 +623,7 @@ function DeploySection() {
   if (error) return <ErrorBox msg={error} />;
 
   const selectedRun = runs.find((r) => r.job_id === selectedJobId);
+  const canDeploy = Boolean(selectedRun?.deployable);
 
   return (
     <div className="space-y-6">
@@ -539,21 +632,52 @@ function DeploySection() {
           <Rocket className="w-4 h-4 text-primary" /> Deploy Training Run
         </h3>
 
-        {deployableRuns.length === 0 ? (
+        {completedRuns.length === 0 ? (
           <p className="text-xs text-on-surface-variant">
-            No deployable training runs yet. Complete a training job first — each run is saved by job id.
+            No completed training runs yet. Finish a training job first — each run is saved by job id.
           </p>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <ModeSelector value={mode} onChange={setMode} label="Model approach" />
             <RunSelector
-              runs={deployableRuns}
+              runs={selectableRuns}
               value={selectedJobId}
               onChange={setSelectedJobId}
               label="Training run (job id)"
             />
           </div>
         )}
+
+        <div className="bg-surface-variant rounded-2xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-outline-variant text-xs font-semibold text-on-surface">
+            All training runs
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-outline-variant text-left">
+                <th className="px-5 py-3 text-xs font-medium text-on-surface-variant">Job ID</th>
+                <th className="px-5 py-3 text-xs font-medium text-on-surface-variant">Model</th>
+                <th className="px-5 py-3 text-xs font-medium text-on-surface-variant">Status</th>
+                <th className="px-5 py-3 text-xs font-medium text-on-surface-variant">MAPE</th>
+                <th className="px-5 py-3 text-xs font-medium text-on-surface-variant">Trained</th>
+              </tr>
+            </thead>
+            <tbody>
+              {completedRuns.length === 0 && (
+                <tr><td colSpan={5} className="px-5 py-6 text-center text-on-surface-variant text-xs">No runs yet.</td></tr>
+              )}
+              {completedRuns.map((run) => (
+                <tr key={run.job_id} className="border-b border-outline-variant last:border-0 hover:bg-surface/50 transition">
+                  <td className="px-5 py-3 font-mono text-xs">{run.job_id}</td>
+                  <td className="px-5 py-3 text-xs text-on-surface-variant">{modeLabel(run.model_type)}</td>
+                  <td className="px-5 py-3"><Badge status={run.status ?? 'completed'} /></td>
+                  <td className="px-5 py-3 text-on-surface-variant text-xs">{formatMape(run.test_mape)}</td>
+                  <td className="px-5 py-3 text-on-surface-variant text-xs">{run.trained_at ? new Date(run.trained_at).toLocaleString() : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
         {selectedRun && (
           <div className="bg-surface rounded-lg px-4 py-3 text-xs space-y-1">
@@ -574,7 +698,7 @@ function DeploySection() {
 
         <button
           onClick={deploy}
-          disabled={deploying || !selectedJobId || deployableRuns.length === 0}
+          disabled={deploying || !selectedJobId || !canDeploy || selectableRuns.length === 0}
           className="inline-flex items-center gap-2 px-5 py-2 bg-emerald-600 text-white rounded-xl text-sm font-medium hover:bg-emerald-700 disabled:opacity-60 transition"
         >
           {deploying ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
@@ -626,19 +750,14 @@ export const AdminPanel: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8 animate-fade-in">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-on-surface flex items-center gap-2">
-          <Server className="w-6 h-6 text-primary" /> Admin Panel
-        </h1>
-        <p className="text-on-surface-variant text-sm mt-1">
-          Model monitoring, training, and deployment management
-        </p>
-      </div>
+    <PageShell>
+      <PageHeader
+        title="Admin Panel"
+        description="Model monitoring, training, and deployment management."
+      />
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-surface-variant p-1 rounded-2xl w-fit">
+      <div className="flex gap-1 bg-soft-card p-1 rounded-2xl w-fit overflow-x-auto max-w-full">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
@@ -663,6 +782,6 @@ export const AdminPanel: React.FC = () => {
         {tab === 'training' && <TrainingSection />}
         {tab === 'deploy' && <DeploySection />}
       </div>
-    </div>
+    </PageShell>
   );
 };

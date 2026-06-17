@@ -26,7 +26,7 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({ data, periodLabel })
       trend: periodHint,
       up: null,
       desc: 'From profile',
-      color: 'text-secondary',
+      color: 'text-success',
     },
     {
       label: 'Fixed Expense',
@@ -42,7 +42,7 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({ data, periodLabel })
       trend: periodHint,
       up: true as boolean | null,
       desc: 'In period',
-      color: 'text-secondary',
+      color: 'text-success',
     },
     {
       label: 'Net Outflow',
@@ -58,7 +58,7 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({ data, periodLabel })
       trend: netSavings >= 0 ? 'Surplus' : 'Deficit',
       up: netSavings >= 0,
       desc: 'In period',
-      color: netSavings >= 0 ? undefined : 'text-error',
+      color: netSavings >= 0 ? 'text-success' : 'text-error',
     },
     {
       label: 'Savings Rate',
@@ -96,7 +96,7 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({ data, periodLabel })
               <div className="flex items-center gap-1.5">
                 {stat.up !== null && stat.label !== 'Net Savings' && (
                   stat.up ? (
-                    <ArrowUpRight className="w-3.5 h-3.5 text-secondary" />
+                    <ArrowUpRight className="w-3.5 h-3.5 text-success" />
                   ) : (
                     <ArrowDownRight className="w-3.5 h-3.5 text-error" />
                   )
@@ -105,7 +105,7 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({ data, periodLabel })
                   <Sparkles
                     className={cn(
                       'w-3.5 h-3.5',
-                      netSavings >= 0 ? 'text-secondary' : 'text-error',
+                      netSavings >= 0 ? 'text-success' : 'text-error',
                     )}
                   />
                 )}
@@ -113,7 +113,7 @@ export const SummaryCards: React.FC<SummaryCardsProps> = ({ data, periodLabel })
                   className={cn(
                     'text-[11px] font-black tracking-tight',
                     stat.up === true
-                      ? 'text-secondary'
+                      ? 'text-success'
                       : stat.up === false
                         ? 'text-error'
                         : 'text-on-surface',

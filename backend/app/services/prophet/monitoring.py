@@ -1,32 +1,29 @@
-"""Model performance and drift — Prophet production bundle."""
+"""Prophet production performance and drift monitoring."""
 
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import joblib
 import pandas as pd
 
-from app.services.forecast_features import expenses_to_weekly
-from app.services.forecast_service import get_model_status
-from app.services.prophet_training_service import (
+from app.services.prophet.features import expenses_to_weekly
+from app.services.prophet.inference import get_model_status
+from app.services.prophet.paths import (
     PRODUCTION_BUNDLE_PATH,
     PRODUCTION_MANIFEST_PATH,
-    fetch_expense_transactions_from_db,
+    TRAINING_METADATA_PATH,
 )
-
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-METADATA_PATH = PROJECT_ROOT / "models" / "production" / "training_metadata.json"
+from app.services.prophet.training import fetch_expense_transactions_from_db
 
 
 def _load_metadata() -> dict[str, Any]:
-    if not METADATA_PATH.is_file():
+    if not TRAINING_METADATA_PATH.is_file():
         return {}
     try:
-        return json.loads(METADATA_PATH.read_text(encoding="utf-8"))
+        return json.loads(TRAINING_METADATA_PATH.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
@@ -42,12 +39,10 @@ def get_production_performance() -> dict[str, Any]:
                 "path": str(PRODUCTION_BUNDLE_PATH),
                 "size_mb": round(stat.st_size / (1024 * 1024), 2),
                 "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
-                "trained_users": bundle.get("training_users")
-                or bundle.get("trained_users"),
+                "trained_users": bundle.get("training_users") or bundle.get("trained_users"),
                 "trained_transactions": bundle.get("trained_transactions"),
                 "scope": bundle.get("scope", "global"),
                 "model_type": bundle.get("model_type"),
-                "training_mode": bundle.get("training_mode"),
                 "test_mape": bundle.get("test_mape"),
                 "trained_at": bundle.get("trained_at"),
             }
@@ -97,7 +92,6 @@ def compute_drift_stats() -> dict[str, Any]:
 
     recent_mean = float(pd.Series(weekly_means).mean())
     recent_std = float(pd.Series(weekly_means).std()) if len(weekly_means) > 1 else 0.0
-
     mean_shift_sigma = abs(recent_mean - baseline_mean) / baseline_std if baseline_std else 0.0
     std_ratio = recent_std / baseline_std if baseline_std else 1.0
 
@@ -126,7 +120,6 @@ def compute_drift_stats() -> dict[str, Any]:
 
 
 def save_training_baseline_from_db() -> None:
-    """Persist aggregate weekly spend baseline after training."""
     try:
         transactions = fetch_expense_transactions_from_db()
     except Exception:
@@ -151,5 +144,5 @@ def save_training_baseline_from_db() -> None:
         "weeks": len(series),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    METADATA_PATH.parent.mkdir(parents=True, exist_ok=True)
-    METADATA_PATH.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    TRAINING_METADATA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    TRAINING_METADATA_PATH.write_text(json.dumps(metadata, indent=2), encoding="utf-8")

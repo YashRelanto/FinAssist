@@ -9,6 +9,7 @@ import {
   updateStoredUser,
 } from '../lib/authSession';
 import { apiFetch } from '../lib/api';
+import { APP_ADVISOR_GREETING } from '../lib/utils';
 import { activeUserId } from '../lib/activeUserId';
 import {
   type AnalysisPeriod,
@@ -19,7 +20,7 @@ import {
 
 interface AppContextType {
   user: UserProfile;
-  updateUser: (u: Partial<UserProfile>) => void;
+  updateUser: (u: Partial<UserProfile>, options?: { syncNow?: boolean }) => void;
   
   transactions: Transaction[];
   accounts: any[];
@@ -44,9 +45,22 @@ interface AppContextType {
     merchant?: string;
     force?: boolean;
   }) => Promise<any | null>;
-  accountHubAnalysis: any | null;
-  accountHubAnalysisLoading: boolean;
-  loadAccountHubAnalysis: (options?: { force?: boolean }) => Promise<any | null>;
+  loadSpendingAnalytics: (params: {
+    period?: AnalysisPeriod;
+    accountId?: string;
+    categoryId?: string;
+    merchant?: string;
+    force?: boolean;
+  }) => Promise<any | null>;
+  loadFinancialInsights: (params: {
+    period?: AnalysisPeriod;
+    accountId?: string;
+    categoryId?: string;
+    merchant?: string;
+    force?: boolean;
+    llm?: boolean;
+  }) => Promise<any | null>;
+  loadFinancialHealthInsights: (options?: { force?: boolean; llm?: boolean }) => Promise<any | null>;
   budgets: Budget[];
   addBudget: (b: Omit<Budget, 'id'>) => void;
   updateBudget: (id: string, b: Partial<Budget>) => void;
@@ -74,6 +88,8 @@ interface AppContextType {
   setCurrentPage: (page: string) => void;
   currentPage: string;
   authReady: boolean;
+  authError: string | null;
+  clearAuthError: () => void;
   chatMessages: any[];
   setChatMessages: React.Dispatch<React.SetStateAction<any[]>>;
 }
@@ -90,6 +106,9 @@ const TTL = {
   dashboardSummaryMs: 30_000,
   budgetGoalsSummaryMs: 30_000,
   forecastMs: 30_000,
+  spendingAnalyticsMs: 30_000,
+  financialInsightsMs: 30_000,
+  financialHealthInsightsMs: 60_000,
 };
 
 const initialUser: UserProfile = {
@@ -218,14 +237,58 @@ const initialCategories: Category[] = [
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile>(initialUser);
   const [authReady, setAuthReady] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const profileSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearAuthError = useCallback(() => setAuthError(null), []);
+
+  const syncProfileToServer = useCallback((profile: UserProfile) => {
+    const userId = profile.userId || profile.id;
+    if (!profile.isAuthenticated || !userId) return;
+
+    apiFetch(`/api/users/${userId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        full_name: profile.name,
+        email: profile.email,
+        onboarded: profile.onboarded,
+        income: profile.income,
+        city_tier: profile.cityTier,
+        fixed_rent: profile.fixedRent,
+        fixed_emi: profile.fixedEMI,
+        biggest_category: profile.biggestCategory,
+        primary_goal: profile.primaryGoal,
+      }),
+    }).catch((err) => console.error('Failed to sync profile changes:', err));
+  }, []);
+
+  const updateUser = useCallback((u: Partial<UserProfile>, options?: { syncNow?: boolean }) => {
+    setUser((prev) => {
+      const newUser = { ...prev, ...u };
+
+      if (newUser.isAuthenticated && (newUser.userId || newUser.id)) {
+        updateStoredUser(newUser);
+      }
+
+      if (newUser.isAuthenticated && newUser.userId) {
+        if (profileSyncTimerRef.current) clearTimeout(profileSyncTimerRef.current);
+        if (options?.syncNow) {
+          syncProfileToServer(newUser);
+        } else {
+          profileSyncTimerRef.current = setTimeout(() => syncProfileToServer(newUser), 800);
+        }
+      }
+
+      return newUser;
+    });
+  }, [syncProfileToServer]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [dbCategories, setDbCategories] = useState<string[]>([]);
   const [dashboardSummary, setDashboardSummary] = useState<any | null>(null);
   const [dashboardSummaryLoading, setDashboardSummaryLoading] = useState(false);
   const [budgetGoalsSummary, setBudgetGoalsSummary] = useState<any | null>(null);
-  const [accountHubAnalysis, setAccountHubAnalysis] = useState<any | null>(null);
-  const [accountHubAnalysisLoading, setAccountHubAnalysisLoading] = useState(false);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const categories = initialCategories;
@@ -235,7 +298,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: 1, 
       role: 'ai', 
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 
-      text: "Hello! I am your FinAssist AI Advisor. I have access to your transactions and our latest financial knowledge base. How can I help you today?", 
+      text: APP_ADVISOR_GREETING,
       type: 'text' 
     }
   ]);
@@ -247,36 +310,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [reports, setReports] = useState<Report[]>([
     { id: '1', title: 'Monthly Summary', date: 'Sept 2023', size: '2.4 MB', type: 'PDF' },
   ]);
-  const updateUser = (u: Partial<UserProfile>) => {
-    setUser(prev => {
-      const newUser = { ...prev, ...u };
-      
-      if (newUser.isAuthenticated && (newUser.userId || newUser.id)) {
-        updateStoredUser(newUser);
-      }
-
-      // If user is logged in, sync changes to the database
-      if (newUser.isAuthenticated && newUser.userId) {
-        fetch(`http://localhost:8000/api/users/${newUser.userId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            full_name: newUser.name,
-            email: newUser.email,
-            onboarded: newUser.onboarded,
-            income: newUser.income,
-            city_tier: newUser.cityTier,
-            fixed_rent: newUser.fixedRent,
-            fixed_emi: newUser.fixedEMI,
-            biggest_category: newUser.biggestCategory,
-            primary_goal: newUser.primaryGoal
-          })
-        }).catch(err => console.error("Failed to sync profile changes:", err));
-      }
-      
-      return newUser;
-    });
-  };
 
   const uid = useMemo(() => activeUserId(user), [user]);
   const isAuthed = !!(authReady && user.isAuthenticated && uid);
@@ -300,28 +333,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     dashboardSummary?: Promise<void>;
     budgetGoalsSummary?: Promise<void>;
     forecast?: Map<string, Promise<any | null>>;
-    accountHubAnalysis?: Promise<any | null>;
-  }>({ forecast: new Map() });
-
-  const accountHubLoadedRef = useRef(false);
-  const accountHubAnalysisRef = useRef<any | null>(null);
+    spendingAnalytics?: Map<string, Promise<any | null>>;
+    financialInsights?: Map<string, Promise<any | null>>;
+    financialHealthInsights?: Map<string, Promise<any | null>>;
+  }>({ forecast: new Map(), spendingAnalytics: new Map(), financialInsights: new Map(), financialHealthInsights: new Map() });
 
   const forecastCacheRef = useRef<
-    Map<
-      string,
-      {
-        ts: number;
-        data: any;
-      }
-    >
+    Map<string, { ts: number; data: any }>
+  >(new Map());
+  const spendingAnalyticsCacheRef = useRef<
+    Map<string, { ts: number; data: any }>
+  >(new Map());
+  const financialInsightsCacheRef = useRef<
+    Map<string, { ts: number; data: any }>
+  >(new Map());
+  const financialHealthInsightsCacheRef = useRef<
+    Map<string, { ts: number; data: any }>
   >(new Map());
 
   const setAnalysisPeriod = useCallback((period: AnalysisPeriod) => {
     setAnalysisPeriodState(period);
     storeAnalysisPeriod(period);
-    lastLoadedRef.current.dashboardSummary = 0;
-    lastLoadedRef.current.budgetGoalsSummary = 0;
     forecastCacheRef.current.clear();
+    spendingAnalyticsCacheRef.current.clear();
+    financialInsightsCacheRef.current.clear();
   }, []);
 
   // Restore persisted auth session on reload
@@ -335,71 +370,91 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Check for Supabase OAuth redirect parameters in URL hash
   useEffect(() => {
-    const handleHashAuth = () => {
+    const handleHashAuth = async () => {
       const hash = window.location.hash;
-      if (hash && hash.includes("access_token=")) {
-        const params = new URLSearchParams(hash.substring(1)); // Remove the leading '#'
-        const accessToken = params.get("access_token");
-        if (accessToken) {
-          try {
-            const base64Url = accessToken.split('.')[1];
-            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-            const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
-                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-            }).join(''));
-            const decoded = JSON.parse(jsonPayload);
-            
-            if (decoded && decoded.sub && decoded.email) {
-              const user_id = decoded.sub;
-              const email = decoded.email;
-              const full_name = decoded.user_metadata?.full_name || decoded.email.split('@')[0];
-              
-              fetch('http://localhost:8000/api/oauth-login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_id, email, full_name })
-              })
-              .then(res => res.json())
-              .then(data => {
-                if (data.success) {
-                  // Clear the hash from the URL so it looks clean
-                  window.history.replaceState(null, "", window.location.pathname);
+      if (!hash) return;
 
-                  const restoredUser: UserProfile = {
-                    id: user_id,
-                    isAuthenticated: true,
-                    userId: user_id,
-                    name: full_name,
-                    email: email,
-                    onboarded: data.user.onboarded || false,
-                    income: data.user.income || 0,
-                    cityTier: data.user.city_tier || 'Metro',
-                    fixedRent: data.user.fixed_rent || 0,
-                    fixedEMI: data.user.fixed_emi || 0,
-                    biggestCategory: data.user.biggest_category || '',
-                    primaryGoal: data.user.primary_goal || '',
-                    statementUploaded: false,
-                    role: data.user.role === 'admin' ? 'admin' : 'user',
-                  };
+      const params = new URLSearchParams(hash.substring(1));
+      const oauthError = params.get('error_description') || params.get('error');
+      if (oauthError) {
+        window.history.replaceState(null, '', window.location.pathname);
+        setAuthError(oauthError);
+        return;
+      }
 
-                  saveAuthSession(accessToken, restoredUser);
-                  setUser(restoredUser);
-                }
-              })
-              .catch(err => {
-                console.error("Backend OAuth login failed:", err);
-              });
-            }
-          } catch (e) {
-            console.error("Failed to parse JWT from hash:", e);
-          }
+      if (!hash.includes('access_token=')) return;
+
+      const accessToken = params.get('access_token');
+      const refreshToken = params.get('refresh_token');
+      if (!accessToken) return;
+
+      try {
+        const base64Url = accessToken.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(
+          atob(base64)
+            .split('')
+            .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+            .join('')
+        );
+        const decoded = JSON.parse(jsonPayload);
+
+        if (!decoded?.sub || !decoded?.email) {
+          setAuthError('OAuth sign-in did not return a valid user profile.');
+          window.history.replaceState(null, '', window.location.pathname);
+          return;
         }
+
+        const user_id = decoded.sub as string;
+        const email = decoded.email as string;
+        const full_name =
+          (decoded.user_metadata?.full_name as string | undefined) ||
+          email.split('@')[0];
+
+        const res = await apiFetch('/api/oauth-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id, email, full_name }),
+        });
+        const data = await res.json();
+
+        window.history.replaceState(null, '', window.location.pathname);
+
+        if (!res.ok || !data.success) {
+          setAuthError(data.detail || data.message || 'OAuth sign-in failed');
+          return;
+        }
+
+        const restoredUser: UserProfile = {
+          id: user_id,
+          isAuthenticated: true,
+          userId: user_id,
+          name: full_name,
+          email,
+          onboarded: data.user.onboarded || false,
+          income: data.user.income || 0,
+          cityTier: data.user.city_tier || 'Metro',
+          fixedRent: data.user.fixed_rent || 0,
+          fixedEMI: data.user.fixed_emi || 0,
+          biggestCategory: data.user.biggest_category || '',
+          primaryGoal: data.user.primary_goal || '',
+          statementUploaded: false,
+          role: data.user.role === 'admin' ? 'admin' : 'user',
+        };
+
+        saveAuthSession(accessToken, restoredUser, refreshToken || undefined);
+        setUser(restoredUser);
+        setAuthError(null);
+      } catch (e) {
+        console.error('Failed to complete OAuth sign-in:', e);
+        window.history.replaceState(null, '', window.location.pathname);
+        setAuthError('Failed to complete Google sign-in. Please try again.');
       }
     };
 
     handleHashAuth();
-    window.addEventListener("hashchange", handleHashAuth);
-    return () => window.removeEventListener("hashchange", handleHashAuth);
+    window.addEventListener('hashchange', handleHashAuth);
+    return () => window.removeEventListener('hashchange', handleHashAuth);
   }, []);
 
   const loadTransactions = useCallback((): Promise<void> => {
@@ -561,14 +616,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
   }, [isAuthed, uid]);
 
-  const refreshUserData = useCallback(() => {
-    loadTransactions();
-    loadAccounts();
-    loadBudgets();
-    loadGoals();
-    loadDbCategories();
-  }, [loadTransactions, loadAccounts, loadBudgets, loadGoals, loadDbCategories]);
-
   const loadDashboardSummary = useCallback(
     async (options?: { force?: boolean }) => {
       if (!isAuthed || !uid) {
@@ -584,7 +631,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setDashboardSummaryLoading(true);
       inflightRef.current.dashboardSummary = apiFetch(
-        `/api/dashboard-summary?user_id=${encodeURIComponent(uid)}&period=${encodeURIComponent(analysisPeriod)}`,
+        `/api/dashboard-summary?user_id=${encodeURIComponent(uid)}`,
       )
         .then((res) => res.json())
         .then((data) => {
@@ -603,54 +650,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       return inflightRef.current.dashboardSummary;
     },
-    [isAuthed, uid, analysisPeriod],
-  );
-
-  const loadAccountHubAnalysis = useCallback(
-    async (options?: { force?: boolean }) => {
-      if (!isAuthed || !uid) {
-        setAccountHubAnalysis(null);
-        return null;
-      }
-
-      if (options?.force) {
-        accountHubLoadedRef.current = false;
-      }
-
-      if (!options?.force && accountHubLoadedRef.current) {
-        return accountHubAnalysisRef.current;
-      }
-      if (inflightRef.current.accountHubAnalysis) {
-        return inflightRef.current.accountHubAnalysis;
-      }
-
-      setAccountHubAnalysisLoading(true);
-      inflightRef.current.accountHubAnalysis = apiFetch(
-        `/api/account-hub-analysis?user_id=${encodeURIComponent(uid)}`,
-      )
-        .then((res) => res.json())
-        .then((data) => {
-          if (data?.success) {
-            setAccountHubAnalysis(data);
-            accountHubAnalysisRef.current = data;
-            accountHubLoadedRef.current = true;
-            return data;
-          }
-          return null;
-        })
-        .catch((err) => {
-          console.warn('Failed to load account hub analysis:', err);
-          return null;
-        })
-        .finally(() => {
-          setAccountHubAnalysisLoading(false);
-          inflightRef.current.accountHubAnalysis = undefined;
-        });
-
-      return inflightRef.current.accountHubAnalysis;
-    },
     [isAuthed, uid],
   );
+
+  const refreshUserData = useCallback(() => {
+    loadTransactions();
+    loadAccounts();
+    loadBudgets();
+    loadGoals();
+    loadDbCategories();
+    void loadDashboardSummary();
+  }, [loadTransactions, loadAccounts, loadBudgets, loadGoals, loadDbCategories, loadDashboardSummary]);
+
+  useEffect(() => {
+    if (!authReady || !isAuthed) return;
+    void loadDashboardSummary();
+  }, [authReady, isAuthed, loadDashboardSummary]);
 
   const loadBudgetGoalsSummary = useCallback(
     async (options?: { force?: boolean }) => {
@@ -748,10 +763,146 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [isAuthed, uid, analysisPeriod],
   );
 
-  useEffect(() => {
-    if (!isAuthed) return;
-    void loadDashboardSummary({ force: true });
-  }, [analysisPeriod, isAuthed, loadDashboardSummary]);
+  const buildAnalyticsQueryKey = (
+    endpoint: string,
+    params: {
+      period?: AnalysisPeriod;
+      accountId?: string;
+      categoryId?: string;
+      merchant?: string;
+    },
+  ) =>
+    JSON.stringify({
+      endpoint,
+      uid,
+      period: params.period ?? '3m',
+      accountId: params.accountId || '',
+      categoryId: params.categoryId || '',
+      merchant: params.merchant || '',
+    });
+
+  const loadSpendingAnalytics = useCallback(
+    async (params: {
+      period?: AnalysisPeriod;
+      accountId?: string;
+      categoryId?: string;
+      merchant?: string;
+      force?: boolean;
+    }): Promise<any | null> => {
+      if (!isAuthed || !uid) return null;
+      const period = params.period ?? '3m';
+      const key = buildAnalyticsQueryKey('spending', { ...params, period });
+      const now = Date.now();
+      const cached = spendingAnalyticsCacheRef.current.get(key);
+      if (!params.force && cached && now - cached.ts < TTL.spendingAnalyticsMs) {
+        return cached.data;
+      }
+      const inflightMap = inflightRef.current.spendingAnalytics!;
+      const existing = inflightMap.get(key);
+      if (existing) return existing;
+
+      const query = new URLSearchParams({ user_id: uid, period });
+      if (params.accountId) query.set('account_id', params.accountId);
+      if (params.categoryId) query.set('category_id', params.categoryId);
+      if (params.merchant) query.set('merchant', params.merchant);
+
+      const p = apiFetch(`/api/spending-analytics?${query.toString()}`)
+        .then((res) => res.json())
+        .then((data) => {
+          spendingAnalyticsCacheRef.current.set(key, { ts: Date.now(), data });
+          return data;
+        })
+        .catch((err) => {
+          console.warn('Failed to load spending analytics:', err);
+          return null;
+        })
+        .finally(() => inflightMap.delete(key));
+
+      inflightMap.set(key, p);
+      return p;
+    },
+    [isAuthed, uid],
+  );
+
+  const loadFinancialInsights = useCallback(
+    async (params: {
+      period?: AnalysisPeriod;
+      accountId?: string;
+      categoryId?: string;
+      merchant?: string;
+      force?: boolean;
+      llm?: boolean;
+    }): Promise<any | null> => {
+      if (!isAuthed || !uid) return null;
+      const period = params.period ?? '3m';
+      const key = buildAnalyticsQueryKey('insights', { ...params, period });
+      const cacheKey = `${key}:${params.llm ? 'llm' : 'instant'}`;
+      const now = Date.now();
+      const cached = financialInsightsCacheRef.current.get(cacheKey);
+      if (!params.force && cached && now - cached.ts < TTL.financialInsightsMs) {
+        return cached.data;
+      }
+      const inflightMap = inflightRef.current.financialInsights!;
+      const existing = inflightMap.get(cacheKey);
+      if (existing) return existing;
+
+      const query = new URLSearchParams({ user_id: uid, period });
+      if (params.accountId) query.set('account_id', params.accountId);
+      if (params.categoryId) query.set('category_id', params.categoryId);
+      if (params.merchant) query.set('merchant', params.merchant);
+      if (params.llm) query.set('llm', '1');
+
+      const p = apiFetch(`/api/financial-insights?${query.toString()}`)
+        .then((res) => res.json())
+        .then((data) => {
+          financialInsightsCacheRef.current.set(cacheKey, { ts: Date.now(), data });
+          return data;
+        })
+        .catch((err) => {
+          console.warn('Failed to load financial insights:', err);
+          return null;
+        })
+        .finally(() => inflightMap.delete(cacheKey));
+
+      inflightMap.set(cacheKey, p);
+      return p;
+    },
+    [isAuthed, uid],
+  );
+
+  const loadFinancialHealthInsights = useCallback(
+    async (options?: { force?: boolean; llm?: boolean }): Promise<any | null> => {
+      if (!isAuthed || !uid) return null;
+      const cacheKey = options?.llm ? 'llm' : 'instant';
+      const now = Date.now();
+      const cached = financialHealthInsightsCacheRef.current.get(cacheKey);
+      if (!options?.force && cached && now - cached.ts < TTL.financialHealthInsightsMs) {
+        return cached.data;
+      }
+      const inflightMap = inflightRef.current.financialHealthInsights!;
+      const existing = inflightMap.get(cacheKey);
+      if (existing) return existing;
+
+      const query = new URLSearchParams({ user_id: uid });
+      if (options?.llm) query.set('llm', '1');
+
+      const p = apiFetch(`/api/financial-health-insights?${query.toString()}`)
+        .then((res) => res.json())
+        .then((data) => {
+          financialHealthInsightsCacheRef.current.set(cacheKey, { ts: Date.now(), data });
+          return data;
+        })
+        .catch((err) => {
+          console.warn('Failed to load financial health insights:', err);
+          return null;
+        })
+        .finally(() => inflightMap.delete(cacheKey));
+
+      inflightMap.set(cacheKey, p);
+      return p;
+    },
+    [isAuthed, uid],
+  );
 
   // Load from database once auth session is restored
   useEffect(() => {
@@ -765,9 +916,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setBudgets([]);
       setDashboardSummary(null);
       setBudgetGoalsSummary(null);
-      setAccountHubAnalysis(null);
-      accountHubAnalysisRef.current = null;
-      accountHubLoadedRef.current = false;
     }
   }, [authReady, user.isAuthenticated, user.userId, user.id, refreshUserData]);
 
@@ -1053,21 +1201,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const signOut = () => {
     clearAuthSession();
+    setAuthError(null);
     setUser(initialUser);
     setTransactions([]);
     setGoals([]);
     setBudgets([]);
     setReports([]);
-    setAccountHubAnalysis(null);
-    accountHubAnalysisRef.current = null;
-    accountHubLoadedRef.current = false;
     setCurrentPage('dashboard');
     setChatMessages([
       { 
         id: 1, 
         role: 'ai', 
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 
-        text: "Hello! I am your FinAssist AI Advisor. I have access to your transactions and our latest financial knowledge base. How can I help you today?", 
+        text: APP_ADVISOR_GREETING,
         type: 'text' 
       }
     ]);
@@ -1134,9 +1280,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       loadDashboardSummary,
       loadBudgetGoalsSummary,
       loadForecast,
-      accountHubAnalysis,
-      accountHubAnalysisLoading,
-      loadAccountHubAnalysis,
+      loadSpendingAnalytics,
+      loadFinancialInsights,
+      loadFinancialHealthInsights,
       budgets, addBudget, updateBudget, deleteBudget, loadBudgets, loadGoals,
       goals, addGoal, updateGoal, deleteGoal,
       categories,
@@ -1146,6 +1292,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       signOut,
       setCurrentPage, currentPage,
       authReady,
+      authError,
+      clearAuthError,
       chatMessages, setChatMessages,
     }}>
 
