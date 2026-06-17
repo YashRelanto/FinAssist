@@ -17,6 +17,7 @@ import { analyzeStatementFile } from '../lib/statementParser';
 import { PdfPasswordModal } from '../components/PdfPasswordModal';
 import { apiFetch } from '../lib/api';
 import { activeUserId } from '../lib/activeUserId';
+import { PageHeader, PageShell, lumio } from '../components/PageShell';
 
 export const Settings: React.FC = () => {
   const { 
@@ -105,11 +106,11 @@ export const Settings: React.FC = () => {
           }}
         />
       )}
-      <div className="max-w-5xl space-y-12 pb-20">
-      <header>
-        <h2 className="text-3xl font-bold text-on-surface">Settings & Profile</h2>
-        <p className="text-on-surface-variant font-medium text-sm mt-1">Configure your personal assistant and view your financial activity streaks.</p>
-      </header>
+      <PageShell className="max-w-5xl">
+      <PageHeader
+        title="Settings & Profile"
+        description="Configure your personal assistant and view your financial activity streaks."
+      />
 
       {/* Streak Maintainer Heatmap */}
       <section className="bg-surface-container-lowest p-8 rounded-2xl border border-outline-variant/30 soft-shadow">
@@ -273,7 +274,7 @@ export const Settings: React.FC = () => {
                 </p>
              </div>
              <p className="text-[10px] text-outline font-bold uppercase tracking-widest leading-relaxed">
-               Historical data allows FinAssist to analyze your seasonality, recurring bills, and irregular spending spikes from the past.
+               Historical data allows FinAssist AI to analyze your seasonality, recurring bills, and irregular spending spikes from the past.
              </p>
           </div>
         </div>
@@ -307,7 +308,7 @@ export const Settings: React.FC = () => {
           </button>
         ))}
       </div>
-    </div>
+      </PageShell>
     </>
   );
 };

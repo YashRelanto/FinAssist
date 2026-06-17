@@ -87,6 +87,7 @@ def ensure_user_with_profile(user_id: str, email: str, full_name: str) -> dict[s
     return {
         "user_id": user["user_id"],
         "full_name": user["full_name"],
+        "email": user.get("email") or email,
         "role": role,
         "onboarded": profile["onboarded"],
         "income": float(profile["income"]),

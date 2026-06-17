@@ -55,7 +55,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentPage, onNavigate, isOpe
         <div className="mb-8 px-2">
           <div className="flex justify-between items-center">
             <div>
-              <h1 className="text-2xl font-bold text-primary tracking-tight">FinAssist</h1>
+              <h1 className="text-2xl font-bold text-primary tracking-tight">FinAssist AI</h1>
               <p className="text-sm text-on-surface-variant font-medium">Premium Finance</p>
             </div>
           </div>

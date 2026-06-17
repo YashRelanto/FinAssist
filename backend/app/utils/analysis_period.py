@@ -7,6 +7,7 @@ from datetime import date
 from typing import Any
 
 VALID_PERIODS = frozenset({"1m", "3m", "6m", "1y", "all"})
+ALL_DASHBOARD_PERIODS = ("1m", "3m", "6m", "1y", "all")
 DEFAULT_PERIOD = "1m"
 MONTHS_BY_PERIOD = {"1m": 1, "3m": 3, "6m": 6, "1y": 12}
 

@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 
 import { useAppContext } from '../context/AppContext';
-import { cn } from '../lib/utils';
+import { cn, APP_NAME } from '../lib/utils';
 import { saveAuthSession } from '../lib/authSession';
 
 export const Login: React.FC = () => {
@@ -130,7 +130,7 @@ export const Login: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-surface flex flex-col items-center justify-center p-4 relative overflow-hidden">
+    <div className="min-h-screen flex flex-col items-center justify-center p-4 relative overflow-hidden">
       
       {/* Background Decor */}
       <div className="absolute top-0 left-0 w-full h-full pointer-events-none opacity-5">
@@ -151,7 +151,7 @@ export const Login: React.FC = () => {
           </div>
 
           <h1 className="text-4xl font-black tracking-tight text-on-surface">
-            FinAssist
+            {APP_NAME}
           </h1>
 
           <p className="text-outline font-medium">

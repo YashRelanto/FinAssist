@@ -7,9 +7,10 @@ import { Plus, Check, Loader2, ArrowUpRight, ArrowDownLeft, Calendar } from 'luc
 interface QuickAddFormProps {
   onSuccess?: () => void;
   accounts?: any[];
+  variant?: 'default' | 'bento' | 'modal';
 }
 
-export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts }) => {
+export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts, variant = 'default' }) => {
   const { categories, user } = useAppContext();
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
@@ -123,9 +124,18 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts 
   };
 
   return (
-    <div className="lg:col-span-5 bg-surface-container-lowest p-6 rounded-[24px] border border-outline-variant/30 soft-shadow flex flex-col h-full">
+    <div className={cn(
+      variant === 'modal'
+        ? 'flex flex-col h-full'
+        : variant === 'bento'
+        ? 'bento-card flex flex-col h-full'
+        : 'lg:col-span-5 bg-surface-container-lowest p-6 rounded-[24px] border border-outline-variant/30 soft-shadow flex flex-col h-full',
+    )}>
       <div className="flex items-center justify-between mb-6 border-b border-outline-variant/20 pb-3">
-        <div className="flex gap-4">
+        {variant === 'modal' && (
+          <h3 className="text-lg font-black uppercase tracking-widest text-on-surface">Quick Add</h3>
+        )}
+        <div className={cn('flex gap-4', variant === 'modal' && 'ml-auto')}>
           <button
             type="button"
             onClick={() => setActiveTab('add')}

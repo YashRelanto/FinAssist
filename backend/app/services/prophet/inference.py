@@ -215,6 +215,34 @@ def _build_predicted_month(amount: float, pred_start: date) -> dict[str, Any]:
     }
 
 
+def get_next_month_prediction(
+    user_id: str,
+    transactions: list[dict],
+) -> dict[str, Any] | None:
+    """Lightweight Prophet prediction for dashboard charts."""
+    if not model_is_loaded():
+        return None
+    tx_df = pd.DataFrame(transactions) if transactions else pd.DataFrame()
+    if tx_df.empty:
+        return None
+    tx_df = tx_df[tx_df["transaction_type"] == "expense"].copy()
+    if not user_has_enough_history(tx_df):
+        return None
+    try:
+        today = date.today()
+        next_start, _ = _next_calendar_month_bounds(today)
+        amount = _predict_next_month(user_id, tx_df)
+        pred = _build_predicted_month(amount, next_start)
+        return {
+            "predicted_next_month": pred["amount"],
+            "predicted_month_label": pred["label"],
+            "predicted_month": pred["month"],
+        }
+    except Exception as exc:
+        logger.debug("Next month prediction unavailable: %s", exc)
+        return None
+
+
 def _next_calendar_month_bounds(reference: date) -> tuple[date, date]:
     first = add_months(month_start(reference), 1)
     last_day = calendar.monthrange(first.year, first.month)[1]

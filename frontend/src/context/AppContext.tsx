@@ -9,6 +9,7 @@ import {
   updateStoredUser,
 } from '../lib/authSession';
 import { apiFetch } from '../lib/api';
+import { APP_ADVISOR_GREETING } from '../lib/utils';
 import { activeUserId } from '../lib/activeUserId';
 import {
   type AnalysisPeriod,
@@ -44,9 +45,22 @@ interface AppContextType {
     merchant?: string;
     force?: boolean;
   }) => Promise<any | null>;
-  accountHubAnalysis: any | null;
-  accountHubAnalysisLoading: boolean;
-  loadAccountHubAnalysis: (options?: { force?: boolean }) => Promise<any | null>;
+  loadSpendingAnalytics: (params: {
+    period?: AnalysisPeriod;
+    accountId?: string;
+    categoryId?: string;
+    merchant?: string;
+    force?: boolean;
+  }) => Promise<any | null>;
+  loadFinancialInsights: (params: {
+    period?: AnalysisPeriod;
+    accountId?: string;
+    categoryId?: string;
+    merchant?: string;
+    force?: boolean;
+    llm?: boolean;
+  }) => Promise<any | null>;
+  loadFinancialHealthInsights: (options?: { force?: boolean; llm?: boolean }) => Promise<any | null>;
   budgets: Budget[];
   addBudget: (b: Omit<Budget, 'id'>) => void;
   updateBudget: (id: string, b: Partial<Budget>) => void;
@@ -90,6 +104,9 @@ const TTL = {
   dashboardSummaryMs: 30_000,
   budgetGoalsSummaryMs: 30_000,
   forecastMs: 30_000,
+  spendingAnalyticsMs: 30_000,
+  financialInsightsMs: 30_000,
+  financialHealthInsightsMs: 60_000,
 };
 
 const initialUser: UserProfile = {
@@ -224,8 +241,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [dashboardSummary, setDashboardSummary] = useState<any | null>(null);
   const [dashboardSummaryLoading, setDashboardSummaryLoading] = useState(false);
   const [budgetGoalsSummary, setBudgetGoalsSummary] = useState<any | null>(null);
-  const [accountHubAnalysis, setAccountHubAnalysis] = useState<any | null>(null);
-  const [accountHubAnalysisLoading, setAccountHubAnalysisLoading] = useState(false);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const categories = initialCategories;
@@ -235,7 +250,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: 1, 
       role: 'ai', 
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 
-      text: "Hello! I am your FinAssist AI Advisor. I have access to your transactions and our latest financial knowledge base. How can I help you today?", 
+      text: APP_ADVISOR_GREETING,
       type: 'text' 
     }
   ]);
@@ -300,28 +315,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     dashboardSummary?: Promise<void>;
     budgetGoalsSummary?: Promise<void>;
     forecast?: Map<string, Promise<any | null>>;
-    accountHubAnalysis?: Promise<any | null>;
-  }>({ forecast: new Map() });
-
-  const accountHubLoadedRef = useRef(false);
-  const accountHubAnalysisRef = useRef<any | null>(null);
+    spendingAnalytics?: Map<string, Promise<any | null>>;
+    financialInsights?: Map<string, Promise<any | null>>;
+    financialHealthInsights?: Map<string, Promise<any | null>>;
+  }>({ forecast: new Map(), spendingAnalytics: new Map(), financialInsights: new Map(), financialHealthInsights: new Map() });
 
   const forecastCacheRef = useRef<
-    Map<
-      string,
-      {
-        ts: number;
-        data: any;
-      }
-    >
+    Map<string, { ts: number; data: any }>
+  >(new Map());
+  const spendingAnalyticsCacheRef = useRef<
+    Map<string, { ts: number; data: any }>
+  >(new Map());
+  const financialInsightsCacheRef = useRef<
+    Map<string, { ts: number; data: any }>
+  >(new Map());
+  const financialHealthInsightsCacheRef = useRef<
+    Map<string, { ts: number; data: any }>
   >(new Map());
 
   const setAnalysisPeriod = useCallback((period: AnalysisPeriod) => {
     setAnalysisPeriodState(period);
     storeAnalysisPeriod(period);
-    lastLoadedRef.current.dashboardSummary = 0;
-    lastLoadedRef.current.budgetGoalsSummary = 0;
     forecastCacheRef.current.clear();
+    spendingAnalyticsCacheRef.current.clear();
+    financialInsightsCacheRef.current.clear();
   }, []);
 
   // Restore persisted auth session on reload
@@ -561,14 +578,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
   }, [isAuthed, uid]);
 
-  const refreshUserData = useCallback(() => {
-    loadTransactions();
-    loadAccounts();
-    loadBudgets();
-    loadGoals();
-    loadDbCategories();
-  }, [loadTransactions, loadAccounts, loadBudgets, loadGoals, loadDbCategories]);
-
   const loadDashboardSummary = useCallback(
     async (options?: { force?: boolean }) => {
       if (!isAuthed || !uid) {
@@ -584,7 +593,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setDashboardSummaryLoading(true);
       inflightRef.current.dashboardSummary = apiFetch(
-        `/api/dashboard-summary?user_id=${encodeURIComponent(uid)}&period=${encodeURIComponent(analysisPeriod)}`,
+        `/api/dashboard-summary?user_id=${encodeURIComponent(uid)}`,
       )
         .then((res) => res.json())
         .then((data) => {
@@ -603,54 +612,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       return inflightRef.current.dashboardSummary;
     },
-    [isAuthed, uid, analysisPeriod],
-  );
-
-  const loadAccountHubAnalysis = useCallback(
-    async (options?: { force?: boolean }) => {
-      if (!isAuthed || !uid) {
-        setAccountHubAnalysis(null);
-        return null;
-      }
-
-      if (options?.force) {
-        accountHubLoadedRef.current = false;
-      }
-
-      if (!options?.force && accountHubLoadedRef.current) {
-        return accountHubAnalysisRef.current;
-      }
-      if (inflightRef.current.accountHubAnalysis) {
-        return inflightRef.current.accountHubAnalysis;
-      }
-
-      setAccountHubAnalysisLoading(true);
-      inflightRef.current.accountHubAnalysis = apiFetch(
-        `/api/account-hub-analysis?user_id=${encodeURIComponent(uid)}`,
-      )
-        .then((res) => res.json())
-        .then((data) => {
-          if (data?.success) {
-            setAccountHubAnalysis(data);
-            accountHubAnalysisRef.current = data;
-            accountHubLoadedRef.current = true;
-            return data;
-          }
-          return null;
-        })
-        .catch((err) => {
-          console.warn('Failed to load account hub analysis:', err);
-          return null;
-        })
-        .finally(() => {
-          setAccountHubAnalysisLoading(false);
-          inflightRef.current.accountHubAnalysis = undefined;
-        });
-
-      return inflightRef.current.accountHubAnalysis;
-    },
     [isAuthed, uid],
   );
+
+  const refreshUserData = useCallback(() => {
+    loadTransactions();
+    loadAccounts();
+    loadBudgets();
+    loadGoals();
+    loadDbCategories();
+    void loadDashboardSummary();
+  }, [loadTransactions, loadAccounts, loadBudgets, loadGoals, loadDbCategories, loadDashboardSummary]);
+
+  useEffect(() => {
+    if (!authReady || !isAuthed) return;
+    void loadDashboardSummary();
+  }, [authReady, isAuthed, loadDashboardSummary]);
 
   const loadBudgetGoalsSummary = useCallback(
     async (options?: { force?: boolean }) => {
@@ -748,10 +725,146 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [isAuthed, uid, analysisPeriod],
   );
 
-  useEffect(() => {
-    if (!isAuthed) return;
-    void loadDashboardSummary({ force: true });
-  }, [analysisPeriod, isAuthed, loadDashboardSummary]);
+  const buildAnalyticsQueryKey = (
+    endpoint: string,
+    params: {
+      period?: AnalysisPeriod;
+      accountId?: string;
+      categoryId?: string;
+      merchant?: string;
+    },
+  ) =>
+    JSON.stringify({
+      endpoint,
+      uid,
+      period: params.period ?? '3m',
+      accountId: params.accountId || '',
+      categoryId: params.categoryId || '',
+      merchant: params.merchant || '',
+    });
+
+  const loadSpendingAnalytics = useCallback(
+    async (params: {
+      period?: AnalysisPeriod;
+      accountId?: string;
+      categoryId?: string;
+      merchant?: string;
+      force?: boolean;
+    }): Promise<any | null> => {
+      if (!isAuthed || !uid) return null;
+      const period = params.period ?? '3m';
+      const key = buildAnalyticsQueryKey('spending', { ...params, period });
+      const now = Date.now();
+      const cached = spendingAnalyticsCacheRef.current.get(key);
+      if (!params.force && cached && now - cached.ts < TTL.spendingAnalyticsMs) {
+        return cached.data;
+      }
+      const inflightMap = inflightRef.current.spendingAnalytics!;
+      const existing = inflightMap.get(key);
+      if (existing) return existing;
+
+      const query = new URLSearchParams({ user_id: uid, period });
+      if (params.accountId) query.set('account_id', params.accountId);
+      if (params.categoryId) query.set('category_id', params.categoryId);
+      if (params.merchant) query.set('merchant', params.merchant);
+
+      const p = apiFetch(`/api/spending-analytics?${query.toString()}`)
+        .then((res) => res.json())
+        .then((data) => {
+          spendingAnalyticsCacheRef.current.set(key, { ts: Date.now(), data });
+          return data;
+        })
+        .catch((err) => {
+          console.warn('Failed to load spending analytics:', err);
+          return null;
+        })
+        .finally(() => inflightMap.delete(key));
+
+      inflightMap.set(key, p);
+      return p;
+    },
+    [isAuthed, uid],
+  );
+
+  const loadFinancialInsights = useCallback(
+    async (params: {
+      period?: AnalysisPeriod;
+      accountId?: string;
+      categoryId?: string;
+      merchant?: string;
+      force?: boolean;
+      llm?: boolean;
+    }): Promise<any | null> => {
+      if (!isAuthed || !uid) return null;
+      const period = params.period ?? '3m';
+      const key = buildAnalyticsQueryKey('insights', { ...params, period });
+      const cacheKey = `${key}:${params.llm ? 'llm' : 'instant'}`;
+      const now = Date.now();
+      const cached = financialInsightsCacheRef.current.get(cacheKey);
+      if (!params.force && cached && now - cached.ts < TTL.financialInsightsMs) {
+        return cached.data;
+      }
+      const inflightMap = inflightRef.current.financialInsights!;
+      const existing = inflightMap.get(cacheKey);
+      if (existing) return existing;
+
+      const query = new URLSearchParams({ user_id: uid, period });
+      if (params.accountId) query.set('account_id', params.accountId);
+      if (params.categoryId) query.set('category_id', params.categoryId);
+      if (params.merchant) query.set('merchant', params.merchant);
+      if (params.llm) query.set('llm', '1');
+
+      const p = apiFetch(`/api/financial-insights?${query.toString()}`)
+        .then((res) => res.json())
+        .then((data) => {
+          financialInsightsCacheRef.current.set(cacheKey, { ts: Date.now(), data });
+          return data;
+        })
+        .catch((err) => {
+          console.warn('Failed to load financial insights:', err);
+          return null;
+        })
+        .finally(() => inflightMap.delete(cacheKey));
+
+      inflightMap.set(cacheKey, p);
+      return p;
+    },
+    [isAuthed, uid],
+  );
+
+  const loadFinancialHealthInsights = useCallback(
+    async (options?: { force?: boolean; llm?: boolean }): Promise<any | null> => {
+      if (!isAuthed || !uid) return null;
+      const cacheKey = options?.llm ? 'llm' : 'instant';
+      const now = Date.now();
+      const cached = financialHealthInsightsCacheRef.current.get(cacheKey);
+      if (!options?.force && cached && now - cached.ts < TTL.financialHealthInsightsMs) {
+        return cached.data;
+      }
+      const inflightMap = inflightRef.current.financialHealthInsights!;
+      const existing = inflightMap.get(cacheKey);
+      if (existing) return existing;
+
+      const query = new URLSearchParams({ user_id: uid });
+      if (options?.llm) query.set('llm', '1');
+
+      const p = apiFetch(`/api/financial-health-insights?${query.toString()}`)
+        .then((res) => res.json())
+        .then((data) => {
+          financialHealthInsightsCacheRef.current.set(cacheKey, { ts: Date.now(), data });
+          return data;
+        })
+        .catch((err) => {
+          console.warn('Failed to load financial health insights:', err);
+          return null;
+        })
+        .finally(() => inflightMap.delete(cacheKey));
+
+      inflightMap.set(cacheKey, p);
+      return p;
+    },
+    [isAuthed, uid],
+  );
 
   // Load from database once auth session is restored
   useEffect(() => {
@@ -765,9 +878,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setBudgets([]);
       setDashboardSummary(null);
       setBudgetGoalsSummary(null);
-      setAccountHubAnalysis(null);
-      accountHubAnalysisRef.current = null;
-      accountHubLoadedRef.current = false;
     }
   }, [authReady, user.isAuthenticated, user.userId, user.id, refreshUserData]);
 
@@ -1058,16 +1168,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setGoals([]);
     setBudgets([]);
     setReports([]);
-    setAccountHubAnalysis(null);
-    accountHubAnalysisRef.current = null;
-    accountHubLoadedRef.current = false;
     setCurrentPage('dashboard');
     setChatMessages([
       { 
         id: 1, 
         role: 'ai', 
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 
-        text: "Hello! I am your FinAssist AI Advisor. I have access to your transactions and our latest financial knowledge base. How can I help you today?", 
+        text: APP_ADVISOR_GREETING,
         type: 'text' 
       }
     ]);
@@ -1134,9 +1241,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       loadDashboardSummary,
       loadBudgetGoalsSummary,
       loadForecast,
-      accountHubAnalysis,
-      accountHubAnalysisLoading,
-      loadAccountHubAnalysis,
+      loadSpendingAnalytics,
+      loadFinancialInsights,
+      loadFinancialHealthInsights,
       budgets, addBudget, updateBudget, deleteBudget, loadBudgets, loadGoals,
       goals, addGoal, updateGoal, deleteGoal,
       categories,

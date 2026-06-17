@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from 'recharts';
 import { cn, formatCurrency } from '../lib/utils';
+import { PageHeader, PageLoading, PageShell, lumio } from '../components/PageShell';
 
 interface Holding {
   ticker: string;
@@ -266,21 +267,17 @@ export const Investments: React.FC = () => {
   };
 
   return (
-    <div className="space-y-8">
-      {/* HEADER SECTION */}
-      <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h2 className="text-3xl font-bold text-on-surface">Investments</h2>
-          <p className="text-on-surface-variant font-medium text-sm mt-1">Real-time performance metrics and asset distribution.</p>
-        </div>
-        <button 
-          onClick={() => setModalOpen(true)}
-          className="flex items-center gap-2.5 px-6 py-3 bg-primary text-white font-bold rounded-2xl shadow-lg shadow-primary/25 hover:scale-[1.02] active:scale-[0.98] transition-all self-start"
-        >
-          <Plus className="w-5 h-5" />
-          <span>Add Mutual Fund</span>
-        </button>
-      </header>
+    <PageShell>
+      <PageHeader
+        title="Investments"
+        description="Real-time performance metrics and mutual fund portfolio distribution."
+        actions={
+          <button type="button" onClick={() => setModalOpen(true)} className={lumio.btnPrimary}>
+            <Plus className="w-4 h-4" />
+            Add Fund
+          </button>
+        }
+      />
 
       {/* METRIC CARDS */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -736,6 +733,6 @@ export const Investments: React.FC = () => {
           </div>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 };

@@ -13,7 +13,6 @@ from app.services.dashboard_metrics_service import (
     normalize_category_name,
     resolve_budget_period_dates,
 )
-from app.services.account_hub_analysis_service import generate_account_hub_analysis
 from app.services.accounts_service import fetch_user_accounts, insert_account
 from app.services.transaction_service import (
     create_transaction_record,
@@ -156,9 +155,11 @@ class UserUpdateRequest(BaseModel):
 
 @router.put("/users/{user_id}")
 async def update_user_profile(user_id: str, req: UserUpdateRequest):
+    db = supabase_db or supabase
+    if not db:
+        raise HTTPException(status_code=503, detail="Database unavailable")
     try:
-        # 1. Update basic user info in public.users table
-        response = supabase.table("users").update({
+        response = db.table("users").update({
             "full_name": req.full_name,
             "email": req.email
         }).eq("user_id", user_id).execute()
@@ -166,7 +167,6 @@ async def update_user_profile(user_id: str, req: UserUpdateRequest):
         if not response.data:
             raise HTTPException(status_code=404, detail="User not found or update failed")
             
-        # 2. Update/Upsert onboarding metrics in public.user_profiles table
         profile_data = {}
         if req.onboarded is not None: profile_data["onboarded"] = req.onboarded
         if req.income is not None: profile_data["income"] = req.income
@@ -177,12 +177,12 @@ async def update_user_profile(user_id: str, req: UserUpdateRequest):
         if req.primary_goal is not None: profile_data["primary_goal"] = req.primary_goal
         
         if profile_data:
-            prof_check = supabase.table("user_profiles").select("*").eq("user_id", user_id).execute()
+            prof_check = db.table("user_profiles").select("*").eq("user_id", user_id).execute()
             if prof_check.data:
-                supabase.table("user_profiles").update(profile_data).eq("user_id", user_id).execute()
+                db.table("user_profiles").update(profile_data).eq("user_id", user_id).execute()
             else:
                 profile_data["user_id"] = user_id
-                supabase.table("user_profiles").insert(profile_data).execute()
+                db.table("user_profiles").insert(profile_data).execute()
             
         return {"success": True, "message": "Profile updated successfully", "user": response.data[0]}
     except Exception as e:
@@ -196,40 +196,47 @@ class OAuthLoginRequest(BaseModel):
 
 @router.post("/oauth-login")
 async def api_oauth_login(req: OAuthLoginRequest):
+    db = supabase_db or supabase
+    if not db:
+        user_profile = ensure_user_with_profile(req.user_id, req.email, req.full_name) if supabase_db else {
+            "user_id": req.user_id,
+            "full_name": req.full_name,
+            "email": req.email,
+            "role": "user",
+            "onboarded": False,
+            "income": 0,
+            "city_tier": "Metro",
+            "fixed_rent": 0,
+            "fixed_emi": 0,
+            "biggest_category": "",
+            "primary_goal": "",
+        }
+        return {"success": True, "message": "OAuth login successful", "user": user_profile}
+
     try:
-        # Check if user already exists
-        check = supabase.table("users").select("*").eq("email", req.email).execute()
+        check = db.table("users").select("*").eq("email", req.email).execute()
         if check.data:
             user = check.data[0]
-            # Self-healing mismatch correction: update old user_id to match Supabase Auth UUID
             if user["user_id"] != req.user_id:
                 old_user_id = user["user_id"]
                 try:
-                    # 1. Update the email of the old user row to free up the unique constraint
                     temp_email = f"obsolete_{old_user_id}@{req.email}"
-                    supabase.table("users").update({"email": temp_email}).eq("user_id", old_user_id).execute()
-                    
-                    # 2. Insert the new user row with the correct user_id and email
-                    supabase.table("users").insert({
+                    db.table("users").update({"email": temp_email}).eq("user_id", old_user_id).execute()
+                    db.table("users").insert({
                         "user_id": req.user_id,
                         "full_name": req.full_name,
                         "email": req.email,
                     }).execute()
-                    
-                    # 3. Update referencing tables
-                    supabase.table("user_profiles").update({"user_id": req.user_id}).eq("user_id", old_user_id).execute()
-                    supabase.table("accounts").update({"user_id": req.user_id}).eq("user_id", old_user_id).execute()
-                    supabase.table("transactions").update({"user_id": req.user_id}).eq("user_id", old_user_id).execute()
-                    
-                    # 4. Safely delete obsolete mismatch row
-                    supabase.table("users").delete().eq("user_id", old_user_id).execute()
+                    db.table("user_profiles").update({"user_id": req.user_id}).eq("user_id", old_user_id).execute()
+                    db.table("accounts").update({"user_id": req.user_id}).eq("user_id", old_user_id).execute()
+                    db.table("transactions").update({"user_id": req.user_id}).eq("user_id", old_user_id).execute()
+                    db.table("users").delete().eq("user_id", old_user_id).execute()
                 except Exception as sync_err:
                     print(f"Failed self-healing user_id update: {sync_err}")
-            
+
             user_profile = ensure_user_with_profile(req.user_id, req.email, req.full_name)
             return {"success": True, "message": "OAuth login successful", "user": user_profile}
-        
-        # User does not exist, sync insert both user and user profile
+
         user_profile = ensure_user_with_profile(req.user_id, req.email, req.full_name)
         return {"success": True, "message": "OAuth registration successful", "user": user_profile}
     except Exception as e:
@@ -253,6 +260,7 @@ async def get_dashboard_summary(
             supabase.table("transactions")
             .select(
                 "transaction_id, amount, transaction_type, transaction_date, "
+                "merchant_name, description, "
                 "category_id, categories(main_category, sub_category)"
             )
             .eq("user_id", user_id)
@@ -266,7 +274,7 @@ async def get_dashboard_summary(
             .select("*, categories(main_category, sub_category), accounts(account_name)")
             .eq("user_id", user_id)
             .order("transaction_date", desc=True)
-            .limit(5)
+            .limit(8)
             .execute()
         )
 
@@ -292,6 +300,7 @@ async def get_dashboard_summary(
             profile_fixed_emi = float(prof_res.data[0].get("fixed_emi") or 0.0)
 
         return build_dashboard_payload(
+            user_id=user_id.strip(),
             accounts=accounts,
             transactions=transactions,
             recent_rows=recent_res.data or [],
@@ -308,14 +317,247 @@ async def get_dashboard_summary(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/account-hub-analysis")
-async def get_account_hub_analysis(user_id: str):
+@router.get("/spending-analytics")
+async def get_spending_analytics(
+    user_id: str,
+    period: str = "3m",
+    account_id: str | None = None,
+    category_id: str | None = None,
+    merchant: str | None = None,
+):
     if not user_id or not user_id.strip():
         raise HTTPException(status_code=400, detail="user_id is required")
     try:
-        return generate_account_hub_analysis(user_id.strip())
+        import time
+
+        from app.services.analytics_service import build_spending_analytics_payload
+        from app.utils.analysis_period import normalize_period
+        from app.utils.tab_logging import mask_user_id, tab_error, tab_info
+
+        period_key = normalize_period(period)
+        tab_info(
+            "analytics",
+            "spending-analytics start user=%s period=%s filters=%s",
+            mask_user_id(user_id),
+            period_key,
+            {"account_id": account_id, "category_id": category_id, "merchant": merchant},
+        )
+        started = time.perf_counter()
+
+        trans_response = (
+            supabase.table("transactions")
+            .select(
+                "transaction_id, amount, transaction_type, transaction_date, "
+                "merchant_name, description, account_id, category_id, "
+                "categories(main_category, sub_category)"
+            )
+            .eq("user_id", user_id)
+            .order("transaction_date")
+            .execute()
+        )
+        transactions = trans_response.data or []
+        payload = build_spending_analytics_payload(
+            transactions,
+            period=period_key,
+            account_id=account_id,
+            category_id=category_id,
+            merchant=merchant,
+        )
+        tab_info(
+            "analytics",
+            "spending-analytics done user=%s elapsed_ms=%.0f txns=%d total_spend=%s categories=%d",
+            mask_user_id(user_id),
+            (time.perf_counter() - started) * 1000,
+            len(transactions),
+            payload.get("total_spend"),
+            len(payload.get("category_trends") or []),
+        )
+        return payload
     except Exception as e:
-        print(f"Error in account-hub-analysis: {e}")
+        from app.utils.tab_logging import mask_user_id, tab_error
+
+        tab_error("analytics", "spending-analytics failed user=%s: %s", mask_user_id(user_id), e)
+        print(f"Error in spending-analytics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/financial-insights")
+async def get_financial_insights(
+    user_id: str,
+    period: str = "3m",
+    account_id: str | None = None,
+    category_id: str | None = None,
+    merchant: str | None = None,
+    llm: str | None = None,
+):
+    if not user_id or not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        import asyncio
+        import time
+
+        from app.services.analytics_service import build_spending_analytics_payload
+        from app.services.financial_insights_service import build_financial_insights_payload
+        from app.services.prophet.inference import get_next_month_prediction
+        from app.utils.analysis_period import normalize_period
+        from app.utils.tab_logging import mask_user_id, tab_error, tab_info
+
+        include_llm = (llm or "").strip().lower() in ("1", "true", "yes", "on")
+        period_key = normalize_period(period)
+        tab_info(
+            "analytics",
+            "financial-insights start user=%s period=%s llm=%s filters=%s",
+            mask_user_id(user_id),
+            period_key,
+            include_llm,
+            {"account_id": account_id, "category_id": category_id, "merchant": merchant},
+        )
+        started = time.perf_counter()
+
+        trans_response = (
+            supabase.table("transactions")
+            .select(
+                "transaction_id, amount, transaction_type, transaction_date, "
+                "merchant_name, description, account_id, category_id, "
+                "categories(main_category, sub_category)"
+            )
+            .eq("user_id", user_id)
+            .order("transaction_date")
+            .execute()
+        )
+        transactions = trans_response.data or []
+
+        analytics = build_spending_analytics_payload(
+            transactions,
+            period=period_key,
+            account_id=account_id,
+            category_id=category_id,
+            merchant=merchant,
+        )
+
+        forecast_meta = None
+        try:
+            forecast_meta = get_next_month_prediction(user_id.strip(), transactions)
+        except Exception:
+            forecast_meta = None
+
+        prof_res = (
+            supabase.table("user_profiles")
+            .select("income, fixed_rent, fixed_emi, primary_goal, biggest_category")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        profile = prof_res.data[0] if prof_res.data else {}
+
+        build_kwargs = dict(
+            analytics=analytics,
+            predicted_next_month=(forecast_meta or {}).get("predicted_next_month"),
+            predicted_month_label=(forecast_meta or {}).get("predicted_month_label"),
+            profile=profile,
+            include_llm=include_llm,
+        )
+        if include_llm:
+            payload = await asyncio.to_thread(build_financial_insights_payload, **build_kwargs)
+        else:
+            payload = build_financial_insights_payload(**build_kwargs)
+        tab_info(
+            "analytics",
+            "financial-insights done user=%s elapsed_ms=%.0f source=%s llm_status=%s recommendations=%d",
+            mask_user_id(user_id),
+            (time.perf_counter() - started) * 1000,
+            payload.get("source"),
+            payload.get("llm_status"),
+            len(payload.get("recommendations") or []),
+        )
+        return payload
+    except Exception as e:
+        from app.utils.tab_logging import mask_user_id, tab_error
+
+        tab_error("analytics", "financial-insights failed user=%s: %s", mask_user_id(user_id), e)
+        print(f"Error in financial-insights: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/financial-health-insights")
+async def get_financial_health_insights(user_id: str, llm: str | None = None):
+    if not user_id or not user_id.strip():
+        raise HTTPException(status_code=400, detail="user_id is required")
+    try:
+        import asyncio
+        import time
+
+        from app.services.dashboard_metrics_service import compute_overall_financial_health
+        from app.services.financial_health_insights_service import (
+            build_financial_health_insights_payload,
+        )
+        from app.utils.tab_logging import mask_user_id, tab_error, tab_info
+
+        include_llm = (llm or "").strip().lower() in ("1", "true", "yes", "on")
+        tab_info(
+            "dashboard",
+            "financial-health-insights start user=%s llm=%s",
+            mask_user_id(user_id),
+            include_llm,
+        )
+        started = time.perf_counter()
+
+        accounts = fetch_user_accounts(user_id)
+        trans_response = (
+            supabase.table("transactions")
+            .select(
+                "transaction_id, amount, transaction_type, transaction_date, "
+                "merchant_name, description, "
+                "category_id, categories(main_category, sub_category)"
+            )
+            .eq("user_id", user_id)
+            .order("transaction_date")
+            .execute()
+        )
+        transactions = trans_response.data or []
+
+        prof_res = (
+            supabase.table("user_profiles")
+            .select("income, fixed_rent, fixed_emi, primary_goal")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        profile = prof_res.data[0] if prof_res.data else {}
+
+        health = compute_overall_financial_health(
+            accounts=accounts,
+            transactions=transactions,
+            profile_income=float(profile.get("income") or 0),
+            profile_fixed_rent=float(profile.get("fixed_rent") or 0),
+            profile_fixed_emi=float(profile.get("fixed_emi") or 0),
+        )
+
+        build_kwargs = dict(health=health, profile=profile, include_llm=include_llm)
+        if include_llm:
+            payload = await asyncio.to_thread(
+                build_financial_health_insights_payload, **build_kwargs
+            )
+        else:
+            payload = build_financial_health_insights_payload(**build_kwargs)
+        tab_info(
+            "dashboard",
+            "financial-health-insights done user=%s elapsed_ms=%.0f source=%s llm_status=%s score=%s",
+            mask_user_id(user_id),
+            (time.perf_counter() - started) * 1000,
+            payload.get("source"),
+            payload.get("llm_status"),
+            payload.get("score"),
+        )
+        return payload
+    except Exception as e:
+        from app.utils.tab_logging import mask_user_id, tab_error
+
+        tab_error(
+            "dashboard",
+            "financial-health-insights failed user=%s: %s",
+            mask_user_id(user_id),
+            e,
+        )
+        print(f"Error in financial-health-insights: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

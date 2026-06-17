@@ -18,6 +18,7 @@ import {
 import { useAppContext } from '../context/AppContext';
 import { loadAuthSession } from '../lib/authSession';
 import { activeUserId } from '../lib/activeUserId';
+import { PageHeader, PageShell } from '../components/PageShell';
 
 const API_BASE = 'http://localhost:8000/api/admin';
 
@@ -749,19 +750,14 @@ export const AdminPanel: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8 animate-fade-in">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-on-surface flex items-center gap-2">
-          <Server className="w-6 h-6 text-primary" /> Admin Panel
-        </h1>
-        <p className="text-on-surface-variant text-sm mt-1">
-          Model monitoring, training, and deployment management
-        </p>
-      </div>
+    <PageShell>
+      <PageHeader
+        title="Admin Panel"
+        description="Model monitoring, training, and deployment management."
+      />
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-surface-variant p-1 rounded-2xl w-fit">
+      <div className="flex gap-1 bg-soft-card p-1 rounded-2xl w-fit overflow-x-auto max-w-full">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
@@ -786,6 +782,6 @@ export const AdminPanel: React.FC = () => {
         {tab === 'training' && <TrainingSection />}
         {tab === 'deploy' && <DeploySection />}
       </div>
-    </div>
+    </PageShell>
   );
 };

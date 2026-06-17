@@ -38,13 +38,35 @@ interface BreakdownSlice {
 
 interface ExpenseBreakdownProps {
   analysisPeriod: AnalysisPeriod;
+  variant?: 'default' | 'bento';
+  breakdownData?: BreakdownSlice[];
 }
 
-export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ analysisPeriod }) => {
+const CATEGORY_ICONS: Record<string, string> = {
+  'Food & Drinks': 'restaurant',
+  Shopping: 'shopping_bag',
+  Housing: 'home',
+  Transportation: 'directions_car',
+  Vehicle: 'directions_car',
+  'Life & Entertainment': 'movie',
+  'Communication/PC': 'smartphone',
+  'Financial Expense': 'account_balance',
+  Investments: 'trending_up',
+  Others: 'category',
+  others: 'category',
+};
+
+export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({
+  analysisPeriod,
+  variant = 'default',
+  breakdownData,
+}) => {
   const { user } = useAppContext();
   const [loading, setLoading] = useState(false);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [drillDown, setDrillDown] = useState<string | null>(null);
+
+  const useServerBreakdown = variant === 'bento' && breakdownData != null && !drillDown;
 
   const fetchTransactions = async (startDate: string, endDate: string) => {
     setLoading(true);
@@ -65,6 +87,7 @@ export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ analysisPeri
   };
 
   useEffect(() => {
+    if (useServerBreakdown) return;
     const uid = activeUserId(user);
     if (!uid) return;
 
@@ -74,9 +97,13 @@ export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ analysisPeri
       return;
     }
     fetchTransactions(startDate, endDate);
-  }, [analysisPeriod, user]);
+  }, [analysisPeriod, user, useServerBreakdown]);
 
   const chartData = useMemo(() => {
+    if (useServerBreakdown && breakdownData) {
+      return breakdownData;
+    }
+
     const groups: Record<string, number> = {};
     
     transactions.forEach(t => {
@@ -89,15 +116,59 @@ export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ analysisPeri
     return Object.entries(groups)
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value);
-  }, [transactions, drillDown]);
+  }, [transactions, drillDown, useServerBreakdown, breakdownData]);
 
   const totalExpense = useMemo(() => chartData.reduce((sum, item) => sum + item.value, 0), [chartData]);
 
-  const onPieClick = (data: any) => {
-    if (!drillDown) {
+  const onPieClick = (data: { name?: string }) => {
+    if (!drillDown && data.name) {
       setDrillDown(data.name);
     }
   };
+
+  if (variant === 'bento') {
+    const topCategories = chartData.slice(0, 4);
+    return (
+      <div className="p-8 flex flex-col h-full">
+        <h3 className="font-label text-[12px] font-semibold uppercase tracking-widest text-lumio-muted mb-6 border-b border-lumio-line pb-4">
+          Category Breakdown
+        </h3>
+        {loading && !useServerBreakdown ? (
+          <div className="flex-1 flex items-center justify-center">
+            <Loader2 className="w-6 h-6 animate-spin text-lumio-muted" />
+          </div>
+        ) : topCategories.length === 0 ? (
+          <p className="text-sm text-lumio-muted">No expense data for this period.</p>
+        ) : (
+          <div className="flex flex-col gap-6">
+            {topCategories.map((cat, index) => {
+              const pct = totalExpense > 0 ? (cat.value / totalExpense) * 100 : 0;
+              const barColor = index === 0 ? 'bg-lumio-black' : index === 1 ? 'bg-emerald-solid' : 'bg-lumio-muted';
+              const icon = CATEGORY_ICONS[cat.name] || 'payments';
+              return (
+                <div key={cat.name} className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-2xl border border-white/60 bg-white/40 flex items-center justify-center shrink-0 shadow-sm">
+                    <span className="material-symbols-outlined text-lumio-black opacity-80 text-lg">
+                      {icon}
+                    </span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between mb-2 gap-2">
+                      <span className="font-medium text-sm truncate">{cat.name}</span>
+                      <span className="text-sm font-medium shrink-0">{formatCurrency(cat.value)}</span>
+                    </div>
+                    <div className="w-full bg-black/5 h-1.5 rounded-full overflow-hidden">
+                      <div className={`${barColor} h-full rounded-full`} style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="lg:col-span-4 bg-surface-container-lowest p-6 rounded-[24px] soft-shadow border border-outline-variant/30 flex flex-col h-full min-h-[550px]">

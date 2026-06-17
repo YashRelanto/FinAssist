@@ -1,15 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, User, Bot, Paperclip, Loader2 } from 'lucide-react';
-import { cn, formatCurrency } from '../lib/utils';
+import { cn, formatCurrency, APP_NAME, APP_ADVISOR_GREETING } from '../lib/utils';
 import { useAppContext } from '../context/AppContext';
 import { ChatChart } from '../components/ChatChart';
+import { PageHeader, PageShell } from '../components/PageShell';
 
 const initialMessages = [
   { 
     id: 1, 
     role: 'ai', 
     time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 
-    text: "Hello! I am your FinAssist AI Advisor. I have access to your transactions and our latest financial knowledge base. How can I help you today?", 
+    text: APP_ADVISOR_GREETING,
     type: 'text' 
   }
 ];
@@ -91,8 +92,13 @@ export const AIAssistant: React.FC = () => {
   };
 
   return (
-    <div className="h-[calc(100vh-140px)]">
-      <section className="h-full flex flex-col bg-surface-container-lowest border border-outline-variant/30 rounded-2xl shadow-sm overflow-hidden relative">
+    <PageShell>
+      <PageHeader
+        title={`${APP_NAME} Assistant`}
+        description="Ask questions about your finances with context from your live transaction data."
+      />
+      <div className="h-[calc(100vh-220px)]">
+      <section className="h-full flex flex-col bento-card !p-0 overflow-hidden relative">
         <div className="flex-1 overflow-y-auto p-10 space-y-10 scrollbar-hide pb-32">
           {messages.map((m) => (
              <div key={m.id} className={cn("flex gap-4 max-w-2xl", m.role === 'user' ? "ml-auto flex-row-reverse text-right" : "")}>
@@ -196,6 +202,7 @@ export const AIAssistant: React.FC = () => {
            </div>
         </div>
       </section>
-    </div>
+      </div>
+    </PageShell>
   );
 };

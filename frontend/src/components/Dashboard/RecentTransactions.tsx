@@ -28,6 +28,8 @@ interface Transaction {
 
 interface RecentTransactionsProps {
   transactions?: Transaction[];
+  variant?: 'default' | 'bento';
+  onAddTransaction?: () => void;
 }
 
 const CATEGORY_ICONS: Record<string, any> = {
@@ -42,26 +44,55 @@ const CATEGORY_ICONS: Record<string, any> = {
   'others': Plus,
 };
 
-export const RecentTransactions: React.FC<RecentTransactionsProps> = ({ transactions = [] }) => {
+export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
+  transactions = [],
+  variant = 'default',
+  onAddTransaction,
+}) => {
   const { setCurrentPage } = useAppContext();
+  const wrapperClass = variant === 'bento'
+    ? 'bento-card flex flex-col min-h-[320px]'
+    : 'lg:col-span-8 bg-surface-container-lowest p-6 rounded-[24px] soft-shadow border border-outline-variant/30 flex flex-col min-h-[400px]';
+
   return (
-    <div className="lg:col-span-8 bg-surface-container-lowest p-6 rounded-[24px] soft-shadow border border-outline-variant/30 flex flex-col min-h-[400px]">
+    <div className={wrapperClass}>
       <div className="flex justify-between items-center mb-6">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center text-primary">
-            <ExternalLink className="w-5 h-5" />
-          </div>
+          {variant !== 'bento' && (
+            <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center text-primary">
+              <ExternalLink className="w-5 h-5" />
+            </div>
+          )}
           <div>
-            <h4 className="text-xl font-bold text-on-surface">Recent Transactions</h4>
-            <p className="text-[10px] font-black text-outline uppercase tracking-widest mt-0.5">Your latest movements</p>
+            <h4 className={variant === 'bento' ? 'font-label text-[12px] font-semibold uppercase tracking-widest text-lumio-muted' : 'text-xl font-bold text-on-surface'}>
+              Recent Transactions
+            </h4>
+            {variant !== 'bento' && (
+              <p className="text-[10px] font-black text-outline uppercase tracking-widest mt-0.5">Your latest movements</p>
+            )}
           </div>
         </div>
-        <button 
-          onClick={() => setCurrentPage('transactions')}
-          className="px-4 py-2 bg-surface-container-high hover:bg-surface-container-highest text-primary text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border border-outline-variant/30"
-        >
-          View All
-        </button>
+        <div className="flex items-center gap-2">
+          {onAddTransaction && (
+            <button
+              type="button"
+              onClick={onAddTransaction}
+              className="w-9 h-9 rounded-full border border-lumio-line bg-white/60 flex items-center justify-center hover:bg-lumio-black hover:text-white transition-colors"
+              aria-label="Add transaction"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          )}
+          <button 
+            type="button"
+            onClick={() => setCurrentPage('transactions')}
+            className={variant === 'bento'
+              ? 'font-label text-[10px] font-bold uppercase tracking-widest border-b border-lumio-black hover:opacity-70'
+              : 'px-4 py-2 bg-surface-container-high hover:bg-surface-container-highest text-primary text-[10px] font-black uppercase tracking-widest rounded-xl transition-all border border-outline-variant/30'}
+          >
+            View All
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 space-y-3">

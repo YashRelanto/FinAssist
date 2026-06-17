@@ -213,7 +213,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
                       <AlertTriangle className="w-5 h-5 text-primary shrink-0 mt-0.5" />
                       <p className="text-[11px] font-bold text-on-surface-variant leading-relaxed">
                         <span className="text-primary font-black uppercase tracking-wider mr-1">Smart Engine:</span> 
-                        FinAssist automatically parses transactional columns, auto-categorizes merchant descriptions, and screens for anomalies dynamically.
+                        FinAssist AI automatically parses transactional columns, auto-categorizes merchant descriptions, and screens for anomalies dynamically.
                       </p>
                     </div>
                   </>
