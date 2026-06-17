@@ -2,7 +2,11 @@ import React, { useState } from 'react';
 import { Mail, Lock, ChevronRight, ShieldCheck, Zap } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { cn, APP_NAME } from '../lib/utils';
+import type { UserProfile } from '../types';
 import { saveAuthSession } from '../lib/authSession';
+import { apiFetch } from '../lib/api';
+import { parseApiError, readJsonResponse } from '../lib/apiErrors';
+import { getGoogleOAuthUrl } from '../lib/oauth';
 import { BrandMark } from './BrandMark';
 
 interface AuthDialogProps {
@@ -32,49 +36,56 @@ export const AuthDialog: React.FC<AuthDialogProps> = ({ open, onClose }) => {
     const body = isSignUp ? { full_name: name, email, password } : { email, password };
 
     try {
-      const response = await fetch(`http://localhost:8000${endpoint}`, {
+      const response = await apiFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok) {
-        if (data.detail === 'email_not_confirmed') {
+        const detail = parseApiError(data, 'Authentication failed');
+        if (detail === 'email_not_confirmed') {
           setVerificationEmail(email);
           setEmailVerificationSent(true);
           return;
         }
-        throw new Error(data.detail || 'Authentication failed');
+        throw new Error(detail);
       }
 
-      const emailConfirmed = data.email_confirmed ?? data.user?.email_confirmed;
+      const payload = data as Record<string, unknown>;
+      const userPayload = payload.user as Record<string, unknown> | undefined;
+      const emailConfirmed = payload.email_confirmed ?? userPayload?.email_confirmed;
       if (isSignUp && emailConfirmed === false) {
         setVerificationEmail(email);
         setEmailVerificationSent(true);
         return;
       }
 
-      const resolvedUserId = data.user_id || data.user?.user_id;
+      const resolvedUserId = (payload.user_id || userPayload?.user_id) as string;
       const loggedInUser = {
         id: resolvedUserId,
         isAuthenticated: true as const,
         userId: resolvedUserId,
-        name: data.full_name || data.user?.full_name || name || 'User',
-        email: data.email || data.user?.email || email,
-        role: (data.user?.role === 'admin' || data.role === 'admin' ? 'admin' : 'user') as 'admin' | 'user',
-        onboarded: data.onboarded ?? data.user?.onboarded ?? false,
-        income: data.income ?? data.user?.income ?? 0,
-        cityTier: data.city_tier || data.user?.city_tier || 'Metro',
-        fixedRent: data.fixed_rent ?? data.user?.fixed_rent ?? 0,
-        fixedEMI: data.fixed_emi ?? data.user?.fixed_emi ?? 0,
-        biggestCategory: data.biggest_category || data.user?.biggest_category || '',
-        primaryGoal: data.primary_goal || data.user?.primary_goal || '',
-        statementUploaded: data.statement_uploaded ?? data.user?.statement_uploaded ?? false,
+        name: (payload.full_name || userPayload?.full_name || name || 'User') as string,
+        email: (payload.email || userPayload?.email || email) as string,
+        role: (userPayload?.role === 'admin' || payload.role === 'admin' ? 'admin' : 'user') as 'admin' | 'user',
+        onboarded: (payload.onboarded ?? userPayload?.onboarded ?? false) as boolean,
+        income: Number(payload.income ?? userPayload?.income ?? 0),
+        cityTier: (payload.city_tier || userPayload?.city_tier || 'Metro') as UserProfile['cityTier'],
+        fixedRent: Number(payload.fixed_rent ?? userPayload?.fixed_rent ?? 0),
+        fixedEMI: Number(payload.fixed_emi ?? userPayload?.fixed_emi ?? 0),
+        biggestCategory: (payload.biggest_category || userPayload?.biggest_category || '') as string,
+        primaryGoal: (payload.primary_goal || userPayload?.primary_goal || '') as string,
+        statementUploaded: Boolean(payload.statement_uploaded ?? userPayload?.statement_uploaded ?? false),
       };
 
-      saveAuthSession(data.access_token || '', loggedInUser, data.refresh_token);
-      updateUser(loggedInUser);
+      saveAuthSession(
+        (payload.access_token as string) || '',
+        loggedInUser,
+        payload.refresh_token as string | undefined,
+      );
+      updateUser(loggedInUser, { syncNow: true });
       onClose();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Could not connect to authentication server.');
@@ -139,7 +150,12 @@ export const AuthDialog: React.FC<AuthDialogProps> = ({ open, onClose }) => {
             <button
               type="button"
               onClick={() => {
-                window.location.href = `https://wequiafwuvugkzgqzety.supabase.co/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(window.location.origin)}`;
+                const url = getGoogleOAuthUrl();
+                if (!url) {
+                  setError('Google sign-in is not configured. Set VITE_SUPABASE_URL in your frontend environment.');
+                  return;
+                }
+                window.location.href = url;
               }}
               className="w-full flex items-center justify-center gap-3 py-3 bg-white border border-lumio-line rounded-xl font-semibold text-sm mb-4"
             >

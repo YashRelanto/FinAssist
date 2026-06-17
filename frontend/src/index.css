@@ -51,6 +51,9 @@
   --color-error: #ba1a1a;
   --color-error-container: #ffdad6;
 
+  --color-success: #10b981;
+  --color-success-container: rgba(16, 185, 129, 0.1);
+
   --radius-xl: 1.5rem;
   --radius-lg: 1rem;
 }

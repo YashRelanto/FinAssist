@@ -192,7 +192,7 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts,
               className={cn(
                 "flex-1 py-2 rounded-lg flex items-center justify-center gap-2 transition-all",
                 formData.type === 'income' 
-                  ? "bg-white text-secondary shadow-sm" 
+                  ? "bg-white text-success shadow-sm" 
                   : "text-outline hover:text-on-surface"
               )}
             >
@@ -377,7 +377,7 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts,
                 <div className="text-right">
                   <span className={cn(
                     "text-sm font-black",
-                    payment.type === 'income' ? "text-secondary" : "text-error"
+                    payment.type === 'income' ? "text-success" : "text-error"
                   )}>
                     {payment.type === 'income' ? '+' : '-'}{formatCurrency(payment.amount)}
                   </span>

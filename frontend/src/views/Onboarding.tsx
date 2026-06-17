@@ -91,8 +91,12 @@ export const Onboarding: React.FC = () => {
 
 
   const handleNext = () => {
-    if (step < totalSteps) setStep(step + 1);
-    else updateUser({ onboarded: true });
+    if (step < totalSteps) {
+      updateUser({}, { syncNow: true });
+      setStep(step + 1);
+    } else {
+      updateUser({ onboarded: true }, { syncNow: true });
+    }
   };
 
   const handleBack = () => {
@@ -361,7 +365,7 @@ export const Onboarding: React.FC = () => {
 
           <div className="p-10 flex-1">
             <div className="mb-12 flex justify-between items-center text-[10px] font-bold text-outline uppercase tracking-[0.2em]">
-              <span>Step {step} of 5</span>
+              <span>Step {step} of {totalSteps}</span>
               <span className="text-primary tracking-normal font-black">FinAssist AI Setup</span>
             </div>
 

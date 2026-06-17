@@ -312,7 +312,6 @@ export const Forecasting: React.FC = () => {
       <FinancialInsightsPanel
         executiveSummary={insights?.executive_summary}
         recommendations={insights?.recommendations}
-        categoryAnalysis={insights?.category_analysis}
         loading={loading}
         aiLoading={insightsLlmLoading}
       />
@@ -320,7 +319,9 @@ export const Forecasting: React.FC = () => {
       <CategoryTrendPanel
         trends={analytics?.category_trends || []}
         insights={categoryInsightMap}
+        categoryAnalysis={insights?.category_analysis}
         loading={loading}
+        aiLoading={insightsLlmLoading}
       />
 
       <CategoryShareChart

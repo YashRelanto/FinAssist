@@ -331,8 +331,8 @@ export const Transactions: React.FC = () => {
                       <p className="text-[10px] text-outline font-bold uppercase tracking-widest mt-1">{t.date}</p>
                     </div>
                     <span className={cn(
-                      "text-lg font-black",
-                      isAnomaly ? "text-error" : "text-on-surface"
+                      'text-lg font-black',
+                      isAnomaly ? 'text-error' : t.type === 'income' ? 'text-success' : 'text-error',
                     )}>
                       {formatCurrency(t.amount)}
                     </span>
@@ -387,7 +387,10 @@ export const Transactions: React.FC = () => {
                     {row.subCategory && <span className="block text-[8px] text-outline mt-1 uppercase font-bold">{row.subCategory}</span>}
                   </td>
                   <td className="px-6 py-4 text-sm text-outline font-medium">{row.account}</td>
-                  <td className={`px-6 py-4 text-sm text-right font-bold ${row.type === 'income' ? 'text-secondary' : 'text-error'}`}>
+                  <td className={cn(
+                    'px-6 py-4 text-sm text-right font-bold',
+                    row.type === 'income' ? 'text-success' : 'text-error',
+                  )}>
                     {row.type === 'income' ? `+${formatCurrency(row.amount)}` : `-${formatCurrency(row.amount)}`}
                   </td>
                   <td className="px-6 py-4 text-sm text-right font-medium text-on-surface-variant/80">

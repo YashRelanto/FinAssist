@@ -63,7 +63,7 @@ async def api_login(req: LoginRequest):
                 "full_name": "Demo User",
                 "email": req.email,
                 "role": "user",
-                "onboarded": True,
+                "onboarded": False,
                 "income": 45000,
                 "city_tier": "Metro",
                 "fixed_rent": 1500,
@@ -198,20 +198,23 @@ class OAuthLoginRequest(BaseModel):
 async def api_oauth_login(req: OAuthLoginRequest):
     db = supabase_db or supabase
     if not db:
-        user_profile = ensure_user_with_profile(req.user_id, req.email, req.full_name) if supabase_db else {
-            "user_id": req.user_id,
-            "full_name": req.full_name,
-            "email": req.email,
-            "role": "user",
-            "onboarded": False,
-            "income": 0,
-            "city_tier": "Metro",
-            "fixed_rent": 0,
-            "fixed_emi": 0,
-            "biggest_category": "",
-            "primary_goal": "",
+        return {
+            "success": True,
+            "message": "OAuth login successful",
+            "user": {
+                "user_id": req.user_id,
+                "full_name": req.full_name,
+                "email": req.email,
+                "role": "user",
+                "onboarded": False,
+                "income": 0,
+                "city_tier": "Metro",
+                "fixed_rent": 0,
+                "fixed_emi": 0,
+                "biggest_category": "",
+                "primary_goal": "",
+            },
         }
-        return {"success": True, "message": "OAuth login successful", "user": user_profile}
 
     try:
         check = db.table("users").select("*").eq("email", req.email).execute()

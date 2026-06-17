@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
 import { User, Mail, ArrowLeft, Loader2, CheckCircle2, Shield, DollarSign, Building, Home, CreditCard, Compass, Sparkles } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
+import { apiFetch } from '../lib/api';
+import { parseApiError, readJsonResponse } from '../lib/apiErrors';
 import { PageHeader, PageShell, lumio } from '../components/PageShell';
+import type { UserProfile } from '../types';
 
 export const EditProfile: React.FC = () => {
   const { user, updateUser, setCurrentPage } = useAppContext();
@@ -35,12 +38,9 @@ export const EditProfile: React.FC = () => {
 
     try {
       if (user.userId) {
-        // Sync with Backend database
-        const res = await fetch(`http://localhost:8000/api/users/${user.userId}`, {
+        const res = await apiFetch(`/api/users/${user.userId}`, {
           method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             full_name: formData.name,
             email: formData.email,
@@ -53,18 +53,17 @@ export const EditProfile: React.FC = () => {
           }),
         });
 
-        const data = await res.json();
-        if (!res.ok || !data.success) {
-          throw new Error(data.detail || 'Failed to update profile on server.');
+        const data = await readJsonResponse(res);
+        if (!res.ok) {
+          throw new Error(parseApiError(data, 'Failed to update profile on server.'));
         }
       }
 
-      // Sync React App State Context
       updateUser({
         name: formData.name,
         email: formData.email,
         income: Number(formData.income),
-        cityTier: formData.cityTier as any,
+        cityTier: formData.cityTier as UserProfile['cityTier'],
         fixedRent: Number(formData.fixedRent),
         fixedEMI: Number(formData.fixedEMI),
         biggestCategory: formData.biggestCategory,

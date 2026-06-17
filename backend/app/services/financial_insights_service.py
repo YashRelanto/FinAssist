@@ -39,6 +39,63 @@ def _trend_label(consecutive_growth: int, mom: float | None) -> str:
     return "stable"
 
 
+def _monthly_trajectory_text(evolution: list[dict[str, Any]]) -> str:
+    active = [m for m in evolution if float(m.get("amount") or 0) > 0]
+    if len(active) < 2:
+        if len(active) == 1:
+            return (
+                f"Spend was recorded in {active[0]['label']} only "
+                f"(₹{float(active[0]['amount']):,.0f})."
+            )
+        return "No monthly spend recorded yet for this category."
+    first, last = active[0], active[-1]
+    delta = float(last["amount"]) - float(first["amount"])
+    if delta > 0:
+        direction = "increased"
+    elif delta < 0:
+        direction = "decreased"
+    else:
+        direction = "held steady"
+    return (
+        f"Monthly spend {direction} from ₹{float(first['amount']):,.0f} in {first['label']} "
+        f"to ₹{float(last['amount']):,.0f} in {last['label']}."
+    )
+
+
+def _category_trend_insight_text(t: dict[str, Any]) -> str:
+    cat = t["category"]
+    total = float(t.get("total_inr") or 0)
+    label = t["trend_label"]
+    growth = int(t.get("consecutive_growth_months") or 0)
+    mom = t.get("mom_change_pct")
+    trajectory = _monthly_trajectory_text(t.get("monthly_evolution") or [])
+
+    parts = [f"{cat} totals ₹{total:,.0f} in the selected period.", trajectory]
+    if label == "rising_streak":
+        parts.append(
+            f"Spending has climbed for {growth} consecutive months — a sustained rise worth monitoring."
+        )
+    elif label == "rising" and mom is not None:
+        parts.append(f"The latest month is up {mom}% versus the prior month.")
+    elif label == "falling" and mom is not None:
+        parts.append(f"The latest month is down {abs(mom)}% versus the prior month.")
+    else:
+        parts.append("Spending is relatively stable month to month.")
+    return " ".join(p for p in parts if p)
+
+
+def _category_suggestion_text(t: dict[str, Any]) -> str:
+    cat = t["category"]
+    label = t["trend_label"]
+    if label == "rising_streak":
+        return f"Set a weekly cap for {cat} and review which merchants are driving the streak."
+    if label == "rising":
+        return f"Compare {cat} merchants and pause discretionary purchases until spend normalizes."
+    if label == "falling":
+        return f"Keep {cat} on track — redirect the savings toward your primary financial goal."
+    return f"Track {cat} weekly against your budget to catch shifts early."
+
+
 def build_precomputed_insight_facts(
     analytics: dict[str, Any],
     *,
@@ -90,21 +147,12 @@ def build_precomputed_insight_facts(
 
     category_analysis_facts: list[dict[str, Any]] = []
     for t in category_facts[:5]:
-        mom = t.get("mom_change_pct")
-        direction = t.get("mom_direction")
-        if mom is not None and direction:
-            analysis = (
-                f"Month-over-month change is {abs(mom)}% {direction} "
-                f"for {t['category']}."
-            )
-        else:
-            analysis = f"Not enough history for month-over-month comparison for {t['category']}."
         category_analysis_facts.append(
             {
                 "category": t["category"],
                 "headline": f"{t['category']} spending trend",
-                "analysis": analysis,
-                "suggestion": f"Track {t['category']} weekly against your budget.",
+                "analysis": _category_trend_insight_text(t),
+                "suggestion": _category_suggestion_text(t),
                 "trend_label": t["trend_label"],
                 "total_inr": t["total_inr"],
             }
@@ -226,18 +274,8 @@ def _narrate_from_facts(facts: dict[str, Any]) -> dict[str, Any]:
 
     category_trends_out: list[dict[str, str]] = []
     for t in facts["category_trends"]:
-        label = t["trend_label"]
-        growth = t["consecutive_growth_months"]
-        mom = t["mom_change_pct"]
         cat = t["category"]
-        if label == "rising_streak":
-            insight = f"{cat} spending has grown consistently for {growth} months."
-        elif label == "rising":
-            insight = f"{cat} rose {mom}% month-over-month."
-        elif label == "falling":
-            insight = f"{cat} fell {abs(mom)}% month-over-month."
-        else:
-            insight = f"{cat} spending is relatively stable this period."
+        insight = _category_trend_insight_text(t)
         category_trends_out.append({"category": cat, "insight": insight})
 
     fastest = facts["merchants"].get("fastest_growing")

@@ -20,7 +20,7 @@ import {
 
 interface AppContextType {
   user: UserProfile;
-  updateUser: (u: Partial<UserProfile>) => void;
+  updateUser: (u: Partial<UserProfile>, options?: { syncNow?: boolean }) => void;
   
   transactions: Transaction[];
   accounts: any[];
@@ -88,6 +88,8 @@ interface AppContextType {
   setCurrentPage: (page: string) => void;
   currentPage: string;
   authReady: boolean;
+  authError: string | null;
+  clearAuthError: () => void;
   chatMessages: any[];
   setChatMessages: React.Dispatch<React.SetStateAction<any[]>>;
 }
@@ -235,6 +237,52 @@ const initialCategories: Category[] = [
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile>(initialUser);
   const [authReady, setAuthReady] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const profileSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearAuthError = useCallback(() => setAuthError(null), []);
+
+  const syncProfileToServer = useCallback((profile: UserProfile) => {
+    const userId = profile.userId || profile.id;
+    if (!profile.isAuthenticated || !userId) return;
+
+    apiFetch(`/api/users/${userId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        full_name: profile.name,
+        email: profile.email,
+        onboarded: profile.onboarded,
+        income: profile.income,
+        city_tier: profile.cityTier,
+        fixed_rent: profile.fixedRent,
+        fixed_emi: profile.fixedEMI,
+        biggest_category: profile.biggestCategory,
+        primary_goal: profile.primaryGoal,
+      }),
+    }).catch((err) => console.error('Failed to sync profile changes:', err));
+  }, []);
+
+  const updateUser = useCallback((u: Partial<UserProfile>, options?: { syncNow?: boolean }) => {
+    setUser((prev) => {
+      const newUser = { ...prev, ...u };
+
+      if (newUser.isAuthenticated && (newUser.userId || newUser.id)) {
+        updateStoredUser(newUser);
+      }
+
+      if (newUser.isAuthenticated && newUser.userId) {
+        if (profileSyncTimerRef.current) clearTimeout(profileSyncTimerRef.current);
+        if (options?.syncNow) {
+          syncProfileToServer(newUser);
+        } else {
+          profileSyncTimerRef.current = setTimeout(() => syncProfileToServer(newUser), 800);
+        }
+      }
+
+      return newUser;
+    });
+  }, [syncProfileToServer]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [dbCategories, setDbCategories] = useState<string[]>([]);
@@ -262,36 +310,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [reports, setReports] = useState<Report[]>([
     { id: '1', title: 'Monthly Summary', date: 'Sept 2023', size: '2.4 MB', type: 'PDF' },
   ]);
-  const updateUser = (u: Partial<UserProfile>) => {
-    setUser(prev => {
-      const newUser = { ...prev, ...u };
-      
-      if (newUser.isAuthenticated && (newUser.userId || newUser.id)) {
-        updateStoredUser(newUser);
-      }
-
-      // If user is logged in, sync changes to the database
-      if (newUser.isAuthenticated && newUser.userId) {
-        fetch(`http://localhost:8000/api/users/${newUser.userId}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            full_name: newUser.name,
-            email: newUser.email,
-            onboarded: newUser.onboarded,
-            income: newUser.income,
-            city_tier: newUser.cityTier,
-            fixed_rent: newUser.fixedRent,
-            fixed_emi: newUser.fixedEMI,
-            biggest_category: newUser.biggestCategory,
-            primary_goal: newUser.primaryGoal
-          })
-        }).catch(err => console.error("Failed to sync profile changes:", err));
-      }
-      
-      return newUser;
-    });
-  };
 
   const uid = useMemo(() => activeUserId(user), [user]);
   const isAuthed = !!(authReady && user.isAuthenticated && uid);
@@ -352,71 +370,91 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Check for Supabase OAuth redirect parameters in URL hash
   useEffect(() => {
-    const handleHashAuth = () => {
+    const handleHashAuth = async () => {
       const hash = window.location.hash;
-      if (hash && hash.includes("access_token=")) {
-        const params = new URLSearchParams(hash.substring(1)); // Remove the leading '#'
-        const accessToken = params.get("access_token");
-        if (accessToken) {
-          try {
-            const base64Url = accessToken.split('.')[1];
-            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-            const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
-                return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-            }).join(''));
-            const decoded = JSON.parse(jsonPayload);
-            
-            if (decoded && decoded.sub && decoded.email) {
-              const user_id = decoded.sub;
-              const email = decoded.email;
-              const full_name = decoded.user_metadata?.full_name || decoded.email.split('@')[0];
-              
-              fetch('http://localhost:8000/api/oauth-login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_id, email, full_name })
-              })
-              .then(res => res.json())
-              .then(data => {
-                if (data.success) {
-                  // Clear the hash from the URL so it looks clean
-                  window.history.replaceState(null, "", window.location.pathname);
+      if (!hash) return;
 
-                  const restoredUser: UserProfile = {
-                    id: user_id,
-                    isAuthenticated: true,
-                    userId: user_id,
-                    name: full_name,
-                    email: email,
-                    onboarded: data.user.onboarded || false,
-                    income: data.user.income || 0,
-                    cityTier: data.user.city_tier || 'Metro',
-                    fixedRent: data.user.fixed_rent || 0,
-                    fixedEMI: data.user.fixed_emi || 0,
-                    biggestCategory: data.user.biggest_category || '',
-                    primaryGoal: data.user.primary_goal || '',
-                    statementUploaded: false,
-                    role: data.user.role === 'admin' ? 'admin' : 'user',
-                  };
+      const params = new URLSearchParams(hash.substring(1));
+      const oauthError = params.get('error_description') || params.get('error');
+      if (oauthError) {
+        window.history.replaceState(null, '', window.location.pathname);
+        setAuthError(oauthError);
+        return;
+      }
 
-                  saveAuthSession(accessToken, restoredUser);
-                  setUser(restoredUser);
-                }
-              })
-              .catch(err => {
-                console.error("Backend OAuth login failed:", err);
-              });
-            }
-          } catch (e) {
-            console.error("Failed to parse JWT from hash:", e);
-          }
+      if (!hash.includes('access_token=')) return;
+
+      const accessToken = params.get('access_token');
+      const refreshToken = params.get('refresh_token');
+      if (!accessToken) return;
+
+      try {
+        const base64Url = accessToken.split('.')[1];
+        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+        const jsonPayload = decodeURIComponent(
+          atob(base64)
+            .split('')
+            .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+            .join('')
+        );
+        const decoded = JSON.parse(jsonPayload);
+
+        if (!decoded?.sub || !decoded?.email) {
+          setAuthError('OAuth sign-in did not return a valid user profile.');
+          window.history.replaceState(null, '', window.location.pathname);
+          return;
         }
+
+        const user_id = decoded.sub as string;
+        const email = decoded.email as string;
+        const full_name =
+          (decoded.user_metadata?.full_name as string | undefined) ||
+          email.split('@')[0];
+
+        const res = await apiFetch('/api/oauth-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id, email, full_name }),
+        });
+        const data = await res.json();
+
+        window.history.replaceState(null, '', window.location.pathname);
+
+        if (!res.ok || !data.success) {
+          setAuthError(data.detail || data.message || 'OAuth sign-in failed');
+          return;
+        }
+
+        const restoredUser: UserProfile = {
+          id: user_id,
+          isAuthenticated: true,
+          userId: user_id,
+          name: full_name,
+          email,
+          onboarded: data.user.onboarded || false,
+          income: data.user.income || 0,
+          cityTier: data.user.city_tier || 'Metro',
+          fixedRent: data.user.fixed_rent || 0,
+          fixedEMI: data.user.fixed_emi || 0,
+          biggestCategory: data.user.biggest_category || '',
+          primaryGoal: data.user.primary_goal || '',
+          statementUploaded: false,
+          role: data.user.role === 'admin' ? 'admin' : 'user',
+        };
+
+        saveAuthSession(accessToken, restoredUser, refreshToken || undefined);
+        setUser(restoredUser);
+        setAuthError(null);
+      } catch (e) {
+        console.error('Failed to complete OAuth sign-in:', e);
+        window.history.replaceState(null, '', window.location.pathname);
+        setAuthError('Failed to complete Google sign-in. Please try again.');
       }
     };
 
     handleHashAuth();
-    window.addEventListener("hashchange", handleHashAuth);
-    return () => window.removeEventListener("hashchange", handleHashAuth);
+    window.addEventListener('hashchange', handleHashAuth);
+    return () => window.removeEventListener('hashchange', handleHashAuth);
   }, []);
 
   const loadTransactions = useCallback((): Promise<void> => {
@@ -1163,6 +1201,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const signOut = () => {
     clearAuthSession();
+    setAuthError(null);
     setUser(initialUser);
     setTransactions([]);
     setGoals([]);
@@ -1253,6 +1292,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       signOut,
       setCurrentPage, currentPage,
       authReady,
+      authError,
+      clearAuthError,
       chatMessages, setChatMessages,
     }}>
 

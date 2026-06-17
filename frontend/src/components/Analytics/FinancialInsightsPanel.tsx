@@ -1,18 +1,8 @@
-import React, { useState } from 'react';
-import { ChevronDown } from 'lucide-react';
-import { cn } from '../../lib/utils';
-
-interface CategoryAnalysisCard {
-  category: string;
-  headline: string;
-  analysis: string;
-  suggestion: string;
-}
+import React from 'react';
 
 interface FinancialInsightsPanelProps {
   executiveSummary?: string;
   recommendations?: string[];
-  categoryAnalysis?: CategoryAnalysisCard[];
   loading?: boolean;
   aiLoading?: boolean;
 }
@@ -20,19 +10,16 @@ interface FinancialInsightsPanelProps {
 export const FinancialInsightsPanel: React.FC<FinancialInsightsPanelProps> = ({
   executiveSummary,
   recommendations = [],
-  categoryAnalysis = [],
   loading,
   aiLoading,
 }) => {
-  const [openCat, setOpenCat] = useState<string | null>(null);
-
   if (loading) {
     return (
       <div className="bg-surface-container-lowest p-8 rounded-[32px] border border-outline-variant/30 animate-pulse h-40" />
     );
   }
 
-  if (!executiveSummary && !recommendations.length && !categoryAnalysis.length && !aiLoading) {
+  if (!executiveSummary && !recommendations.length && !aiLoading) {
     return null;
   }
 
@@ -62,37 +49,6 @@ export const FinancialInsightsPanel: React.FC<FinancialInsightsPanelProps> = ({
               </li>
             ))}
           </ul>
-        </div>
-      )}
-
-      {categoryAnalysis.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-[10px] font-black text-outline uppercase tracking-widest mb-3">
-            Category Deep Dive
-          </p>
-          {categoryAnalysis.map((c) => {
-            const isOpen = openCat === c.category;
-            return (
-              <div key={c.category} className="border border-outline-variant/20 rounded-xl overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setOpenCat(isOpen ? null : c.category)}
-                  className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-surface-container-low/50"
-                >
-                  <span className="text-xs font-black">{c.headline}</span>
-                  <ChevronDown
-                    className={cn('w-4 h-4 text-outline transition-transform', isOpen && 'rotate-180')}
-                  />
-                </button>
-                {isOpen && (
-                  <div className="px-4 pb-3 space-y-2 text-xs text-on-surface/80">
-                    <p>{c.analysis}</p>
-                    <p className="text-primary font-medium">{c.suggestion}</p>
-                  </div>
-                )}
-              </div>
-            );
-          })}
         </div>
       )}
     </div>

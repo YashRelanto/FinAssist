@@ -63,7 +63,7 @@ export const TopNav: React.FC<TopNavProps> = ({ variant = 'app', onAuthClick }) 
           <button
             type="button"
             onClick={goHome}
-            className="shrink-0 ml-1 justify-self-start hover:opacity-90 transition-opacity"
+            className="shrink-0 ml-3 md:ml-4 justify-self-start hover:opacity-90 transition-opacity"
             aria-label="Home"
           >
             <BrandMark variant="dark" showName showIcon={false} />

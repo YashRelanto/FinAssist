@@ -45,7 +45,7 @@ const USE_CASES = [
 ];
 
 export const Landing: React.FC = () => {
-  const { user, setCurrentPage } = useAppContext();
+  const { user, setCurrentPage, authError, clearAuthError } = useAppContext();
   const [authOpen, setAuthOpen] = useState(false);
   const isAuthenticated = user.isAuthenticated;
 
@@ -53,9 +53,28 @@ export const Landing: React.FC = () => {
     <div className="min-h-screen text-lumio-text selection:bg-lumio-black selection:text-white">
       <TopNav
         variant={isAuthenticated ? 'app' : 'landing'}
-        onAuthClick={() => setAuthOpen(true)}
+        onAuthClick={() => {
+          clearAuthError();
+          setAuthOpen(true);
+        }}
       />
-      {!isAuthenticated && <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />}
+      {!isAuthenticated && (
+        <>
+          {authError && (
+            <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[90] max-w-md w-[calc(100%-2rem)] px-4 py-3 bg-error-container/90 border border-error/30 rounded-xl text-error text-sm font-semibold shadow-lg">
+              {authError}
+              <button
+                type="button"
+                onClick={clearAuthError}
+                className="ml-3 underline text-xs"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+          <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />
+        </>
+      )}
 
       <main>
         <section className="pt-48 px-margin max-w-[1728px] mx-auto flex flex-col items-center text-center pb-32">

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Lightbulb } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -38,10 +38,77 @@ interface CategoryTrend {
   mom_change_pct?: number | null;
 }
 
+interface CategoryAnalysisCard {
+  category: string;
+  headline: string;
+  analysis: string;
+  suggestion: string;
+}
+
 interface CategoryTrendPanelProps {
   trends: CategoryTrend[];
   insights?: Record<string, string>;
+  categoryAnalysis?: CategoryAnalysisCard[];
   loading?: boolean;
+  aiLoading?: boolean;
+}
+
+function buildTrendExplanation(
+  trend: CategoryTrend,
+  insight?: string,
+  analysis?: CategoryAnalysisCard,
+): string {
+  const parts: string[] = [];
+  const activeMonths = trend.monthly_evolution.filter((m) => m.amount > 0);
+  const growth = trend.consecutive_growth_months ?? 0;
+  const mom = trend.mom_change_pct;
+
+  parts.push(
+    `${trend.category} accounts for ${formatCurrency(trend.total)} in the selected period.`,
+  );
+
+  if (activeMonths.length >= 2) {
+    const first = activeMonths[0];
+    const last = activeMonths[activeMonths.length - 1];
+    const delta = last.amount - first.amount;
+    const direction = delta > 0 ? 'increased' : delta < 0 ? 'decreased' : 'held steady';
+    parts.push(
+      `Monthly spend ${direction} from ${formatCurrency(first.amount)} in ${first.label} to ${formatCurrency(last.amount)} in ${last.label}.`,
+    );
+  } else if (activeMonths.length === 1) {
+    parts.push(
+      `Spend was recorded in ${activeMonths[0].label} only (${formatCurrency(activeMonths[0].amount)}); add more history for a clearer trend.`,
+    );
+  }
+
+  if (growth >= 2) {
+    parts.push(
+      `Spending has risen for ${growth} consecutive months — a sustained upward pattern that may compound if left unchecked.`,
+    );
+  } else if (mom != null && mom > 10) {
+    parts.push(
+      `The latest month is up ${mom}% versus the prior month, indicating accelerating spend in this category.`,
+    );
+  } else if (mom != null && mom < -10) {
+    parts.push(
+      `The latest month is down ${Math.abs(mom)}% versus the prior month, showing a meaningful pullback.`,
+    );
+  } else if (mom != null) {
+    parts.push(
+      `Month-over-month change is modest (${mom > 0 ? '+' : ''}${mom}%), suggesting relatively stable spending behavior.`,
+    );
+  } else {
+    parts.push('Not enough monthly history yet to compute a month-over-month comparison.');
+  }
+
+  if (insight && !analysis?.analysis?.includes(insight)) {
+    parts.push(insight);
+  }
+  if (analysis?.analysis) {
+    parts.push(analysis.analysis);
+  }
+
+  return parts.join(' ');
 }
 
 const CategorySparkline: React.FC<{
@@ -119,10 +186,20 @@ const CategoryTrendChart: React.FC<{
 export const CategoryTrendPanel: React.FC<CategoryTrendPanelProps> = ({
   trends,
   insights = {},
+  categoryAnalysis = [],
   loading,
+  aiLoading,
 }) => {
   const [open, setOpen] = useState<string | null>(trends[0]?.category ?? null);
   const top = useMemo(() => trends.slice(0, 5), [trends]);
+
+  const analysisByCategory = useMemo(() => {
+    const map: Record<string, CategoryAnalysisCard> = {};
+    for (const row of categoryAnalysis) {
+      if (row.category) map[row.category] = row;
+    }
+    return map;
+  }, [categoryAnalysis]);
 
   if (loading) {
     return (
@@ -133,7 +210,7 @@ export const CategoryTrendPanel: React.FC<CategoryTrendPanelProps> = ({
   if (!top.length) {
     return (
       <div className="bg-surface-container-lowest p-8 rounded-[32px] border border-outline-variant/30">
-        <h3 className="text-lg font-black mb-2 tracking-tight">Category Trend Analysis</h3>
+        <h3 className="text-lg font-black mb-2 tracking-tight">Category Deep Dive</h3>
         <p className="text-sm text-outline">No category spending in this period.</p>
       </div>
     );
@@ -141,7 +218,15 @@ export const CategoryTrendPanel: React.FC<CategoryTrendPanelProps> = ({
 
   return (
     <div className="bg-surface-container-lowest p-8 rounded-[32px] border border-outline-variant/30">
-      <h3 className="text-lg font-black mb-6 tracking-tight">Category Trend Analysis</h3>
+      <div className="flex items-center gap-2 mb-2">
+        <h3 className="text-lg font-black tracking-tight">Category Deep Dive</h3>
+        {aiLoading && (
+          <span className="inline-block w-3.5 h-3.5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+        )}
+      </div>
+      <p className="text-xs text-outline font-medium mb-6 leading-relaxed">
+        Top categories by spend with monthly trajectory, trend context, and actionable notes.
+      </p>
       <div className="space-y-3">
         {top.map((t, index) => {
           const isOpen = open === t.category;
@@ -151,10 +236,14 @@ export const CategoryTrendPanel: React.FC<CategoryTrendPanelProps> = ({
             label: m.label,
             amount: m.amount,
           }));
-          const evolution = t.monthly_evolution
-            .filter((m) => m.amount > 0)
-            .map((m) => `${m.label} ${formatCurrency(m.amount)}`)
-            .join(' · ');
+          const analysis = analysisByCategory[t.category];
+          const insight = insights[t.category];
+          const trendExplanation = buildTrendExplanation(t, insight, analysis);
+          const suggestion =
+            analysis?.suggestion ||
+            (t.consecutive_growth_months && t.consecutive_growth_months >= 2
+              ? `Set a weekly cap for ${t.category} and review merchants driving the streak.`
+              : `Track ${t.category} weekly against your budget.`);
 
           return (
             <div key={t.category} className="border border-outline-variant/20 rounded-2xl overflow-hidden">
@@ -164,7 +253,9 @@ export const CategoryTrendPanel: React.FC<CategoryTrendPanelProps> = ({
                 className="w-full flex items-center justify-between gap-3 px-5 py-4 text-left hover:bg-surface-container-low/50 transition-colors"
               >
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-black text-on-surface truncate">{t.category}</p>
+                  <p className="text-sm font-black text-on-surface truncate">
+                    {analysis?.headline || t.category}
+                  </p>
                   <p className="text-xs text-outline mt-0.5">{formatCurrency(t.total)} total</p>
                 </div>
                 <CategorySparkline data={chartData} color={color} />
@@ -173,11 +264,16 @@ export const CategoryTrendPanel: React.FC<CategoryTrendPanelProps> = ({
                     <span
                       className={cn(
                         'text-xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap',
-                        t.mom_change_pct > 0 ? 'bg-error/10 text-error' : 'bg-secondary/10 text-secondary',
+                        t.mom_change_pct > 0 ? 'bg-error/10 text-error' : 'bg-success/10 text-success',
                       )}
                     >
                       {t.mom_change_pct > 0 ? '+' : ''}
                       {t.mom_change_pct}% MoM
+                    </span>
+                  )}
+                  {(t.consecutive_growth_months ?? 0) >= 2 && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-error/10 text-error whitespace-nowrap">
+                      {t.consecutive_growth_months}mo streak
                     </span>
                   )}
                   <ChevronDown
@@ -187,16 +283,20 @@ export const CategoryTrendPanel: React.FC<CategoryTrendPanelProps> = ({
               </button>
 
               {isOpen && (
-                <div className="px-5 pb-4 space-y-3 border-t border-outline-variant/10 pt-3">
+                <div className="px-5 pb-4 space-y-4 border-t border-outline-variant/10 pt-4">
                   <CategoryTrendChart data={chartData} color={color} />
-                  {evolution && (
-                    <p className="text-xs font-medium text-on-surface/80 leading-relaxed">{evolution}</p>
-                  )}
-                  {insights[t.category] && (
-                    <p className="text-xs text-primary font-medium bg-primary/5 rounded-xl px-3 py-2">
-                      {insights[t.category]}
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-black text-outline uppercase tracking-widest">
+                      Trend observed
                     </p>
-                  )}
+                    <p className="text-xs font-medium text-on-surface/85 leading-relaxed">
+                      {trendExplanation}
+                    </p>
+                  </div>
+                  <div className="flex gap-2.5 items-start bg-primary/5 rounded-xl px-3 py-2.5">
+                    <Lightbulb className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                    <p className="text-xs text-primary font-medium leading-relaxed">{suggestion}</p>
+                  </div>
                 </div>
               )}
             </div>
