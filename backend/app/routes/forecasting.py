@@ -1,7 +1,8 @@
 from datetime import date, timedelta
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.core.auth import get_current_user
 from app.services.prophet.inference import generate_forecast, get_model_status, reload_models
 from app.utils.analysis_period import DEFAULT_PERIOD, normalize_period
 from app.utils.supabase_client import supabase
@@ -11,12 +12,13 @@ router = APIRouter(prefix="/api")
 
 @router.get("/forecast")
 async def get_forecast(
-    user_id: str,
     account_id: str | None = None,
     category_id: str | None = None,
     merchant: str | None = None,
     period: str = Query(default=DEFAULT_PERIOD, description="1m, 3m, 6m, 1y, or all"),
+    current_user: dict = Depends(get_current_user),
 ):
+    user_id = current_user["user_id"]
     try:
         period_key = normalize_period(period)
         # Prophet training + comparisons need deep history; UI metrics use calendar months.

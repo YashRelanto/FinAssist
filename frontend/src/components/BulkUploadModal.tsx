@@ -37,7 +37,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
     setIsAnalyzing(true);
     setUploadError(null);
     try {
-      const result = await analyzeStatementFile(file, categories, password, user?.id);
+      const result = await analyzeStatementFile(file, categories, password);
       setAnalysisResult(result);
       if (result.bankName) {
         const shortNum = result.accountNumber && result.accountNumber !== 'UNKNOWN' && result.accountNumber !== 'XXXXXX'

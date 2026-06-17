@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from app.utils.supabase_client import supabase, supabase_auth, supabase_db
+from app.core.auth import get_current_user
 from app.services.user_profile_service import (
     ensure_user_with_profile,
     auth_error_detail,
@@ -22,6 +23,27 @@ from app.services.transaction_service import (
 from datetime import datetime
 
 router = APIRouter(prefix="/api")
+
+
+# ── Authorization helpers ─────────────────────────────────────────────────────
+
+def _fetch_owner(table: str, pk_col: str, pk_val: str) -> str:
+    """Return the user_id that owns a resource row, or raise 404."""
+    res = supabase.table(table).select("user_id").eq(pk_col, pk_val).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail=f"{table} record not found")
+    return res.data[0]["user_id"]
+
+
+def _assert_owner(resource_user_id: str, current_user: dict) -> None:
+    """Raise 403 if current user doesn't own the resource. Admins bypass."""
+    if current_user.get("role") == "admin":
+        return
+    if resource_user_id != current_user["user_id"]:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
     email: str
@@ -155,7 +177,12 @@ class UserUpdateRequest(BaseModel):
     primary_goal: Optional[str] = None
 
 @router.put("/users/{user_id}")
-async def update_user_profile(user_id: str, req: UserUpdateRequest):
+async def update_user_profile(
+    user_id: str,
+    req: UserUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    _assert_owner(user_id, current_user)
     try:
         # 1. Update basic user info in public.users table
         response = supabase.table("users").update({
@@ -238,9 +265,10 @@ async def api_oauth_login(req: OAuthLoginRequest):
 
 @router.get("/dashboard-summary")
 async def get_dashboard_summary(
-    user_id: str,
     period: str = "1m",
+    current_user: dict = Depends(get_current_user),
 ):
+    user_id = current_user["user_id"]
     if not user_id or not user_id.strip():
         raise HTTPException(status_code=400, detail="user_id is required")
     try:
@@ -309,7 +337,8 @@ async def get_dashboard_summary(
 
 
 @router.get("/account-hub-analysis")
-async def get_account_hub_analysis(user_id: str):
+async def get_account_hub_analysis(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
     if not user_id or not user_id.strip():
         raise HTTPException(status_code=400, detail="user_id is required")
     try:
@@ -320,7 +349,7 @@ async def get_account_hub_analysis(user_id: str):
 
 
 class TransactionCreate(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None  # ignored — identity comes from JWT
     account_id: str
     amount: float
     transaction_type: str
@@ -334,10 +363,13 @@ class TransactionCreate(BaseModel):
     recurrence_skips: Optional[int] = 0
 
 @router.post("/transactions")
-async def create_transaction(req: TransactionCreate):
+async def create_transaction(
+    req: TransactionCreate,
+    current_user: dict = Depends(get_current_user),
+):
     try:
         result = create_transaction_record(
-            user_id=req.user_id,
+            user_id=current_user["user_id"],
             account_id=req.account_id,
             amount=req.amount,
             transaction_type=req.transaction_type,
@@ -364,7 +396,12 @@ async def create_transaction(req: TransactionCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/transactions")
-async def get_transactions(user_id: str, start_date: str = None, end_date: str = None):
+async def get_transactions(
+    start_date: str = None,
+    end_date: str = None,
+    current_user: dict = Depends(get_current_user),
+):
+    user_id = current_user["user_id"]
     try:
         # Single query with joins (avoids N+1 / extra mapping queries)
         query = (
@@ -418,7 +455,8 @@ async def get_transactions(user_id: str, start_date: str = None, end_date: str =
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/upcoming-payments")
-async def get_upcoming_payments(user_id: str):
+async def get_upcoming_payments(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
     if not user_id or not user_id.strip():
         raise HTTPException(status_code=400, detail="user_id is required")
     try:
@@ -516,11 +554,16 @@ async def get_upcoming_payments(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/transactions/{trans_id}")
-async def update_transaction(trans_id: str, req: TransactionCreate):
+async def update_transaction(
+    trans_id: str,
+    req: TransactionCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    _assert_owner(_fetch_owner("transactions", "transaction_id", trans_id), current_user)
     try:
         result = update_transaction_record(
             transaction_id=trans_id,
-            user_id=req.user_id,
+            user_id=current_user["user_id"],
             account_id=req.account_id,
             amount=req.amount,
             transaction_type=req.transaction_type,
@@ -546,7 +589,11 @@ async def update_transaction(trans_id: str, req: TransactionCreate):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.delete("/transactions/{trans_id}")
-async def delete_transaction(trans_id: str):
+async def delete_transaction(
+    trans_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    _assert_owner(_fetch_owner("transactions", "transaction_id", trans_id), current_user)
     try:
         supabase.table("transactions").delete().eq("transaction_id", trans_id).execute()
         return {"success": True, "message": "Transaction deleted successfully"}
@@ -555,7 +602,7 @@ async def delete_transaction(trans_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 class AccountCreate(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None  # ignored — identity comes from JWT
     account_name: str
     account_type: str
     current_balance: float = 0.0
@@ -566,10 +613,11 @@ class AccountCreate(BaseModel):
     ifsc: str | None = None
 
 @router.post("/accounts")
-async def create_account(req: AccountCreate):
-    uid = (req.user_id or "").strip()
-    if not uid:
-        raise HTTPException(status_code=400, detail="user_id is required")
+async def create_account(
+    req: AccountCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    uid = current_user["user_id"]
     try:
         row = {
             "user_id": uid,
@@ -595,7 +643,12 @@ async def create_account(req: AccountCreate):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 @router.put("/accounts/{account_id}")
-async def update_account(account_id: str, req: AccountCreate):
+async def update_account(
+    account_id: str,
+    req: AccountCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    _assert_owner(_fetch_owner("accounts", "account_id", account_id), current_user)
     try:
         row = {
             "account_name": req.account_name,
@@ -621,14 +674,16 @@ async def update_account(account_id: str, req: AccountCreate):
 
 
 @router.get("/accounts")
-async def get_accounts(user_id: str):
-    uid = (user_id or "").strip()
-    if not uid:
-        raise HTTPException(status_code=400, detail="user_id is required")
+async def get_accounts(current_user: dict = Depends(get_current_user)):
+    uid = current_user["user_id"].strip()
     return {"success": True, "data": fetch_user_accounts(uid)}
 
 @router.delete("/accounts/{account_id}")
-async def delete_account(account_id: str):
+async def delete_account(
+    account_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    _assert_owner(_fetch_owner("accounts", "account_id", account_id), current_user)
     try:
         # Cascade delete transactions associated with this account first
         supabase.table("transactions").delete().eq("account_id", account_id).execute()
@@ -639,7 +694,7 @@ async def delete_account(account_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 class BudgetCreate(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None  # ignored — identity comes from JWT
     category_name: str
     budget_name: str
     amount: float
@@ -649,7 +704,7 @@ class BudgetCreate(BaseModel):
     alert_threshold: float = 80.0
 
 class GoalCreate(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None  # ignored — identity comes from JWT
     goal_name: str
     description: Optional[str] = ""
     target_amount: float
@@ -658,7 +713,8 @@ class GoalCreate(BaseModel):
     status: str = "active"
 
 @router.get("/budget-goals-summary")
-async def get_budget_goals_summary(user_id: str):
+async def get_budget_goals_summary(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
     if not user_id or not user_id.strip():
         raise HTTPException(status_code=400, detail="user_id is required")
     try:
@@ -712,7 +768,8 @@ async def get_budget_goals_summary(user_id: str):
 
 
 @router.get("/budgets")
-async def get_budgets(user_id: str):
+async def get_budgets(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
     try:
         res = supabase.table("budgets").select("*, categories(main_category, sub_category)").eq("user_id", user_id).execute()
         formatted = []
@@ -736,7 +793,10 @@ async def get_budgets(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/budgets")
-async def create_budget(req: BudgetCreate):
+async def create_budget(
+    req: BudgetCreate,
+    current_user: dict = Depends(get_current_user),
+):
     try:
         cat_res = supabase.table("categories")\
             .select("category_id")\
@@ -760,7 +820,7 @@ async def create_budget(req: BudgetCreate):
         )
 
         insert_data = {
-            "user_id": req.user_id,
+            "user_id": current_user["user_id"],
             "category_id": category_id,
             "budget_name": req.budget_name,
             "amount": req.amount,
@@ -779,7 +839,12 @@ async def create_budget(req: BudgetCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/budgets/{budget_id}")
-async def update_budget(budget_id: str, req: BudgetCreate):
+async def update_budget(
+    budget_id: str,
+    req: BudgetCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    _assert_owner(_fetch_owner("budgets", "budget_id", budget_id), current_user)
     try:
         cat_res = supabase.table("categories")\
             .select("category_id")\
@@ -813,7 +878,11 @@ async def update_budget(budget_id: str, req: BudgetCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/budgets/{budget_id}")
-async def delete_budget(budget_id: str):
+async def delete_budget(
+    budget_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    _assert_owner(_fetch_owner("budgets", "budget_id", budget_id), current_user)
     try:
         supabase.table("budgets").delete().eq("budget_id", budget_id).execute()
         return {"success": True, "message": "Budget deleted successfully"}
@@ -822,7 +891,8 @@ async def delete_budget(budget_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/goals")
-async def get_goals(user_id: str):
+async def get_goals(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
     try:
         res = supabase.table("goals").select("*").eq("user_id", user_id).execute()
         formatted = []
@@ -845,20 +915,24 @@ async def get_goals(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/goals")
-async def create_goal(req: GoalCreate):
+async def create_goal(
+    req: GoalCreate,
+    current_user: dict = Depends(get_current_user),
+):
     try:
+        uid = current_user["user_id"]
         current_amount = float(req.current_amount or 0)
         if current_amount <= 0:
             tx_res = (
                 supabase.table("transactions")
                 .select("amount, transaction_type")
-                .eq("user_id", req.user_id)
+                .eq("user_id", uid)
                 .execute()
             )
             current_amount = compute_net_savings(tx_res.data or [])
 
         insert_data = {
-            "user_id": req.user_id,
+            "user_id": uid,
             "goal_name": req.goal_name,
             "description": req.description,
             "target_amount": req.target_amount,
@@ -875,7 +949,12 @@ async def create_goal(req: GoalCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/goals/{goal_id}")
-async def update_goal(goal_id: str, req: GoalCreate):
+async def update_goal(
+    goal_id: str,
+    req: GoalCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    _assert_owner(_fetch_owner("goals", "goal_id", goal_id), current_user)
     try:
         update_data = {
             "goal_name": req.goal_name,
@@ -892,7 +971,11 @@ async def update_goal(goal_id: str, req: GoalCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/goals/{goal_id}")
-async def delete_goal(goal_id: str):
+async def delete_goal(
+    goal_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    _assert_owner(_fetch_owner("goals", "goal_id", goal_id), current_user)
     try:
         supabase.table("goals").delete().eq("goal_id", goal_id).execute()
         return {"success": True, "message": "Goal deleted successfully"}
@@ -922,7 +1005,7 @@ async def get_reports():
 from pydantic import BaseModel
 
 class InvestmentCreate(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None  # ignored — identity comes from JWT
     scheme_code: str
     scheme_name: str
     transaction_date: str  # YYYY-MM-DD
@@ -1015,10 +1098,13 @@ async def get_historical_nav(scheme_code: str, date: str):
         return {"success": False, "detail": str(e)}
 
 @router.post("/investments")
-async def create_investment(req: InvestmentCreate):
+async def create_investment(
+    req: InvestmentCreate,
+    current_user: dict = Depends(get_current_user),
+):
     try:
         insert_data = {
-            "user_id": req.user_id,
+            "user_id": current_user["user_id"],
             "scheme_code": req.scheme_code,
             "scheme_name": req.scheme_name,
             "transaction_date": req.transaction_date,
@@ -1034,7 +1120,11 @@ async def create_investment(req: InvestmentCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/investments/{investment_id}")
-async def delete_investment(investment_id: str):
+async def delete_investment(
+    investment_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    _assert_owner(_fetch_owner("investments", "investment_id", investment_id), current_user)
     try:
         supabase.table("investments").delete().eq("investment_id", investment_id).execute()
         return {"success": True, "message": "Holding transaction deleted successfully"}
@@ -1043,7 +1133,8 @@ async def delete_investment(investment_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/investments")
-async def get_user_investments(user_id: str):
+async def get_user_investments(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
     import urllib.request
     import json
     from datetime import datetime, timedelta

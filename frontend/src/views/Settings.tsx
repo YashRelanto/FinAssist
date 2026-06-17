@@ -37,7 +37,7 @@ export const Settings: React.FC = () => {
     setUploadStatus(null);
     try {
       const uid = activeUserId(user);
-      const { transactions, summary } = await analyzeStatementFile(file, categories, password, uid || undefined);
+      const { transactions, summary } = await analyzeStatementFile(file, categories, password);
 
       if (uid) {
         const ingestRes = await apiFetch('/api/statement/ingest', {

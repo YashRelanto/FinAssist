@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiFetch } from '../lib/api';
 import { 
   Building2, 
   CreditCard, 
@@ -36,7 +37,7 @@ export const LinkedAccounts: React.FC = () => {
   const handleDelete = async (accountId: string) => {
     setIsDeleting(true);
     try {
-      const res = await fetch(`http://localhost:8000/api/accounts/${accountId}`, {
+      const res = await apiFetch(`/api/accounts/${accountId}`, {
         method: 'DELETE',
       });
       const data = await res.json();

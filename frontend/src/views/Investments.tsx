@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../context/AppContext';
+import { apiFetch } from '../lib/api';
 import { 
   TrendingUp, Verified, History, Download, ArrowUpRight, 
   ArrowDownRight, Plus, Search, Calendar, ChevronRight, 
@@ -85,7 +86,7 @@ export const Investments: React.FC = () => {
     if (!user?.id) return;
     try {
       setLoading(true);
-      const response = await fetch(`http://localhost:8000/api/investments?user_id=${user.id}`);
+      const response = await apiFetch(`/api/investments`);
       const data = await response.json();
       if (data.success) {
         setHoldings(data.holdings);
@@ -158,11 +159,10 @@ export const Investments: React.FC = () => {
 
     setSubmitLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/api/investments', {
+      const response = await apiFetch('/api/investments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: user.id,
           scheme_code: selectedFund.schemeCode,
           scheme_name: selectedFund.schemeName,
           transaction_date: transactionDate,
@@ -194,8 +194,8 @@ export const Investments: React.FC = () => {
     if (!confirm("Are you sure you want to delete this purchase?")) return;
 
     try {
-      const response = await fetch(`http://localhost:8000/api/investments/${investmentId}`, {
-        method: 'DELETE'
+      const response = await apiFetch(`/api/investments/${investmentId}`, {
+        method: 'DELETE',
       });
       const data = await response.json();
       if (data.success) {

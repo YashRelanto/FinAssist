@@ -1,7 +1,8 @@
 import os
 import tempfile
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
+from app.core.auth import get_current_user
 from pydantic import BaseModel
 
 from app.utils.supabase_client import supabase
@@ -41,7 +42,7 @@ class ParseStatementResponse(BaseModel):
     ifsc: Optional[str] = None
 
 class IngestRequest(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None  # ignored — identity comes from JWT
     transactions: List[ParsedTxResponse]
     account_name: Optional[str] = "Bank Statement"
     bank_name: Optional[str] = None
@@ -219,10 +220,11 @@ async def parse_statement_file(
 async def upload_statement(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    user_id: str = Form(...),
     account_name: str = Form("Bank Statement"),
     password: Optional[str] = Form(None),
+    current_user: dict = Depends(get_current_user),
 ):
+    user_id = current_user["user_id"]
     """
     Main upload entrypoint. Integrates with the new modular asynchronous worker queue.
     Ensures statement file hashing, duplicate prevention, and async threading.
@@ -296,14 +298,18 @@ async def upload_statement(
 
 
 @router.post("/ingest", response_model=IngestResponse)
-async def ingest_statement(request: IngestRequest):
+async def ingest_statement(
+    request: IngestRequest,
+    current_user: dict = Depends(get_current_user),
+):
     """
     Ingests pre-parsed client transactions synchronously from React JSON payloads.
     Optimized for batch-writes and single-trip database updates.
     """
+    uid = current_user["user_id"]
     try:
         # 1. Resolve Account Once
-        acc_res = supabase.table("accounts").select("account_id, current_balance").eq("user_id", request.user_id).eq("account_name", request.account_name).execute()
+        acc_res = supabase.table("accounts").select("account_id, current_balance").eq("user_id", uid).eq("account_name", request.account_name).execute()
         if acc_res.data:
             account_id = acc_res.data[0]["account_id"]
             current_balance = float(acc_res.data[0]["current_balance"] or 0)
@@ -316,7 +322,7 @@ async def ingest_statement(request: IngestRequest):
             }).eq("account_id", account_id).execute()
         else:
             acc_ins = supabase.table("accounts").insert({
-                "user_id": request.user_id, 
+                "user_id": uid,
                 "account_name": request.account_name,
                 "account_type": "checking", 
                 "current_balance": 0.0,
@@ -358,7 +364,7 @@ async def ingest_statement(request: IngestRequest):
             cat_id = category_map.get(cat_name_key, default_category_id)
 
             insert_data.append({
-                "user_id": request.user_id,
+                "user_id": uid,
                 "account_id": account_id,
                 "category_id": cat_id,
                 "transaction_date": t.transaction_date,
@@ -430,10 +436,11 @@ async def get_job_status(job_id: str):
 
 
 @router.get("/uploaded-statements")
-async def list_uploaded_statements(user_id: str):
+async def list_uploaded_statements(current_user: dict = Depends(get_current_user)):
     """
-    Lists all processed statements for a given user.
+    Lists all processed statements for the authenticated user.
     """
+    user_id = current_user["user_id"]
     try:
         res = supabase.table("uploaded_statements")\
             .select("*")\

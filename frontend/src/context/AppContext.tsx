@@ -257,7 +257,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // If user is logged in, sync changes to the database
       if (newUser.isAuthenticated && newUser.userId) {
-        fetch(`http://localhost:8000/api/users/${newUser.userId}`, {
+        apiFetch(`/api/users/${newUser.userId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -417,7 +417,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const promise = apiFetch(
-      `/api/transactions?user_id=${encodeURIComponent(uid)}`
+      `/api/transactions`
     )
       .then((res) => {
         if (!res.ok) throw new Error('Could not load transactions from database');
@@ -454,7 +454,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     inflightRef.current.accounts = apiFetch(
-      `/api/accounts?user_id=${encodeURIComponent(uid)}`
+      `/api/accounts`
     )
       .then((res) => res.json())
       .then((data) => {
@@ -509,7 +509,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (inflightRef.current.budgets) return;
 
     inflightRef.current.budgets = apiFetch(
-      `/api/budgets?user_id=${encodeURIComponent(uid)}`
+      `/api/budgets`
     )
       .then((res) => res.json())
       .then((data) => {
@@ -537,7 +537,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (inflightRef.current.goals) return;
 
     inflightRef.current.goals = apiFetch(
-      `/api/goals?user_id=${encodeURIComponent(uid)}`
+      `/api/goals`
     )
       .then((res) => res.json())
       .then((data) => {
@@ -584,7 +584,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setDashboardSummaryLoading(true);
       inflightRef.current.dashboardSummary = apiFetch(
-        `/api/dashboard-summary?user_id=${encodeURIComponent(uid)}&period=${encodeURIComponent(analysisPeriod)}`,
+        `/api/dashboard-summary?period=${encodeURIComponent(analysisPeriod)}`,
       )
         .then((res) => res.json())
         .then((data) => {
@@ -626,7 +626,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setAccountHubAnalysisLoading(true);
       inflightRef.current.accountHubAnalysis = apiFetch(
-        `/api/account-hub-analysis?user_id=${encodeURIComponent(uid)}`,
+        `/api/account-hub-analysis`,
       )
         .then((res) => res.json())
         .then((data) => {
@@ -670,7 +670,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       inflightRef.current.budgetGoalsSummary = apiFetch(
-        `/api/budget-goals-summary?user_id=${encodeURIComponent(uid)}`
+        `/api/budget-goals-summary`
       )
         .then((res) => res.json())
         .then((data) => {

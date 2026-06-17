@@ -6,9 +6,9 @@ class PIIMasker:
     """
     
     PATTERNS = {
-        "phone": r'\b[6-9]\d{9}\b',                                            # Indian mobile numbers
+        "phone": r'\b[6-9]\d{9}\b',                                           # Indian mobile numbers
         "pan": r'\b[A-Z]{5}[0-9]{4}[A-Z]\b',                                  # PAN Card
-        "aadhaar": r'\b\d{4}[\s-]\d{4}[\s-]\d{4}\b',                              # Aadhaar Card
+        "aadhaar": r'\b\d{4}[\s-]\d{4}[\s-]\d{4}\b',                          # Aadhaar Card
         "account_number": r'\b\d{9,18}\b',                                    # Bank account numbers
         "ifsc": r'\b[A-Z]{4}0[A-Z0-9]{6}\b',                                  # IFSC Codes
         "credit_card": r'\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b',         # Credit cards

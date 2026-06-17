@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { User, Mail, ArrowLeft, Loader2, CheckCircle2, Shield, DollarSign, Building, Home, CreditCard, Compass, Sparkles } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
+import { apiFetch } from '../lib/api';
 
 export const EditProfile: React.FC = () => {
   const { user, updateUser, setCurrentPage } = useAppContext();
@@ -35,11 +36,9 @@ export const EditProfile: React.FC = () => {
     try {
       if (user.userId) {
         // Sync with Backend database
-        const res = await fetch(`http://localhost:8000/api/users/${user.userId}`, {
+        const res = await apiFetch(`/api/users/${user.userId}`, {
           method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             full_name: formData.name,
             email: formData.email,

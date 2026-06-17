@@ -39,7 +39,7 @@ export const Onboarding: React.FC = () => {
     setUploadError(null);
     try {
       const uid = activeUserId(user);
-      const { transactions } = await analyzeStatementFile(file, categories, password, uid || undefined);
+      const { transactions } = await analyzeStatementFile(file, categories, password);
 
       if (uid) {
         const ingestRes = await apiFetch('/api/statement/ingest', {

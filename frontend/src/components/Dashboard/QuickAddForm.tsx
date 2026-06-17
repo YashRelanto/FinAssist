@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { activeUserId } from '../../lib/activeUserId';
+import { apiFetch } from '../../lib/api';
 import { cn, formatCurrency } from '../../lib/utils';
 import { Plus, Check, Loader2, ArrowUpRight, ArrowDownLeft, Calendar } from 'lucide-react';
 
@@ -38,7 +39,7 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts 
     if (!uid) return;
     setLoadingUpcoming(true);
     try {
-      const res = await fetch(`http://localhost:8000/api/upcoming-payments?user_id=${uid}`);
+      const res = await apiFetch(`/api/upcoming-payments`);
       const data = await res.json();
       if (res.ok && data.success) {
         setUpcomingPayments(data.data || []);
@@ -70,11 +71,10 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts 
         alert('Please sign in again.');
         return;
       }
-      const response = await fetch('http://localhost:8000/api/transactions', {
+      const response = await apiFetch('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: uid,
           account_id: formData.accountId,
           amount: Math.abs(parseFloat(formData.amount)),
           transaction_type: formData.type,

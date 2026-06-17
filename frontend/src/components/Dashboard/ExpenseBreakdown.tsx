@@ -51,7 +51,7 @@ export const ExpenseBreakdown: React.FC<ExpenseBreakdownProps> = ({ analysisPeri
     try {
       const uid = activeUserId(user);
       const response = await apiFetch(
-        `/api/transactions?user_id=${encodeURIComponent(uid)}&start_date=${startDate}&end_date=${endDate}`,
+        `/api/transactions?start_date=${startDate}&end_date=${endDate}`,
       );
       const data = await response.json();
       if (data.success) {

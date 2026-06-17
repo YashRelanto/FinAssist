@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, User, Bot, Paperclip, Loader2 } from 'lucide-react';
 import { cn, formatCurrency } from '../lib/utils';
 import { useAppContext } from '../context/AppContext';
+import { apiFetch } from '../lib/api';
 import { ChatChart } from '../components/ChatChart';
 
 const initialMessages = [
@@ -41,16 +42,13 @@ export const AIAssistant: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const response = await fetch('http://localhost:8000/api/chat/message', {
+      const response = await apiFetch('/api/chat/message', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: user.userId || 'guest-user',
           message: text,
-          thread_id: 'default-thread'
-        })
+          thread_id: 'default-thread',
+        }),
       });
 
       if (!response.ok) throw new Error('API request failed');

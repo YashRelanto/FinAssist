@@ -1,4 +1,5 @@
 import { Transaction, Category } from '../types';
+import { apiFetch } from './api';
 
 export interface AnalysisResult {
   transactions: Omit<Transaction, 'id'>[];
@@ -23,7 +24,6 @@ export const analyzeStatementFile = async (
   file: File,
   categories: Category[],
   password?: string,
-  userId?: string
 ): Promise<AnalysisResult> => {
   try {
     const formData = new FormData();
@@ -31,11 +31,7 @@ export const analyzeStatementFile = async (
     if (password) {
       formData.append('password', password);
     }
-    if (userId) {
-      formData.append('user_id', userId);
-    }
-
-    const response = await fetch('http://localhost:8000/api/statement/parse-file', {
+    const response = await apiFetch('/api/statement/parse-file', {
       method: 'POST',
       body: formData,
     });

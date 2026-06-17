@@ -12,8 +12,10 @@ import time
 from typing import Optional, Dict, List, Any
 from collections import defaultdict
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+
+from app.core.auth import get_current_user
 
 from app.utils.supabase_client import supabase
 
@@ -31,11 +33,10 @@ router = APIRouter(prefix="/api/chat", tags=["Chatbot"])
 class ChatRequest(BaseModel):
     """Incoming chat payload from the frontend."""
 
-    user_id: str = Field(
-        ...,
-        min_length=1,
+    user_id: Optional[str] = Field(
+        default=None,
         max_length=128,
-        description="Unique identifier for the authenticated user (e.g. Supabase UUID).",
+        description="Deprecated — user identity is now derived from the Authorization JWT.",
         examples=["550e8400-e29b-41d4-a716-446655440000"],
     )
     message: str = Field(
@@ -271,10 +272,16 @@ def _build_summary(transactions: List[Dict], accounts: List[Dict]) -> Dict[str, 
         500: {"description": "Internal server error — engine failure"},
     },
 )
-async def post_chat_message(request: ChatRequest) -> ChatResponse:
+async def post_chat_message(
+    request: ChatRequest,
+    current_user: dict = Depends(get_current_user),
+) -> ChatResponse:
     """
     Main chat endpoint orchestrator.
     """
+    # Derive user_id from the validated JWT, not from the request body.
+    request = request.model_copy(update={"user_id": current_user["user_id"]})
+
     # 1. Build user profile
     user_profile = _get_default_user_profile()
 
