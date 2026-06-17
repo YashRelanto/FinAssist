@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../context/AppContext';
-import { 
-  TrendingUp, Verified, History, Download, ArrowUpRight, 
-  ArrowDownRight, Plus, Search, Calendar, ChevronRight, 
-  Loader2, X, AlertCircle, Trash2, ChevronDown
+import {
+  TrendingUp, Verified, History, Download, ArrowUpRight,
+  ArrowDownRight, Plus, Search, Calendar, ChevronRight,
+  Loader2, X, AlertCircle, Trash2, ChevronDown, Landmark
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from 'recharts';
 import { cn, formatCurrency } from '../lib/utils';
@@ -46,6 +46,24 @@ interface MFSearchResult {
   schemeName: string;
 }
 
+interface FixedDeposit {
+  fd_id: string;
+  bank_name: string | null;
+  label: string | null;
+  principal_amount: number;
+  interest_rate_pct: number;
+  start_date: string;
+  maturity_date: string;
+  compounding_frequency: string;
+  payout_type: string;
+  current_value: number;
+  maturity_value: number;
+  break_value: number;
+  break_cost: number;
+  days_to_maturity: number | null;
+  matured: boolean;
+}
+
 export const Investments: React.FC = () => {
   const { user } = useAppContext();
   
@@ -81,6 +99,81 @@ export const Investments: React.FC = () => {
   const [navLoading, setNavLoading] = useState(false);
   const [submitLoading, setSubmitLoading] = useState(false);
 
+  // Fixed Deposit state
+  const [fds, setFds] = useState<FixedDeposit[]>([]);
+  const [fdSummary, setFdSummary] = useState({ count: 0, total_principal: 0, total_current_value: 0, total_maturity_value: 0 });
+  const [fdModalOpen, setFdModalOpen] = useState(false);
+  const [fdSubmitLoading, setFdSubmitLoading] = useState(false);
+  const [fdForm, setFdForm] = useState({
+    bank_name: '', label: '', principal_amount: '', interest_rate_pct: '',
+    start_date: new Date().toISOString().split('T')[0], maturity_date: '',
+    compounding_frequency: 'quarterly', payout_type: 'cumulative', premature_penalty_pct: '1',
+  });
+
+  // Fetch fixed deposits
+  const fetchFDs = async () => {
+    if (!user?.id) return;
+    try {
+      const response = await fetch(`http://localhost:8000/api/fixed-deposits?user_id=${user.id}`);
+      const data = await response.json();
+      if (data.success) {
+        setFds(data.fixed_deposits || []);
+        setFdSummary(data.summary || { count: 0, total_principal: 0, total_current_value: 0, total_maturity_value: 0 });
+      }
+    } catch (error) {
+      console.error('Error fetching fixed deposits:', error);
+    }
+  };
+
+  const handleAddFD = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!fdForm.principal_amount || !fdForm.interest_rate_pct || !fdForm.maturity_date) return;
+    setFdSubmitLoading(true);
+    try {
+      const response = await fetch('http://localhost:8000/api/fixed-deposits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: user.id,
+          bank_name: fdForm.bank_name || null,
+          label: fdForm.label || null,
+          principal_amount: parseFloat(fdForm.principal_amount),
+          interest_rate_pct: parseFloat(fdForm.interest_rate_pct),
+          start_date: fdForm.start_date,
+          maturity_date: fdForm.maturity_date,
+          compounding_frequency: fdForm.compounding_frequency,
+          payout_type: fdForm.payout_type,
+          premature_penalty_pct: parseFloat(fdForm.premature_penalty_pct || '1'),
+        }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        setFdModalOpen(false);
+        setFdForm({
+          bank_name: '', label: '', principal_amount: '', interest_rate_pct: '',
+          start_date: new Date().toISOString().split('T')[0], maturity_date: '',
+          compounding_frequency: 'quarterly', payout_type: 'cumulative', premature_penalty_pct: '1',
+        });
+        fetchFDs();
+      }
+    } catch (error) {
+      console.error('Error adding fixed deposit:', error);
+    } finally {
+      setFdSubmitLoading(false);
+    }
+  };
+
+  const handleDeleteFD = async (fdId: string) => {
+    if (!confirm('Delete this fixed deposit?')) return;
+    try {
+      const response = await fetch(`http://localhost:8000/api/fixed-deposits/${fdId}`, { method: 'DELETE' });
+      const data = await response.json();
+      if (data.success) fetchFDs();
+    } catch (error) {
+      console.error('Error deleting fixed deposit:', error);
+    }
+  };
+
   // Fetch investments data
   const fetchInvestments = async () => {
     if (!user?.id) return;
@@ -103,6 +196,7 @@ export const Investments: React.FC = () => {
 
   useEffect(() => {
     fetchInvestments();
+    fetchFDs();
   }, [user?.id]);
 
   // Debounced search for mutual funds with smart substring matching
@@ -569,6 +663,187 @@ export const Investments: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {/* FIXED DEPOSITS SECTION */}
+      <div className="bg-surface-container-lowest rounded-3xl soft-shadow border border-outline-variant/30 overflow-hidden">
+        <div className="p-6 border-b border-outline-variant/30 flex justify-between items-center">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-primary/10 flex items-center justify-center shrink-0">
+              <Landmark className="w-5 h-5 text-primary" />
+            </div>
+            <div>
+              <h4 className="text-xl font-bold text-on-surface">Fixed Deposits</h4>
+              <p className="text-[10px] text-outline font-black uppercase tracking-widest mt-1">
+                {fdSummary.count} active · {formatCurrency(fdSummary.total_current_value)} now → {formatCurrency(fdSummary.total_maturity_value)} at maturity
+              </p>
+            </div>
+          </div>
+          <button type="button" onClick={() => setFdModalOpen(true)} className={lumio.btnPrimary}>
+            <Plus className="w-4 h-4" /> Add FD
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="bg-surface-container-low/50 text-[9px] font-black text-outline uppercase tracking-[0.2em]">
+                <th className="px-6 py-4">Bank / Deposit</th>
+                <th className="px-6 py-4 text-right">Principal</th>
+                <th className="px-6 py-4 text-right">Rate</th>
+                <th className="px-6 py-4 text-right">Matures</th>
+                <th className="px-6 py-4 text-right">Current Value</th>
+                <th className="px-6 py-4 text-right">Maturity Value</th>
+                <th className="px-6 py-4 text-right">If Broken Now</th>
+                <th className="px-6 py-4 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-outline-variant/20">
+              {fds.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-6 py-16 text-center text-outline text-sm font-medium">
+                    No fixed deposits logged. Click "Add FD" to track one — it'll be counted as a funding source in your goal plans.
+                  </td>
+                </tr>
+              ) : (
+                fds.map((fd) => (
+                  <tr key={fd.fd_id} className="hover:bg-surface-container-low transition-colors duration-200">
+                    <td className="px-6 py-5">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-bold text-on-surface text-sm">{fd.bank_name || fd.label || 'Fixed Deposit'}</span>
+                        <span className="text-[9px] font-black text-outline uppercase tracking-widest">
+                          {fd.label && fd.bank_name ? fd.label : `${fd.compounding_frequency} · ${fd.payout_type}`}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-5 text-sm text-right font-semibold text-on-surface">{formatCurrency(fd.principal_amount)}</td>
+                    <td className="px-6 py-5 text-sm text-right text-outline font-medium">{fd.interest_rate_pct}%</td>
+                    <td className="px-6 py-5 text-sm text-right">
+                      <div className="flex flex-col items-end">
+                        <span className="font-medium text-on-surface text-xs">{fd.maturity_date}</span>
+                        <span className={cn("text-[9px] font-black uppercase tracking-widest mt-0.5", fd.matured ? "text-secondary" : "text-outline")}>
+                          {fd.matured ? 'Matured' : fd.days_to_maturity != null ? `${fd.days_to_maturity} days left` : ''}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-5 text-sm text-right font-black text-on-surface">{formatCurrency(fd.current_value)}</td>
+                    <td className="px-6 py-5 text-sm text-right font-bold text-on-surface">{formatCurrency(fd.maturity_value)}</td>
+                    <td className="px-6 py-5 text-right">
+                      <div className="flex flex-col items-end">
+                        <span className="text-sm font-bold text-on-surface">{formatCurrency(fd.break_value)}</span>
+                        {fd.break_cost > 0 && (
+                          <span className="text-[9px] font-black uppercase tracking-widest mt-0.5 text-error">−{formatCurrency(fd.break_cost)} penalty</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-5 text-center">
+                      <button
+                        onClick={() => handleDeleteFD(fd.fd_id)}
+                        className="p-1.5 text-outline hover:text-error hover:bg-error/5 rounded-lg transition-colors inline-flex items-center justify-center"
+                        title="Delete fixed deposit"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ADD FIXED DEPOSIT MODAL */}
+      {fdModalOpen && (
+        <div className="fixed inset-0 bg-on-surface/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-surface-container-lowest w-full max-w-[540px] rounded-[32px] border border-outline-variant/30 soft-shadow overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-6 border-b border-outline-variant/20 flex justify-between items-center bg-surface-container-low/40">
+              <div>
+                <h4 className="text-xl font-bold text-on-surface">Add Fixed Deposit</h4>
+                <p className="text-[10px] font-black text-outline uppercase tracking-widest mt-1">Counted as a funding source across your goals</p>
+              </div>
+              <button onClick={() => setFdModalOpen(false)} className="p-2 hover:bg-surface-container rounded-full transition-colors">
+                <X className="w-5 h-5 text-outline" />
+              </button>
+            </div>
+            <form onSubmit={handleAddFD} className="p-6 space-y-5 overflow-y-auto flex-1">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black text-outline uppercase tracking-[0.2em] ml-1">Bank Name</label>
+                  <input type="text" placeholder="e.g. HDFC Bank" value={fdForm.bank_name}
+                    onChange={(e) => setFdForm({ ...fdForm, bank_name: e.target.value })}
+                    className="w-full bg-surface-container-lowest border border-outline-variant/50 rounded-xl px-4 py-3.5 text-sm font-semibold focus:ring-2 focus:ring-primary outline-none transition-all text-on-surface" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black text-outline uppercase tracking-[0.2em] ml-1">Label (optional)</label>
+                  <input type="text" placeholder="e.g. Tax-saver" value={fdForm.label}
+                    onChange={(e) => setFdForm({ ...fdForm, label: e.target.value })}
+                    className="w-full bg-surface-container-lowest border border-outline-variant/50 rounded-xl px-4 py-3.5 text-sm font-semibold focus:ring-2 focus:ring-primary outline-none transition-all text-on-surface" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black text-outline uppercase tracking-[0.2em] ml-1">Principal (₹)</label>
+                  <input type="number" step="any" required placeholder="200000" value={fdForm.principal_amount}
+                    onChange={(e) => setFdForm({ ...fdForm, principal_amount: e.target.value })}
+                    className="w-full bg-surface-container-lowest border border-outline-variant/50 rounded-xl px-4 py-3.5 text-sm font-bold focus:ring-2 focus:ring-primary outline-none transition-all text-on-surface" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black text-outline uppercase tracking-[0.2em] ml-1">Interest Rate (% p.a.)</label>
+                  <input type="number" step="any" required placeholder="7.1" value={fdForm.interest_rate_pct}
+                    onChange={(e) => setFdForm({ ...fdForm, interest_rate_pct: e.target.value })}
+                    className="w-full bg-surface-container-lowest border border-outline-variant/50 rounded-xl px-4 py-3.5 text-sm font-bold focus:ring-2 focus:ring-primary outline-none transition-all text-on-surface" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black text-outline uppercase tracking-[0.2em] ml-1">Start Date</label>
+                  <input type="date" required max={new Date().toISOString().split('T')[0]} value={fdForm.start_date}
+                    onChange={(e) => setFdForm({ ...fdForm, start_date: e.target.value })}
+                    className="w-full bg-surface-container-lowest border border-outline-variant/50 rounded-xl px-4 py-3.5 text-sm font-semibold focus:ring-2 focus:ring-primary outline-none transition-all cursor-pointer text-on-surface" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black text-outline uppercase tracking-[0.2em] ml-1">Maturity Date</label>
+                  <input type="date" required value={fdForm.maturity_date}
+                    onChange={(e) => setFdForm({ ...fdForm, maturity_date: e.target.value })}
+                    className="w-full bg-surface-container-lowest border border-outline-variant/50 rounded-xl px-4 py-3.5 text-sm font-semibold focus:ring-2 focus:ring-primary outline-none transition-all cursor-pointer text-on-surface" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black text-outline uppercase tracking-[0.2em] ml-1">Compounding</label>
+                  <select value={fdForm.compounding_frequency}
+                    onChange={(e) => setFdForm({ ...fdForm, compounding_frequency: e.target.value })}
+                    className="w-full bg-surface-container-lowest border border-outline-variant/50 rounded-xl px-4 py-3.5 text-sm font-semibold focus:ring-2 focus:ring-primary outline-none transition-all text-on-surface">
+                    <option value="monthly">Monthly</option>
+                    <option value="quarterly">Quarterly</option>
+                    <option value="half-yearly">Half-yearly</option>
+                    <option value="annually">Annually</option>
+                    <option value="simple">Simple interest</option>
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[9px] font-black text-outline uppercase tracking-[0.2em] ml-1">Interest Payout</label>
+                  <select value={fdForm.payout_type}
+                    onChange={(e) => setFdForm({ ...fdForm, payout_type: e.target.value })}
+                    className="w-full bg-surface-container-lowest border border-outline-variant/50 rounded-xl px-4 py-3.5 text-sm font-semibold focus:ring-2 focus:ring-primary outline-none transition-all text-on-surface">
+                    <option value="cumulative">Cumulative (reinvested)</option>
+                    <option value="payout">Periodic payout</option>
+                  </select>
+                </div>
+              </div>
+              <div className="pt-4 flex gap-4">
+                <button type="button" onClick={() => setFdModalOpen(false)}
+                  className="flex-1 py-4 border border-outline-variant text-[10px] font-black uppercase tracking-[0.2em] rounded-xl hover:bg-surface-container-low transition-all">
+                  Cancel
+                </button>
+                <button type="submit" disabled={fdSubmitLoading || !fdForm.principal_amount || !fdForm.interest_rate_pct || !fdForm.maturity_date}
+                  className="flex-1 py-4 bg-primary text-white text-[10px] font-black uppercase tracking-[0.2em] rounded-xl shadow-lg shadow-primary/20 hover:brightness-110 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                  {fdSubmitLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Add Deposit</span>}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* ADD MUTUAL FUND TRANSACTION MODAL */}
       {modalOpen && (

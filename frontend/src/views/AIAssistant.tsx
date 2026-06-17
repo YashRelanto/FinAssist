@@ -4,6 +4,21 @@ import { cn, formatCurrency, APP_NAME, APP_ADVISOR_GREETING } from '../lib/utils
 import { useAppContext } from '../context/AppContext';
 import { ChatChart } from '../components/ChatChart';
 import { PageHeader, PageShell } from '../components/PageShell';
+import { Markdown } from '../components/Markdown';
+import { ClarificationCard } from '../components/ClarificationCard';
+import type { ClarificationQuestion } from '../components/ClarificationCard';
+
+interface Message {
+  id: number;
+  role: 'user' | 'ai';
+  time: string;
+  text: string;
+  type: 'text' | 'clarification' | 'card';
+  artifacts?: any[];
+  clarificationQuestions?: ClarificationQuestion[];
+  clarificationAnswered?: boolean;
+  data?: any[];
+}
 
 const initialMessages = [
   { 

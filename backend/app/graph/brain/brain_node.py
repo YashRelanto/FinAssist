@@ -259,6 +259,18 @@ def brain_node(state: AgentState) -> dict:
         logger.info("[brain] iter=%d goal_planner already ran -> finish (no LLM call)", iteration)
         return {"next_action": "finish", "brain_task": state.get("brain_task") or {}, "iterations": iteration}
 
+    # Short-circuit: a single successful nl2sql answer to a BASIC data question is terminal.
+    # Re-invoking the supervisor LLM (a ~40s call) only to re-run the same query — or to finally
+    # decide "finish" — wastes time and can DUPLICATE the query when the model rephrases the
+    # sub-question (defeating the exact-match repeat guard below). Mirror the goal_planner
+    # short-circuit: once basic nl2sql has returned data with no error, finish with no LLM call.
+    _prev_task = state.get("brain_task") or {}
+    if str(_prev_task.get("analysis_type") or "").lower() == "basic":
+        _nl_evs = [e for e in (state.get("evidence") or []) if e.get("tool") == "nl2sql"]
+        if _nl_evs and not ((_nl_evs[-1].get("data") or {}).get("sql_error")):
+            logger.info("[brain] iter=%d basic nl2sql already answered -> finish (no LLM call)", iteration)
+            return {"next_action": "finish", "brain_task": _prev_task, "iterations": iteration}
+
     # First decision pass — no clarifications gathered yet this turn.
     decision = _decide(state, [], iteration)
     action = decision["next_action"]

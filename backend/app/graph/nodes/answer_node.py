@@ -31,6 +31,7 @@ from app.utils.prompts import (
     ANSWER_KNOWLEDGE_SYSTEM,
     FINASSIST_SYSTEM_PROMPT,
     GOAL_PLAN_SYSTEM,
+    GOAL_PLAN_SUMMARY_SYSTEM,
     CHART_CAPTION_SYSTEM,
 )
 
@@ -276,6 +277,23 @@ def _find(evidence: List[Dict], tool: str) -> Optional[Dict]:
     return None
 
 
+# Phrases that signal the user wants the full analyst-style breakdown rather than the
+# default concise advisor summary.
+_DETAIL_TRIGGERS = (
+    "detailed calculation", "detailed calc", "detailed breakdown", "detailed plan",
+    "detail", "breakdown", "break it down", "full breakdown", "full plan", "full report",
+    "step by step", "step-by-step", "month by month", "month-by-month", "all scenarios",
+    "every scenario", "scenario comparison", "show me the numbers", "show the numbers",
+    "show the math", "show me the math", "in depth", "in-depth", "elaborate",
+)
+
+
+def _wants_detail(user_query: str) -> bool:
+    """True when the user explicitly asks for the full calculations / breakdown."""
+    q = (user_query or "").lower()
+    return any(t in q for t in _DETAIL_TRIGGERS)
+
+
 # ── node ───────────────────────────────────────────────────────────────────
 
 def answer_node(state: AgentState) -> dict:
@@ -302,19 +320,31 @@ def answer_node(state: AgentState) -> dict:
             # goal_planner data already includes scenarios, spending reduction, and the
             # investment liquidity check (it fetches all of this directly from the DB).
             ctx = json.dumps(g, indent=2, default=str)
-
             fields = _profile_fields(profile)
-            system_prompt = GOAL_PLAN_SYSTEM.format(context_text=ctx, **fields)
+
+            # By DEFAULT, show a concise, decision-first advisor summary with a single
+            # budget chart. Only when the user explicitly asks ("detailed calculations",
+            # "month by month", "all scenarios"…) do we render the full analyst report.
+            detailed = _wants_detail(user_query)
+            goal_type = str(g.get("goal_type") or "generic").lower()
+
+            if detailed:
+                system_prompt = GOAL_PLAN_SYSTEM.format(context_text=ctx, **fields)
+                max_tokens = 1400
+                artifacts = _select_goal_artifacts(goal_type, g)
+            else:
+                system_prompt = GOAL_PLAN_SUMMARY_SYSTEM.format(context_text=ctx, **fields)
+                max_tokens = 700
+                # Scenarios are rendered as a markdown table in the answer text; keep one budget chart.
+                artifacts = _budget_impact_bar(g)
 
             completion = graph_chat_completion(
                 node="answer_node", purpose="goal_plan", model=settings.active_chat_model,
                 messages=[{"role": "system", "content": system_prompt},
                           {"role": "user", "content": user_query}],
-                max_tokens=1400, temperature=0.15,
+                max_tokens=max_tokens, temperature=0.15,
             )
             answer = completion.choices[0].message.content.strip()
-            goal_type = str(g.get("goal_type") or "generic").lower()
-            artifacts = _select_goal_artifacts(goal_type, g)
             _attach_chart_captions(artifacts, g)
 
         # ── Investment ──
