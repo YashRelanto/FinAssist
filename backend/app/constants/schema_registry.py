@@ -78,8 +78,29 @@ SCHEMA_REGISTRY: Dict[str, dict] = {
         },
         "primary_key": "user_id",
     },
-}
 
+    "goals": {
+        "columns": [
+            "goal_id",
+            "user_id",
+            "account_id",
+            "goal_name",
+            "description",
+            "target_amount",
+            "current_amount",
+            "target_date",
+            "status",
+            "created_at",
+            "updated_at",
+        ],
+        "user_scoped": True,
+        "foreign_keys": {
+            "user_id": "users.user_id",
+            "account_id": "accounts.account_id",
+        },
+        "primary_key": "goal_id",
+    },
+}
 # ─── Derived sets for fast validation ─────────────────────────────────────────
 
 ALLOWED_TABLES: Set[str] = set(SCHEMA_REGISTRY.keys())

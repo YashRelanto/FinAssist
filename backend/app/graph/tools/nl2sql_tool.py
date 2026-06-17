@@ -95,7 +95,7 @@ def resolve_entities(entities: Dict[str, Any], user_id: str) -> Dict[str, Any]:
             response = graph_chat_completion(
                 node="nl2sql_agent",
                 purpose="semantic_entity_resolution",
-                model=settings.active_chat_model,
+                model=settings.tool_model,
                 messages=[
                     {"role": "system", "content": SEMANTIC_RESOLUTION_SYSTEM},
                     {"role": "user", "content": SEMANTIC_RESOLUTION_USER.format(

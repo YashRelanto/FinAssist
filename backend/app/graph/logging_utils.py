@@ -105,21 +105,15 @@ def summarize_state_snapshot(state: dict[str, Any]) -> str:
     return ", ".join(f"{k}={v!r}" for k, v in fields.items() if v is not None)
 
 
-def summarize_node_updates(updates: dict[str, Any] | None) -> str:
+def _summarize_output(updates: dict[str, Any] | None) -> str:
+    """Full output of a node's return dict — no truncation."""
     if not updates:
-        return "none"
-    parts: list[str] = []
-    for key, value in updates.items():
-        if key in {"entities", "resolved_entities", "sql_ast", "sql_results", "analytics_results"}:
-            parts.append(f"{key}=<{type(value).__name__}>")
-        elif key in {"raw_answer", "final_answer", "clarification_question", "rewritten_query"}:
-            parts.append(f"{key}={truncate(str(value), 100)!r}")
-        elif key == "retrieved_context":
-            count = len(value) if isinstance(value, list) else 0
-            parts.append(f"retrieved_context_blocks={count}")
-        else:
-            parts.append(f"{key}={value!r}")
-    return ", ".join(parts)
+        return "no updates"
+    import json
+    try:
+        return json.dumps(updates, default=str, ensure_ascii=False)
+    except Exception:
+        return str(updates)
 
 
 def create_openai_client() -> openai.OpenAI:
@@ -138,17 +132,7 @@ def graph_chat_completion(
 ):
     """Log and execute an OpenAI chat completion used inside the graph."""
     model = kwargs.get("model", settings.active_chat_model)
-    messages = kwargs.get("messages", [])
     started = time.perf_counter()
-
-    logger.info(
-        "[%s] LLM start | %spurpose=%s model=%s | %s",
-        node,
-        _ctx_prefix(),
-        purpose,
-        model,
-        summarize_messages(messages),
-    )
 
     if client is None:
         client = create_openai_client()
@@ -157,66 +141,38 @@ def graph_chat_completion(
     elapsed_ms = (time.perf_counter() - started) * 1000
 
     usage = getattr(response, "usage", None)
-    token_info = ""
-    if usage is not None:
-        token_info = (
-            f" prompt_tokens={usage.prompt_tokens}"
-            f" completion_tokens={usage.completion_tokens}"
-            f" total_tokens={usage.total_tokens}"
-        )
-        _record_token_usage(node, getattr(usage, "total_tokens", 0) or 0)
-
-    content = ""
-    if response.choices:
-        content = truncate(response.choices[0].message.content or "", 240)
+    tokens = getattr(usage, "total_tokens", 0) or 0
+    if tokens:
+        _record_token_usage(node, tokens)
 
     logger.info(
-        "[%s] LLM done | %spurpose=%s elapsed_ms=%.0f%s | response=%r",
-        node,
-        _ctx_prefix(),
-        purpose,
-        elapsed_ms,
-        token_info,
-        content,
+        "[%s] LLM | purpose=%s model=%s elapsed_ms=%.0f tokens=%d",
+        node, purpose, model, elapsed_ms, tokens,
     )
     return response
 
 
 def wrap_graph_node(node_name: str, fn: Callable[[Any], dict[str, Any]]) -> Callable[[Any], dict[str, Any]]:
-    """Decorator/wrapper that logs node entry, exit, duration, and state updates."""
+    """Decorator/wrapper that logs node entry, exit, and a compact output summary."""
 
     @wraps(fn)
     def wrapper(state: dict[str, Any]) -> dict[str, Any]:
         started = time.perf_counter()
-        logger.info(
-            "[%s] enter | %sstate=%s",
-            node_name,
-            _ctx_prefix(),
-            summarize_state_snapshot(state),
-        )
+        logger.info("[%s] enter", node_name)
         try:
             result = fn(state)
         except GraphInterrupt:
-            # Not a failure — the node paused for human input (HITL clarification).
-            logger.info("[%s] interrupt | %s(awaiting user input)", node_name, _ctx_prefix())
+            logger.info("[%s] interrupt — awaiting user input", node_name)
             raise
         except Exception:
             elapsed_ms = (time.perf_counter() - started) * 1000
-            logger.exception(
-                "[%s] failed | %selapsed_ms=%.0f",
-                node_name,
-                _ctx_prefix(),
-                elapsed_ms,
-            )
+            logger.exception("[%s] failed | elapsed_ms=%.0f", node_name, elapsed_ms)
             raise
 
         elapsed_ms = (time.perf_counter() - started) * 1000
         logger.info(
-            "[%s] exit | %selapsed_ms=%.0f updates=%s",
-            node_name,
-            _ctx_prefix(),
-            elapsed_ms,
-            summarize_node_updates(result),
+            "[%s] exit | elapsed_ms=%.0f | %s",
+            node_name, elapsed_ms, _summarize_output(result),
         )
         return result
 

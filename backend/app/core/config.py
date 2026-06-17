@@ -40,6 +40,13 @@ class Settings:
     )
     NVIDIA_BASE_URL: str = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
 
+    # config.py
+    active_chat_model: str = "meta/llama-3.3-70b-instruct"
+    brain_model: str = "meta/llama-3.3-70b-instruct"        # 70B for reliable goal routing
+    tool_model: str = "meta/llama-3.3-70b-instruct"         # SQL + answers
+    knowledge_model: str = "meta/llama-3.1-8b-instruct"     # RAG summarisation
+    fast_model: str = "meta/llama-3.1-8b-instruct"          # cheap captions / justifications
+
     @property
     def active_api_key(self) -> str:
         return self.NVIDIA_API_KEY
