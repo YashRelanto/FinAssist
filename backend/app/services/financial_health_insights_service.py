@@ -173,7 +173,6 @@ def build_health_insight_facts(
 
 def _rule_based_health_insights(facts: dict[str, Any]) -> dict[str, Any]:
     score_info = facts["health_score"]
-    metrics = facts["metrics"]
     score = score_info["score"]
     label = score_info["label"]
 

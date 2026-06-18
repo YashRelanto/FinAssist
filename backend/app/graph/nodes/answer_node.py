@@ -29,7 +29,6 @@ from app.graph.state import AgentState
 from app.utils.prompts import (
     ANSWER_VIZ_SYSTEM,
     ANSWER_KNOWLEDGE_SYSTEM,
-    FINASSIST_SYSTEM_PROMPT,
     GOAL_PLAN_SYSTEM,
     GOAL_PLAN_SUMMARY_SYSTEM,
     CHART_CAPTION_SYSTEM,

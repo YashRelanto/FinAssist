@@ -59,6 +59,7 @@ def _parse_amount(v: Any) -> Optional[float]:
 
 
 def _months_from_timeline(timeline: Any) -> Optional[float]:
+    """Default is months"""
     if timeline is None:
         return None
     if isinstance(timeline, (int, float)):
@@ -126,7 +127,7 @@ _MONEY_TOKENS = {
 }
 _SKIP_TOKENS = {
     "pct", "percent", "age", "rate", "count", "ratio", "share", "tenure", "observed",
-    "travelers", "month", "months", "year", "years", "timeline", "coverage", "fv",
+    "travelers", "month", "months", "y  ear", "years", "timeline", "coverage", "fv",
 }
 
 
