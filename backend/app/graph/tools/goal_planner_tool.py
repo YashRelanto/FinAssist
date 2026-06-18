@@ -12,7 +12,7 @@ import logging
 import math
 import re
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from app.graph.state import AgentState
@@ -289,6 +289,124 @@ def _fetch_fixed_deposits(user_id: str) -> List[Dict[str, Any]]:
             **m,
         })
     return out
+
+
+def _fd_matches(fd: Dict[str, Any], idx: int, identifiers: List[str]) -> bool:
+    """True if this FD matches ANY user-supplied identifier (fd_id, bank/label substring,
+    or 1-based index). Used to resolve list-style funding selections like 'break only my SBI FD'."""
+    hay = " ".join(str(fd.get(k) or "") for k in ("bank_name", "label", "fd_id")).lower()
+    for ident in identifiers:
+        token = str(ident).strip().lower()
+        if not token:
+            continue
+        if token == str(fd.get("fd_id") or "").lower():
+            return True
+        if token.isdigit() and int(token) == idx:        # 1-based positional reference
+            return True
+        if token in hay or hay and any(w in hay for w in token.split() if len(w) > 2):
+            return True
+    return False
+
+
+def _fd_funding_view(fds: List[Dict[str, Any]], goal_end_date: Optional[date],
+                     selection: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Per-FD funding view evaluated AT THE GOAL'S TIMELINE END, plus whether it is selected for
+    funding under the current `funding_selection`.
+
+    Valuation rule (spec):
+      • FD matures on/before the goal end-date → usable at its FULL maturity value, no penalty
+        (it has simply become cash by the time the goal lands).
+      • FD matures AFTER the goal end-date → to use it you must break it early → usable at the
+        penalised break value, forfeiting `penalty_if_broken` of interest.
+
+    Selection rule (drives what-if): matured-by-end FDs need no breaking, so they are always
+    counted. A still-locked FD counts only when it would be broken:
+      "auto" (default) / "all" → break it;  "none" / "matured_only" → leave it;
+      list of identifiers → break only the FDs that match (bank/label/fd_id/index).
+    """
+    break_fds = selection.get("break_fds", "auto")
+    identifiers = break_fds if isinstance(break_fds, list) else []
+    out: List[Dict[str, Any]] = []
+    for idx, fd in enumerate(fds, start=1):
+        maturity = _parse_date(fd.get("maturity_date"))
+        matures_by_end = bool(fd.get("matured")) or bool(
+            maturity and goal_end_date and maturity <= goal_end_date
+        )
+        if matures_by_end:
+            usable = round(float(fd.get("maturity_value") or 0.0), 2)
+            penalty = 0.0
+            selected = True
+        else:
+            usable = round(float(fd.get("break_value") or 0.0), 2)
+            penalty = round(float(fd.get("break_cost") or 0.0), 2)
+            if identifiers:
+                selected = _fd_matches(fd, idx, identifiers)
+            else:
+                selected = break_fds in ("auto", "all")
+        out.append({
+            **fd,
+            "matures_by_goal_end": matures_by_end,
+            "usable_value": usable,
+            "penalty_if_broken": penalty,
+            "selected": selected,
+        })
+    return out
+
+
+def _resolve_funding_selection(goal: Dict[str, Any], task: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build the effective funding selection that drives _deployable / _funding_sources.
+
+    Precedence: defaults → text-fallback parsing of the goal/sub-question (generalises the old
+    `deploy_all` keyword detection) → the brain's EXPLICIT `goal.funding_selection` (wins).
+    The brain is the primary path; the text fallback only fills gaps when the brain omits a field.
+    """
+    sel: Dict[str, Any] = {
+        "bank_use_pct": round((1.0 - _BANK_RETAIN_FRAC) * 100.0, 1),   # keep 10% by default
+        "bank_use_amount": None,
+        "use_liquid_funds": True,
+        "break_fds": "auto",
+    }
+
+    txt = " ".join(str(goal.get(k) or "") for k in
+                   ("funding", "financing_preference", "loan_preference", "description")).lower()
+    txt += " " + str(task.get("sub_question") or "").lower()
+
+    # "use everything / all my money" → deploy 100% of bank cash and break every FD.
+    if "everything" in txt or ("all" in txt and any(w in txt for w in ("money", "fund", "saving", "cash"))):
+        sel["bank_use_pct"] = 100.0
+        sel["break_fds"] = "all"
+    # "don't break / without breaking / keep my FDs" → never break (matured-by-end still usable).
+    if re.search(r"(don'?t|do not|without|never|no need to|keep|leave)\s+\w*\s*break", txt) \
+            or "without breaking" in txt or ("keep" in txt and ("fd" in txt or "deposit" in txt)):
+        sel["break_fds"] = "none"
+    elif "break" in txt and ("fd" in txt or "deposit" in txt):
+        only_m = re.search(r"break\s+(?:only\s+)?(?:my\s+|the\s+|a\s+)?([a-z][a-z ]*?)\s*(?:fd|fixed deposit)", txt)
+        name = (only_m.group(1).strip() if only_m else "")
+        for filler in ("my ", "the ", "a ", "only "):
+            name = name.replace(filler, "")
+        if "only" in txt and name and name not in ("my", "the", "a"):
+            sel["break_fds"] = [name]
+        else:
+            sel["break_fds"] = "all"
+    # Bank cash fraction: "half my bank cash" / "use 50% of my savings".
+    if re.search(r"half\s+(?:of\s+)?(?:my\s+|the\s+)?(?:bank|saving|cash|balance)", txt):
+        sel["bank_use_pct"] = 50.0
+    pct_m = re.search(r"(\d{1,3})\s*%\s*(?:of\s+)?(?:my\s+|the\s+)?(?:bank|saving|cash|balance)", txt)
+    if pct_m:
+        sel["bank_use_pct"] = float(pct_m.group(1))
+
+    # Brain's explicit structured selection wins over the text fallback.
+    raw = goal.get("funding_selection")
+    if isinstance(raw, dict):
+        for k in ("bank_use_pct", "bank_use_amount", "use_liquid_funds", "break_fds"):
+            if raw.get(k) is not None:
+                sel[k] = raw[k]
+
+    if sel["break_fds"] == "matured_only":          # alias — only matured-by-end FDs, never break
+        sel["break_fds"] = "none"
+    return sel
 
 
 # Mutual-fund name tokens that indicate a readily-redeemable (near-cash) holding.
@@ -625,6 +743,8 @@ def _inv_emi(emi_budget: float, annual_rate_pct: float, tenure_months: int) -> f
 
 _CAP_UTIL = 0.70   # only ask the user to commit ~70% of their realistic monthly surplus to a goal,
                    # never all of it — a lifestyle cushion stays untouched (realistic affordability)
+_BANK_RETAIN_FRAC = 0.10   # by default keep 10% of idle bank cash untouched; the other 90% is
+                           # deployable toward the goal (the user may override to use 100%).
 _SAVINGS_RETURN_PCT = 7.0   # expected p.a. return for cash goals >12 months (debt/hybrid MF)
 _RETURN_MIN_MONTHS = 12     # only assume growth for goals longer than this
 _TARGET_FLOOR_FRAC = 0.5   # if a goal can only be financed below this fraction of what the user
@@ -639,66 +759,94 @@ def _max_stretch_months(user_months: int) -> int:
     return min(max(user_months + 3, math.ceil(user_months * 1.5)), 360)
 
 
+def _funding_components(agg: dict) -> tuple:
+    """(bank_surplus, near_cash, fd_value) deployable under the resolved `funding_selection`."""
+    sel = agg.get("funding_selection") or {}
+    liquid = agg.get("total_current_balance") or 0.0
+    # Keep 10% of idle bank cash by default (bank_use_pct = 90); the user may override to 100%.
+    pct = float(sel.get("bank_use_pct", (1.0 - _BANK_RETAIN_FRAC) * 100.0))
+    bank_surplus = max(0.0, liquid * pct / 100.0)
+    cap = sel.get("bank_use_amount")
+    if cap is not None:
+        bank_surplus = min(bank_surplus, max(0.0, float(cap)))
+    near_cash = (agg.get("liquid_fund_value") or 0.0) if sel.get("use_liquid_funds", True) else 0.0
+    # FDs contribute their usable value AT THE GOAL END only when selected (matured-by-end FDs are
+    # always selected; still-locked FDs only if the selection says to break them).
+    fd_value = sum(f.get("usable_value") or 0.0
+                   for f in (agg.get("fd_funding_view") or []) if f.get("selected"))
+    return round(bank_surplus, 2), round(near_cash, 2), round(fd_value, 2)
+
+
 def _deployable(agg: dict) -> float:
     """
     Funds that can genuinely seed a goal, drawn from THREE sources (see `_funding_sources`):
-      1. idle bank cash, keeping a 3-month emergency buffer;
+      1. idle bank cash, keeping 10% in the account by default (overridable per what-if);
       2. liquid / debt mutual funds (redeemable in ~1 day) — near-cash;
-      3. fixed deposits, at their net break value (after the premature-withdrawal penalty).
+      3. fixed deposits, valued AT THE GOAL'S TIMELINE END — at full maturity value if they
+         mature by then, otherwise at their net break value (premature-withdrawal penalty).
     The scenario builders only ever draw the amount a goal actually needs (lump = min(need, avail)),
     so surfacing the full pool here lets FDs + liquid funds influence EVERY goal without forcing
     their use on goals that don't need them.
     """
-    liquid = agg.get("total_current_balance") or 0.0
-    # Keep a 3-month emergency buffer by default; drop it if the user explicitly said to use it all.
-    buffer = 0.0 if agg.get("deploy_all") else 3 * (agg.get("monthly_avg_spend") or 0.0)
-    bank_surplus = max(0.0, liquid - buffer)
-    near_cash = agg.get("liquid_fund_value") or 0.0
-    fd_breakable = agg.get("fd_breakable_value") or 0.0
-    return round(bank_surplus + near_cash + fd_breakable, 2)
+    bank_surplus, near_cash, fd_value = _funding_components(agg)
+    return round(bank_surplus + near_cash + fd_value, 2)
 
 
 def _funding_sources(agg: dict) -> Dict[str, Any]:
     """
     Breakdown of EVERY asset and whether it can seed the goal — so the answer is transparent about
     what is used AND justifies what is NOT (e.g. equity kept invested, no liquid funds on record).
+    FD entries distinguish ones that MATURE by the goal date (usable in full, no penalty) from ones
+    that must be BROKEN early (penalty), and respect the user's funding selection.
     """
-    liquid = agg.get("total_current_balance") or 0.0
-    buffer = 0.0 if agg.get("deploy_all") else 3 * (agg.get("monthly_avg_spend") or 0.0)
-    bank_surplus = round(max(0.0, liquid - buffer), 2)
-    near_cash = round(agg.get("liquid_fund_value") or 0.0, 2)
-    fd_breakable = round(agg.get("fd_breakable_value") or 0.0, 2)
+    sel = agg.get("funding_selection") or {}
+    bank_surplus, near_cash, fd_value = _funding_components(agg)
     portfolio = round(agg.get("portfolio_value") or 0.0, 2)
-    equity_other = round(max(0.0, portfolio - near_cash), 2)  # non-liquid investments (kept invested)
+    equity_other = round(max(0.0, portfolio - (agg.get("liquid_fund_value") or 0.0)), 2)  # kept invested
 
     # Name the exact bank accounts that hold the idle cash (largest first) so the answer can say
     # precisely which account to draw from.
     bank_accounts = [{"name": a.get("name"), "balance": round(float(a.get("balance") or 0), 2)}
                      for a in (agg.get("liquid_accounts") or []) if (a.get("balance") or 0) > 0]
-    buffer_note = ("using your FULL balance, no emergency buffer kept (as you asked)"
-                   if agg.get("deploy_all") else "after keeping a 3-month expense buffer")
+    bank_pct = float(sel.get("bank_use_pct", (1.0 - _BANK_RETAIN_FRAC) * 100.0))
+    keep_pct = max(0.0, round(100.0 - bank_pct, 1))
+    buffer_note = ("using your FULL balance, nothing kept aside (as you asked)"
+                   if bank_pct >= 100.0 else f"keeping {keep_pct:.0f}% in your accounts")
     reasons: List[str] = []
     if bank_surplus > 0:
         named_banks = ", ".join(f"{a['name']} ({_inr(a['balance'])})" for a in bank_accounts) or "your bank account"
         reasons.append(f"Bank savings: {_inr(bank_surplus)} can be set aside now ({buffer_note}) from {named_banks}.")
     else:
-        reasons.append("Bank savings: nothing spare after keeping a 3-month emergency buffer.")
-    reasons.append(
-        f"Liquid/debt funds: {_inr(near_cash)} available (near-cash, used first)."
-        if near_cash > 0 else
-        "Liquid/debt funds: none on record, so none used."
-    )
-    fds = agg.get("fd_list") or []
-    if fd_breakable > 0 and fds:
-        named = "; ".join(
-            f"{(f.get('bank_name') or f.get('label') or 'FD')} FD of {_inr(f.get('principal_amount'))} "
-            f"(~{_inr(f.get('break_value'))} if broken now)"
-            for f in fds
-        )
-        reasons.append(f"Fixed deposits that can be utilised (breaking early, small penalty): {named}.")
-    elif fd_breakable > 0:
-        reasons.append(f"Fixed deposits: {_inr(fd_breakable)} could be freed by breaking them early (a small interest penalty applies).")
+        reasons.append("Bank savings: nothing applied (after keeping your chosen cash cushion).")
+    if not sel.get("use_liquid_funds", True):
+        reasons.append("Liquid/debt funds: left untouched as you asked.")
     else:
+        reasons.append(
+            f"Liquid/debt funds: {_inr(near_cash)} available (near-cash, used first)."
+            if near_cash > 0 else
+            "Liquid/debt funds: none on record, so none used."
+        )
+
+    view = agg.get("fd_funding_view") or []
+    matured_used = [f for f in view if f.get("selected") and f.get("matures_by_goal_end")]
+    broken_used  = [f for f in view if f.get("selected") and not f.get("matures_by_goal_end")]
+    kept_locked  = [f for f in view if not f.get("selected")]
+
+    def _fd_name(f):
+        return (f.get("bank_name") or f.get("label") or "FD")
+    if matured_used:
+        named = "; ".join(f"{_fd_name(f)} FD ({_inr(f.get('usable_value'))} at maturity)" for f in matured_used)
+        reasons.append(f"Fixed deposits maturing by your goal date — usable in full, no penalty: {named}.")
+    if broken_used:
+        named = "; ".join(
+            f"{_fd_name(f)} FD ({_inr(f.get('usable_value'))} if broken now, forfeiting {_inr(f.get('penalty_if_broken'))})"
+            for f in broken_used
+        )
+        reasons.append(f"Fixed deposits broken early (small interest penalty applies): {named}.")
+    if kept_locked:
+        named = "; ".join(f"{_fd_name(f)} FD" for f in kept_locked)
+        reasons.append(f"Fixed deposits left intact (not matured by your goal date and not broken): {named}.")
+    if not view:
         reasons.append("Fixed deposits: none on record.")
     if equity_other > 0:
         reasons.append(
@@ -708,12 +856,14 @@ def _funding_sources(agg: dict) -> Dict[str, Any]:
     return {
         "from_bank_savings": bank_surplus,
         "from_liquid_funds": near_cash,
-        "from_fixed_deposits": fd_breakable,
-        "deployable_total": round(bank_surplus + near_cash + fd_breakable, 2),
+        "from_fixed_deposits": fd_value,
+        "deployable_total": round(bank_surplus + near_cash + fd_value, 2),
         "equity_or_other_not_counted": equity_other,
-        "requires_breaking_fd": fd_breakable > 0,
+        "requires_breaking_fd": bool(broken_used),
         "bank_accounts": bank_accounts,                 # which accounts hold the idle cash
-        "fixed_deposits": agg.get("fd_list") or [],     # which FDs (named) can be deployed
+        "bank_use_pct": round(bank_pct, 1),
+        "fixed_deposits": view,                          # per-FD funding view (named, with selection)
+        "funding_selection": sel,                        # the resolved selection that produced this
         "explanation": reasons,
     }
 
@@ -1503,16 +1653,11 @@ def goal_planner_tool(state: AgentState) -> dict:
     agg["total_current_balance"] = balance_info["liquid_balance"]
     agg["liquid_accounts"]       = balance_info.get("liquid_accounts") or []
 
-    # Honour an EXPLICIT "deploy everything / break my FDs / put all my money in" instruction:
-    # when present we drop the 3-month bank buffer so the full asset pool can fund the goal.
-    _ftxt = " ".join(str(goal.get(k) or "") for k in
-                     ("funding", "financing_preference", "loan_preference", "description")).lower()
-    _ftxt += " " + str(task.get("sub_question") or "").lower()
-    agg["deploy_all"] = (
-        ("all" in _ftxt and any(w in _ftxt for w in ("money", "fund", "saving")))
-        or "everything" in _ftxt
-        or ("break" in _ftxt and "fd" in _ftxt)
-    )
+    # Resolve the funding selection that drives every funding decision: how much idle bank cash to
+    # deploy (keep 10% by default), whether to use liquid funds, and which FDs to break. The brain
+    # may pass an explicit `goal.funding_selection` for what-ifs ("break only my SBI FD", "use half
+    # my bank cash"); otherwise it is inferred from the goal/sub-question text.
+    agg["funding_selection"] = _resolve_funding_selection(goal, task)
 
     # Spending reduction opportunities — computed BEFORE the planner so scenario C can use the
     # total potential cut to build an "accelerated" feasible plan.
@@ -1526,10 +1671,20 @@ def goal_planner_tool(state: AgentState) -> dict:
     # can draw on them as a genuine funding source. We never ask the user for these figures.
     inv_data = _extract_investment_data(evidence) or _fetch_investment_holdings(user_id)
     fds = _fetch_fixed_deposits(user_id)
+
+    # Evaluate each FD AT THE GOAL'S TIMELINE END: matured-by-then FDs are usable in full (no
+    # penalty); still-locked FDs are usable only at their penalised break value, and only if the
+    # funding selection chooses to break them. Fall back to a 12-month horizon if no timeline given.
+    _goal_months  = _months_from_timeline(goal.get("timeline")) or 12.0
+    goal_end_date = date.today() + timedelta(days=int(round(_goal_months * 30.44)))
+    fd_view = _fd_funding_view(fds, goal_end_date, agg["funding_selection"])
+
     agg["portfolio_value"]    = round(float((inv_data or {}).get("total_current") or 0.0), 2)
     agg["liquid_fund_value"]  = _liquid_fund_value(inv_data)                     # near-cash MFs
     agg["fd_current_value"]   = round(sum(f.get("current_value") or 0.0 for f in fds), 2)  # held-to-maturity
     agg["fd_breakable_value"] = round(sum(f.get("break_value") or 0.0 for f in fds), 2)    # net if broken now
+    agg["fd_funding_view"]    = fd_view                                         # per-FD value at goal end + selection
+    agg["goal_end_date"]      = goal_end_date.isoformat()
     agg["fd_list"]            = fds                                              # for naming sources by bank
 
     # Run type-specific planner
@@ -1544,13 +1699,18 @@ def goal_planner_tool(state: AgentState) -> dict:
     # Where the deployable seed money comes from (bank cash / liquid funds / breakable FDs) — so
     # the answer is transparent that some funding may require breaking an FD.
     extra["funding_sources"] = _funding_sources(agg)
+    extra["funding_selection_applied"] = agg["funding_selection"]
     if fds:
-        extra["fixed_deposits"] = fds
+        extra["fixed_deposits"] = fd_view              # per-FD value at goal end + selection
         extra["fixed_deposits_summary"] = {
             "count": len(fds),
             "total_current_value": agg["fd_current_value"],
             "total_break_value": agg["fd_breakable_value"],
             "total_maturity_value": round(sum(f.get("maturity_value") or 0.0 for f in fds), 2),
+            "matured_by_goal_end_count": sum(1 for f in fd_view if f.get("matures_by_goal_end")),
+            "selected_usable_value": round(sum(f.get("usable_value") or 0.0
+                                               for f in fd_view if f.get("selected")), 2),
+            "goal_end_date": agg["goal_end_date"],
         }
 
     # Investment liquidity check — uses the portfolio fetched above.

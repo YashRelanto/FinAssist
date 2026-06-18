@@ -119,6 +119,18 @@ When the user expresses a financial goal, purchase intent, or savings target:
    • multi_goal      : for EACH sub-goal that is missing details, ask them; also ask about
                        priority ordering if not stated
 5. Populate task.goal fully from the clarification answers before calling goal_planner.
+6. FUNDING WHAT-IFS. goal_planner already considers, BY DEFAULT, deploying 90% of idle bank cash
+   (keeping 10%), liquid/debt funds, and breaking FDs that don't mature by the goal date. When the
+   user constrains HOW their assets are used — "break only my SBI FD", "don't touch my FDs", "use
+   half my bank cash", "use everything" — set task.goal.funding_selection and route to goal_planner
+   (carry the goal from history). Shape (include only the keys the user constrained):
+     "funding_selection": {
+       "bank_use_pct": 90,          // % of idle bank cash to deploy (100 = use it all)
+       "bank_use_amount": null,     // OR a hard ₹ cap
+       "use_liquid_funds": true,    // false = leave liquid/debt MFs untouched
+       "break_fds": "auto"          // "auto"|"all"|"none"|"matured_only" OR a list of FD
+                                    //   references to break, e.g. ["SBI"] or ["fd_id123"]
+     }
 
 OUTPUT — return ONLY this JSON object (no markdown):
 {
@@ -146,7 +158,8 @@ OUTPUT — return ONLY this JSON object (no markdown):
       "monthly_retirement_expenses": null,
       "target_months_coverage": null,
       "loan_preference": null,
-      "sub_goals": null
+      "sub_goals": null,
+      "funding_selection": null
     }
   },
   "reasoning": "one short sentence"
@@ -495,12 +508,15 @@ scenario's own `_inr` strings — NEVER recompute or multiply any figure yoursel
 - **Funding sources:** ALWAYS account for every asset, naming the SPECIFIC source — never a vague
   "from existing funds". State where the deployed lump comes from, naming each:
   • Bank cash — name each account in `funding_sources.bank_accounts` with its amount (e.g.
-    "₹1,50,000 from HDFC Savings (₹1,20,000) + ICICI Savings (₹30,000)").
-  • Fixed deposits — name each FD in `funding_sources.fixed_deposits` by bank + amount when broken.
+    "₹1,50,000 from HDFC Savings (₹1,20,000) + ICICI Savings (₹30,000)"). By default 90% of idle
+    cash is deployed and 10% kept in the account — say which (funding_sources.bank_use_pct).
+  • Fixed deposits — for each FD in `funding_sources.fixed_deposits`: if `matures_by_goal_end` is
+    true, it MATURES by the goal date and is usable IN FULL with NO penalty (use usable_value_inr);
+    if false and `selected`, it is BROKEN EARLY — say so and state the forfeited interest
+    (penalty_if_broken_inr). Name FDs left intact (not matured, not broken).
   • Liquid/debt funds — the amount used (from_liquid_funds_inr).
   AND explicitly justify any asset NOT used: liquid funds none available, equity/other investments
-  (equity_or_other_not_counted_inr) kept invested, or an FD left intact. If FD money is used
-  (`requires_breaking_fd` true), say it requires breaking that FD early and forfeiting some interest.
+  (equity_or_other_not_counted_inr) kept invested, or an FD left intact.
   Use `funding_sources.explanation` as the source of truth. Never silently ignore an asset.
 - **If target_out_of_reach is true:** lead by stating the requested target can't be financed in the
   timeframe; present the recommended scenario as the realistic ceiling; then give honest levers —
@@ -661,13 +677,16 @@ cuts is contradictory). When it IS needed:
 **Funding** — state EXPLICITLY where every rupee of the upfront/deployed money comes from, naming
 the SPECIFIC sources from `funding_sources` (not vague phrases):
 - Bank cash: name each account from `funding_sources.bank_accounts` with its amount — e.g. "₹1,50,000
-  set aside from HDFC Savings (₹1,20,000) and ICICI Savings (₹30,000)".
-- Fixed deposits: name each FD from `funding_sources.fixed_deposits` by bank + amount if it is being
-  broken — e.g. "breaking your Kotak FD of ₹1,08,000 (~₹1,09,824 now, small penalty)".
+  set aside from HDFC Savings (₹1,20,000) and ICICI Savings (₹30,000)". By default 10% of idle cash
+  is kept in the account (funding_sources.bank_use_pct shows how much is deployed).
+- Fixed deposits (`funding_sources.fixed_deposits`): if an FD's `matures_by_goal_end` is true, it
+  matures by your goal date and is used in full with NO penalty (usable_value_inr). If false and
+  `selected`, it is broken early — say so and name the penalty (penalty_if_broken_inr), e.g.
+  "breaking your Kotak FD frees ₹1,09,824 now (small ₹2,000 penalty)".
 - Liquid/debt funds: state the amount used (from_liquid_funds_inr) if any.
-- Also justify what is NOT used (equity_or_other_not_counted_inr kept invested, an FD left intact,
-  no liquid funds on record). Use `funding_sources.explanation` as the source of truth. Never give a
-  vague "from existing funds" — always say which account / which FD.
+- Also justify what is NOT used (equity_or_other_not_counted_inr kept invested, an FD left intact
+  because it isn't matured and you chose not to break it, no liquid funds on record). Use
+  `funding_sources.explanation` as the source of truth. Never give a vague "from existing funds".
 
 **Assumptions** — 2-4 bullets stating the assumptions the numbers rest on, pulled from the data's
 `note` and scenario fields, e.g.: loan interest rate & tenure; expected investment return
@@ -747,6 +766,8 @@ SAFETY GUARDRAILS:
 3. Always end with: "Please verify current rates and eligibility at the relevant institution before proceeding."
 4. Keep it tight: 2-4 short paragraphs. A compact bullet list is allowed ONLY for the risk-metrics
    one-liners; everything else stays conversational (no markdown headers).
+
+- Make use of good bullet points so that response is not overloaded with sentences.
 """
 
 INVESTMENT_ANALYSIS_USER = """\

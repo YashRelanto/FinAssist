@@ -1498,7 +1498,7 @@ async def get_user_investments(current_user: dict = Depends(get_current_user)):
             try:
                 url = f"https://api.mfapi.in/mf/{code}"
                 req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req) as response:
+                with urllib.request.urlopen(req, timeout=8) as response:
                     parsed = json.loads(response.read().decode())
                     scheme_data_cache[code] = parsed
             except Exception as e:
@@ -1550,6 +1550,11 @@ async def get_user_investments(current_user: dict = Depends(get_current_user)):
         for code, h in holdings_map.items():
             if h["qty"] > 0:
                 h["avg_nav"] = h["invested"] / h["qty"]
+                # If the live NAV couldn't be fetched (e.g. a just-added scheme or a transient
+                # mfapi miss), fall back to the average purchase NAV so the holding shows a neutral
+                # P&L — NOT a spurious total loss (current_value would otherwise be 0).
+                if h["current_nav"] <= 0:
+                    h["current_nav"] = h["avg_nav"]
                 h["current_value"] = h["qty"] * h["current_nav"]
                 h["gain"] = h["current_value"] - h["invested"]
                 h["gain_percent"] = (h["gain"] / h["invested"] * 100) if h["invested"] > 0 else 0
@@ -1663,7 +1668,10 @@ async def get_user_investments(current_user: dict = Depends(get_current_user)):
                 nav_list = scheme_data_cache[code].get("data", [])
                 if nav_list:
                     c_nav = float(nav_list[0]["nav"])
-            
+            # Live NAV unavailable → fall back to this purchase's NAV (neutral P&L, no fake loss).
+            if c_nav <= 0:
+                c_nav = float(inv["purchase_nav"])
+
             enriched_transactions.append({
                 "investment_id": inv["investment_id"],
                 "user_id": inv["user_id"],

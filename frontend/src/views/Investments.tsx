@@ -594,16 +594,16 @@ export const Investments: React.FC = () => {
                         <td className="px-6 py-5 text-sm text-right font-black text-on-surface">₹{h.current_nav.toFixed(4)}</td>
                         <td className="px-6 py-5 text-sm text-right font-black">
                           <div className="flex flex-col items-end">
-                            <span className={cn("font-bold text-sm", h.gain >= 0 ? "text-secondary" : "text-error")}>
+                            <span className={cn("font-bold text-sm", h.gain >= 0 ? "text-emerald-700" : "text-error")}>
                               {h.gain >= 0 ? `+${formatCurrency(h.gain)}` : `-${formatCurrency(Math.abs(h.gain))}`}
                             </span>
-                            <span className={cn("text-[9px] font-black uppercase flex items-center gap-0.5 mt-0.5", h.gain >= 0 ? "text-secondary" : "text-error")}>
+                            <span className={cn("text-[9px] font-black uppercase flex items-center gap-0.5 mt-0.5", h.gain >= 0 ? "text-emerald-700" : "text-error")}>
                               {h.gain >= 0 ? <ArrowUpRight className="w-2.5 h-2.5" /> : <ArrowDownRight className="w-2.5 h-2.5" />}
                               {Math.abs(h.gain_percent).toFixed(2)}%
                             </span>
                           </div>
                         </td>
-                        <td className={cn("px-6 py-5 text-sm text-right font-black", h.day_pnl >= 0 ? "text-secondary" : "text-error")}>
+                        <td className={cn("px-6 py-5 text-sm text-right font-black", h.day_pnl >= 0 ? "text-emerald-700" : "text-error")}>
                           {h.day_pnl >= 0 ? `+₹${h.day_pnl.toFixed(2)}` : `-₹${Math.abs(h.day_pnl).toFixed(2)}`}
                         </td>
                         <td className="px-6 py-5 text-right font-bold">
@@ -654,7 +654,7 @@ export const Investments: React.FC = () => {
                                           <td className="px-5 py-3 text-xs text-right text-outline">₹{txn.current_nav.toFixed(4)}</td>
                                           <td className="px-5 py-3 text-xs text-right font-medium">₹{tInvested.toFixed(2)}</td>
                                           <td className="px-5 py-3 text-xs text-right font-semibold text-on-surface">₹{tCurrent.toFixed(2)}</td>
-                                          <td className={cn("px-5 py-3 text-xs text-right font-black", tGain >= 0 ? "text-secondary" : "text-error")}>
+                                          <td className={cn("px-5 py-3 text-xs text-right font-black", tGain >= 0 ? "text-emerald-700" : "text-error")}>
                                             ₹{tGain.toFixed(2)} ({tGainPct.toFixed(1)}%)
                                           </td>
                                           <td className="px-5 py-3 text-center">
