@@ -379,9 +379,15 @@ async def get_dashboard_summary(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/account-hub-analysis")
-async def get_account_hub_analysis(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["user_id"]
+def _build_spending_analytics_response(
+    user_id: str,
+    *,
+    period: str,
+    account_id: str | None,
+    category_id: str | None,
+    merchant: str | None,
+) -> dict:
+    """Shared spending-analytics payload builder (category trends, merchants, behavior)."""
     if not user_id or not user_id.strip():
         raise HTTPException(status_code=400, detail="user_id is required")
     try:
@@ -436,6 +442,42 @@ async def get_account_hub_analysis(current_user: dict = Depends(get_current_user
         tab_error("analytics", "spending-analytics failed user=%s: %s", mask_user_id(user_id), e)
         print(f"Error in spending-analytics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/spending-analytics")
+async def get_spending_analytics(
+    user_id: str,
+    period: str = "3m",
+    account_id: str | None = None,
+    category_id: str | None = None,
+    merchant: str | None = None,
+):
+    """Spending analytics for the Analytics/Forecasting view (category trends, merchants, behaviour)."""
+    return _build_spending_analytics_response(
+        user_id,
+        period=period,
+        account_id=account_id,
+        category_id=category_id,
+        merchant=merchant,
+    )
+
+
+@router.get("/account-hub-analysis")
+async def get_account_hub_analysis(
+    period: str = "3m",
+    account_id: str | None = None,
+    category_id: str | None = None,
+    merchant: str | None = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """JWT-authenticated alias of spending-analytics used by the account hub."""
+    return _build_spending_analytics_response(
+        current_user["user_id"],
+        period=period,
+        account_id=account_id,
+        category_id=category_id,
+        merchant=merchant,
+    )
 
 
 @router.get("/financial-insights")

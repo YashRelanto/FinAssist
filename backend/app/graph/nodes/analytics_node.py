@@ -32,6 +32,8 @@ def analytics_node(state: AgentState) -> dict:
             "evidence": [{
                 "tool": "nl2sql",
                 "task": sub_question,
+                "entities": resolved_entities,
+                "analysis_type": analysis_type,
                 "summary": "Query returned no rows.",
                 "data": {"rows": [], "analytics": {"status": "no_data"},
                          "sql_error": state.get("sql_error")},
@@ -60,6 +62,8 @@ def analytics_node(state: AgentState) -> dict:
             "analytics_results": analytics_results,
             "evidence": [{
                 "tool": "nl2sql", "task": sub_question,
+                "entities": resolved_entities,
+                "analysis_type": analysis_type,
                 "summary": f"Comparison: A=₹{sum_a:,.2f} vs B=₹{sum_b:,.2f} ({pct_change:+.1f}%).",
                 "data": {"rows": sql_results, "analytics": analytics_results},
             }],
@@ -256,6 +260,8 @@ def analytics_node(state: AgentState) -> dict:
         "evidence": [{
             "tool": "nl2sql",
             "task": sub_question,
+            "entities": resolved_entities,
+            "analysis_type": analysis_type,
             "summary": summary,
             "data": {"rows": sql_results[:100], "analytics": analytics_results},
         }],

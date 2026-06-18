@@ -48,7 +48,7 @@ def _format_profile(profile: Dict[str, Any]) -> str:
 
 def _format_history(messages: List[Any], limit: int = 8) -> str:
     lines = []
-    for m in messages[-(limit + 1):-1]:  # exclude the latest (passed separately)
+    for m in messages[-(limit + 1):-1]:  # exclude the latest (passed separately) (index 9 is the latest query)
         role = "User" if isinstance(m, HumanMessage) or m.__class__.__name__ == "HumanMessage" else "Assistant"
         lines.append(f"{role}: {m.content}")
     return "\n".join(lines) if lines else "None."
@@ -58,6 +58,32 @@ def _format_evidence(evidence: List[Dict[str, Any]]) -> str:
     if not evidence:
         return "None yet."
     return "\n".join(f"- [{e.get('tool')}] {e.get('summary')}" for e in evidence)
+
+
+def _nl2sql_signature(task: Dict[str, Any]) -> str:
+    """
+    Stable identity of an nl2sql request, used to detect a duplicate query even when the
+    supervisor LLM rephrases the free-text sub_question between iterations. Built from the
+    fields that define WHAT data is fetched (resolved categories/merchants, transaction type,
+    grouping, analysis type) and deliberately ignores noisy values like date-range wording or
+    metric synonyms ("total" vs "amount") that the routing model varies run-to-run.
+    """
+    entities = (task or {}).get("entities") or {}
+
+    def _norm_list(value: Any) -> str:
+        if not value:
+            return ""
+        items = value if isinstance(value, (list, tuple)) else [value]
+        return ",".join(sorted(str(i).strip().lower() for i in items if i is not None))
+
+    parts = [
+        "cat:" + _norm_list(entities.get("category_ids") or entities.get("categories")),
+        "mer:" + _norm_list(entities.get("merchants")),
+        "type:" + str(entities.get("transaction_type") or "").strip().lower(),
+        "grp:" + str(entities.get("group_by") or "").strip().lower(),
+        "an:" + str((task or {}).get("analysis_type") or "").strip().lower(),
+    ]
+    return "|".join(parts)
 
 
 def _format_clarifications(clarifs: List[Dict[str, str]]) -> str:
@@ -165,9 +191,9 @@ def _classify_clarification(q: str) -> str:
     if "down payment" in q or ("down" in q and "pay" in q):
         return "down_payment_pct"
     if any(kw in q for kw in ("timeline", "timeframe", "time frame", "how long",
-                              "by when", "when do", "how soon", "duration")):
+                              "by when", "when do", "how soon", "duration", "within")):
         return "timeline"
-    if "financ" in q or ("cash" in q and "loan" in q):
+    if "finance" in q or ("cash" in q and "loan" in q):
         return "financing_preference"
     if any(kw in q for kw in ("saved", "saving", "set aside", "already have")):
         return "existing_savings"
@@ -194,8 +220,8 @@ def _backfill_goal_from_clarifs(task: Dict[str, Any], clarifs: List[Dict[str, st
     SKIP = {"skip", "no", "none", "n/a", "na", "not sure", "idk", ""}
 
     for c in clarifs:
-        q = c.get("q", "").lower()
-        a = str(c.get("a", "")).strip()
+        q = c.get("q", "").lower() # question
+        a = str(c.get("a", "")).strip() # answer
         if a.lower() in SKIP:
             # An explicit "no savings" answer still means existing_savings = 0.
             if _classify_clarification(q) == "existing_savings":
@@ -259,17 +285,16 @@ def brain_node(state: AgentState) -> dict:
         logger.info("[brain] iter=%d goal_planner already ran -> finish (no LLM call)", iteration)
         return {"next_action": "finish", "brain_task": state.get("brain_task") or {}, "iterations": iteration}
 
-    # Short-circuit: a single successful nl2sql answer to a BASIC data question is terminal.
-    # Re-invoking the supervisor LLM (a ~40s call) only to re-run the same query — or to finally
-    # decide "finish" — wastes time and can DUPLICATE the query when the model rephrases the
-    # sub-question (defeating the exact-match repeat guard below). Mirror the goal_planner
-    # short-circuit: once basic nl2sql has returned data with no error, finish with no LLM call.
-    _prev_task = state.get("brain_task") or {}
-    if str(_prev_task.get("analysis_type") or "").lower() == "basic":
-        _nl_evs = [e for e in (state.get("evidence") or []) if e.get("tool") == "nl2sql"]
-        if _nl_evs and not ((_nl_evs[-1].get("data") or {}).get("sql_error")):
-            logger.info("[brain] iter=%d basic nl2sql already answered -> finish (no LLM call)", iteration)
-            return {"next_action": "finish", "brain_task": _prev_task, "iterations": iteration}
+    # Short-circuit: a successful nl2sql data query is terminal. The downstream analytics_node
+    # derives the full result (period totals, trend, breakdown, comparison) from the returned
+    # rows in a SINGLE pass, so re-invoking the supervisor LLM (a slow call) only risks
+    # DUPLICATING the query when the model rephrases the sub-question — which slips past the
+    # exact-match repeat guard below and can return inconsistent totals. Once any nl2sql has
+    # returned data with no error, finish with no LLM call (mirrors the goal_planner short-circuit).
+    _nl_evs = [e for e in (state.get("evidence") or []) if e.get("tool") == "nl2sql"]
+    if _nl_evs and not ((_nl_evs[-1].get("data") or {}).get("sql_error")):
+        logger.info("[brain] iter=%d nl2sql already answered -> finish (no LLM call)", iteration)
+        return {"next_action": "finish", "brain_task": state.get("brain_task") or {}, "iterations": iteration}
 
     # First decision pass — no clarifications gathered yet this turn.
     decision = _decide(state, [], iteration)
@@ -354,7 +379,27 @@ def brain_node(state: AgentState) -> dict:
     elif action == "nl2sql":
         nl2sql_evs = [e for e in evidence if e.get("tool") == "nl2sql"]
         sub_q = (task.get("sub_question") or "").strip().lower()
-        repeated = any(str(e.get("task") or "").strip().lower() == sub_q for e in nl2sql_evs)
+        # Match on the resolved entity signature as well as the exact sub_question text: the
+        # routing LLM rephrases the sub_question between passes, so exact-text matching alone
+        # lets the SAME logical query run twice (with different LIMIT/order → inconsistent
+        # totals). The signature dedup only applies when the request actually names entities,
+        # to avoid collapsing two distinct entity-less queries.
+        new_sig = _nl2sql_signature(task)
+        ents = task.get("entities") or {}
+        sig_meaningful = bool(
+            ents.get("categories") or ents.get("category_ids")
+            or ents.get("merchants") or ents.get("transaction_type")
+        )
+        repeated = any(
+            str(e.get("task") or "").strip().lower() == sub_q
+            or (
+                sig_meaningful
+                and _nl2sql_signature(
+                    {"entities": e.get("entities") or {}, "analysis_type": e.get("analysis_type")}
+                ) == new_sig
+            )
+            for e in nl2sql_evs
+        )
         if repeated or len(nl2sql_evs) >= 4:
             logger.info("[brain] iter=%d nl2sql cap/repeat -> finish", iteration)
             action = "finish"

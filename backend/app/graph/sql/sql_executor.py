@@ -5,6 +5,7 @@ SQL Executor — Executes validated SQL against Supabase database.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Dict, Any, List
 
 from app.graph.state import AgentState
@@ -15,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 # Columns that live on the joined `categories` table, not on `transactions`.
 _CATEGORY_COLUMNS = {"main_category", "sub_category"}
+# Detect aggregate expressions (SUM/COUNT/AVG/MIN/MAX) in AST select columns.
+_AGGREGATE_RE = re.compile(r"\b(sum|count|avg|min|max)\s*\(", re.IGNORECASE)
+# Safety cap on raw rows fetched for an aggregation query the fallback must group in Python.
+_AGGREGATION_ROW_CAP = 5000
 _categories_cache: List[Dict[str, Any]] | None = None
 
 
@@ -151,9 +156,19 @@ def run_query_builder_fallback(ast: Dict[str, Any], user_id: str) -> List[Dict[s
         direction = str(o.get("direction", "DESC")).upper().strip()
         query = query.order(col, desc=(direction == "DESC"))
 
-    # Limit
+    # Limit.
+    # When the AST aggregates (GROUP BY, or a SUM/COUNT/AVG/MIN/MAX column), its LIMIT applies
+    # to the GROUPED output. PostgREST here cannot GROUP, so the downstream analytics_node
+    # aggregates the raw rows instead — applying the AST's small LIMIT to raw rows would truncate
+    # the set (and, combined with a different order_by, return a DIFFERENT subset each run →
+    # inconsistent totals). For aggregation queries fetch the full matching set under a safety cap.
+    is_aggregation = bool(ast.get("group_by")) or any(
+        _AGGREGATE_RE.search(str(c)) for c in (ast.get("columns") or [])
+    )
     limit_val = ast.get("limit")
-    if limit_val is not None:
+    if is_aggregation:
+        query = query.limit(_AGGREGATION_ROW_CAP)
+    elif limit_val is not None:
         query = query.limit(limit_val)
     else:
         query = query.limit(50)
