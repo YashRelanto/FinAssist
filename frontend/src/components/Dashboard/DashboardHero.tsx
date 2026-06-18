@@ -487,14 +487,11 @@ export const FinancialHealthCard: React.FC<FinancialHealthCardProps> = ({
             </div>
           </div>
 
-          <div className="rounded-xl border border-emerald-solid/25 bg-emerald-tint/20 p-3 space-y-2">
+          <div className="rounded-xl border border-lumio-line/40 bg-white/40 p-3 space-y-2">
             <div className="flex justify-between items-start gap-3">
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-lumio-text flex items-center">
                   Lifestyle Buffer
-                  <span className="ml-1.5 text-[9px] font-bold uppercase tracking-wider text-emerald-solid">
-                    Recommended
-                  </span>
                   <MetricInfoTip text="Based on what you actually spend each month on average (last 6 months). This shows how long you could keep living the way you do today." />
                 </p>
                 {lifestyleBurn != null && lifestyleBurn > 0 && (
