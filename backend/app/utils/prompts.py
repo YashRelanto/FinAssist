@@ -581,7 +581,8 @@ Goal & Scenario Data (JSON):
    verbatim (e.g. monthly_savings_needed_inr = "₹18,300"). NEVER abbreviate to "lakh"/"crore",
    never write "₹0.18 lakhs", never recompute or rescale.
 2. The recommended option is the scenario whose `recommended` field is TRUE. Lead with it.
-3. PLAIN LANGUAGE, NOT MECHANICS. Do NOT say "deployed idle balance", "the planner", "optimization",
+3. Use good structured bullet points to answer, not sentence heavy paragraphs.
+4. PLAIN LANGUAGE, NOT MECHANICS. Do NOT say "deployed idle balance", "the planner", "optimization",
    or "mathematically optimal". The RECOMMENDED scenario is whichever has `recommended: true` — it
    may be B OR C (NOT always B). Label the scenarios:
    • A = "Your plan" — exactly what you asked for, judged honestly (it may NOT be feasible).
@@ -593,105 +594,66 @@ Goal & Scenario Data (JSON):
    on your budget; the most that fits is ₹Y"). When a scenario is not feasible, say WHY (it needs
    more than you can spare). NEVER write "Recommended (B): not applicable" — just describe the
    recommended scenario by its real figures.
-4. REALISTIC AFFORDABILITY. The numbers already cap the monthly commitment at ~70% of the user's
+5. REALISTIC AFFORDABILITY. The numbers already cap the monthly commitment at ~70% of the user's
    recent surplus (monthly_savings_capacity), leaving a cushion — never tell the user to save their
    ENTIRE surplus. Justify the monthly figure against their actual behaviour: cite the last
    `months_analyzed`-month savings rate (savings_rate_pct) and monthly_net_flow. If a plan needs
    more than monthly_savings_capacity, the extra must come from the spending cuts below — say so.
-5. Credit-card balances are debt — never present them as usable money.
-6. Keep it CONCISE — a clean comparison, not a long report. NO month-by-month action plan, NO
-   portfolio deep-dive, NO financial-snapshot wall of figures, NO long prose. Aim for ~200 words
-   plus the table.
-7. NEVER state a zero or not-applicable figure. Do NOT write "Save ₹0/month", "no EMI", "no monthly
+6. Credit-card balances are debt — never present them as usable money.
+7. Keep it CONCISE — a clean comparison, not a long report. NO month-by-month action plan, NO
+   portfolio deep-dive, NO financial-snapshot wall of figures, NO long prose. Aim for ~150 words
+   plus the table. Do NOT restate in prose what the table already shows — the table IS the
+   comparison; never describe each scenario row again in sentences.
+8. NEVER state a zero or not-applicable figure. Do NOT write "Save ₹0/month", "no EMI", "no monthly
    savings needed" as bullets — just OMIT them. If the plan needs no monthly saving, frame it
    positively in the verdict instead ("with your current savings rate this is achievable from your
    existing funds"). Only surface a number when it is meaningful (> 0).
+9. Explicitly state where the funds come from — never say "from existing funds" without saying WHICH funds. Name the specific accounts and sources like FDs/Liquid funds
 
-━━━ OUTPUT (markdown — emit a section header ONLY when it has real content; skip empty ones) ━━━
-**Verdict line** — one bold line answering "can I afford this?", and it MUST match the recommended
-  scenario honestly:
-  • If the recommended scenario funds your ASKED target in full → "**You can comfortably afford this
-    — here's the plan:**" (or "…it'll be tight…").
-  • If the recommended scenario RIGHT-SIZED the target (its purchase_price < your target_amount) or
-    your own plan (A) is infeasible → do NOT say "comfortably afford this". Say honestly: "**The
-    <target_amount_inr> <asset> you asked for isn't affordable on your budget — here's what works:**"
-    and present the recommended (smaller) plan.
-  • If the recommended plan needs NO monthly saving and NO EMI (covered from existing funds), add
-    "achievable from your existing funds, no monthly saving needed." If `target_out_of_reach` is
-    true, state the honest ceiling (max_financeable_target_inr).
-  Do NOT contradict yourself — the verdict and the "Fits your budget" line must agree.
+━━━ OUTPUT (markdown — concise, ~150 words TOTAL plus the table. Emit a header ONLY when it has
+real content; skip empty ones. Never restate the table in prose.) ━━━
+**Verdict** — ONE bold line answering "can I afford this?", matching the recommended scenario honestly:
+  • Funds your ASKED target in full → "**You can comfortably afford this — here's the plan:**" (or "…it'll be tight…").
+  • Right-sized (recommended purchase_price < target_amount) or your plan (A) infeasible → "**The
+    <target_amount_inr> <asset> you asked for isn't affordable on your budget — here's what works:**".
+  • Covered from existing funds (no monthly saving, no EMI) → add "achievable from your existing
+    funds, no monthly saving needed". If `target_out_of_reach`, state the ceiling (max_financeable_target_inr).
 
-**Recommended** — 2-4 tight bullets for the scenario with `recommended: true` (whichever tag),
-  INCLUDING ONLY the ones that apply:
-- **Save:** ONLY if monthly_savings_needed > 0 → monthly_savings_needed_inr/month for timeline_months
-  months. If it is 0, DROP this bullet entirely (the verdict already states it's covered).
-- **EMI:** ONLY if there is a loan (estimated_emi > 0) → estimated_emi_inr/month after purchase, over
-  the loan term (education: starts after the study moratorium). Drop entirely for full-cash plans.
-- **Upfront:** down_payment_amount_inr (one line — do NOT break down where each rupee came from).
-- **Fits your budget:** one phrase tying the actual commitment to the monthly surplus (comfortable / tight).
+**Recommended plan** — 2-4 tight bullets for the `recommended: true` scenario; include ONLY the ones
+that apply (NEVER a ₹0 line — omit it):
+- **Save:** monthly_savings_needed_inr/month for timeline_months months (only if > 0).
+- **EMI:** estimated_emi_inr/month after purchase, over the loan term (only if a loan; education: after the study moratorium).
+- **Upfront:** down_payment_amount_inr (one line — do NOT break down per-rupee here; that's the Funding section).
+- **Fits your budget:** one short phrase (comfortable / tight) — over the last months_analyzed months
+  you saved ~savings_rate_pct% (monthly_net_flow_inr/mo), so this stays within monthly_savings_capacity_inr/mo.
 
-**Your options** — FIRST explain the three scenarios in 3 short bullets, stating exactly WHAT each
-is and its BUDGET (copy each scenario's own purchase_price_inr / target_amount_inr and key figures):
-- **Your plan (A):** the <purchase_price_inr> <asset> you asked for, using your deployed assets —
-  say whether it's feasible and, if not, why. IF A is infeasible because the EMI is too high
-  (A's `emi_fits_base_surplus` is false) AND you still have spare funds
-  (funding_sources.deployable_total exceeds A's down payment), ACTIVELY SUGGEST raising the down
-  payment with those available funds (deployable_total_inr) to shrink the loan and bring the EMI
-  down — note the Recommended plan does exactly this.
-- **Recommended (✅, the scenario with recommended: true):** describe its real figures — a
-  <purchase_price_inr> <asset> with its down payment, timeline and EMI; mention ONLY the figures that
-  apply (skip a ₹0 monthly saving or ₹0 EMI). If it right-sized the price, say so.
-- **Alternative:** the remaining scenario — a <purchase_price_inr> <asset> with its key figures, and
-  how it trades off vs the recommended one.
-THEN a compact GitHub-flavoured markdown comparison table (header row + `| --- |` separator row,
-preceded by a blank line). EVERY money cell MUST be the scenario's verbatim `_inr` STRING — copy it
-character-for-character, NEVER hand-format or regroup a raw number (this is where ×10 errors creep
-in). Column → field mapping:
-  Price = purchase_price_inr · Down Pmt = down_payment_amount_inr · Monthly saving =
-  monthly_savings_needed_inr · EMI after buy = estimated_emi_inr · Total cost =
-  total_cost_of_ownership_inr · Timeline = timeline_months + " months" · Feasible = ✅/❌ from `feasible`.
-Columns (drop Down Pmt + EMI for non-loan goals):
+**Options** — a compact GitHub-flavoured markdown table (blank line before it; header + `| --- |` row).
+EVERY money cell = the scenario's verbatim `_inr` STRING (copy character-for-character, NEVER regroup
+a raw number — this is where ×10 errors creep in). Mapping: Price=purchase_price_inr ·
+Down Pmt=down_payment_amount_inr · Monthly saving=monthly_savings_needed_inr · EMI after buy=
+estimated_emi_inr · Total cost=total_cost_of_ownership_inr · Timeline=timeline_months+" months" ·
+Feasible=✅/❌ from `feasible`. Drop Down Pmt + EMI columns for non-loan goals.
 | Option | Price | Down Pmt | Timeline | Monthly saving | EMI after buy | Total cost | Feasible |
-Mark the recommended row with ✅.
+Rows: A = Your plan; the `recommended: true` row marked ✅ = Recommended; the third = Alternative.
+Then AT MOST ONE line on the key trade-off — do NOT re-describe each row in sentences.
 
-**Can you afford it?** — ONE line grounding the plan in real behaviour: "Over the last
-`months_analyzed` months you saved about savings_rate_pct% of income (monthly_net_flow_inr/month),
-so we keep this plan within monthly_savings_capacity_inr/month and leave the rest as a cushion."
+**Funding** — where the upfront money comes from, ONE terse bullet per source (no multi-line examples):
+- Bank cash: name each account in `funding_sources.bank_accounts` with its amount (10% kept aside by
+  default; funding_sources.bank_use_pct = % deployed).
+- FDs (`funding_sources.fixed_deposits`): if `matures_by_goal_end` → used in full, no penalty
+  (usable_value_inr); else if `selected` → broken early, name the penalty (penalty_if_broken_inr).
+- Liquid/debt funds: amount used (from_liquid_funds_inr) if any.
+- One short clause on what's left untouched (equity_or_other_not_counted_inr kept invested, or an FD
+  left intact). Never say a vague "from existing funds".
 
-**Where the money comes from** — INCLUDE THIS SECTION ONLY IF the recommended scenario's
-`monthly_savings_needed` is greater than 0 AND exceeds `monthly_savings_capacity`. If the
-recommended monthly saving is ₹0 (e.g. an education loan repaid from future income, or a plan fully
-covered by deployed funds) or already fits within `monthly_savings_capacity`, then OMIT this section
-ENTIRELY — do NOT mention spending cuts at all (there is nothing to fund by trimming, so suggesting
-cuts is contradictory). When it IS needed:
-  • OPEN with the explicit gap: "This plan asks you to save monthly_savings_needed_inr/month — more
-    than the ~monthly_savings_capacity_inr/month you comfortably save today, so here's how to check
-    your spending to free up the difference:".
-  • THEN use `spending_reduction_opportunities`: for the top 2-3 reducible categories, name the
-    category and its current monthly spend, name the actual discretionary sub-categories from
-    `driven_by` (e.g. "₹7,807/mo on Life & Entertainment — mostly Lottery/Gambling ₹1,479, Sports
-    ₹1,201, which are discretionary"), and the achievable monthly saving. Don't just say "cut
-    spending" — point to the specific luxurious/discretionary sub-categories.
-  • END with the total reclaimable monthly and whether it closes the gap.
+**Free up the difference** — INCLUDE ONLY IF the recommended scenario's monthly_savings_needed > 0
+AND exceeds monthly_savings_capacity; otherwise OMIT this section ENTIRELY (no spending-cut talk).
+When needed: ONE line stating the gap, then the top 2 categories from `spending_reduction_opportunities`
+— name the category, its monthly spend, the discretionary sub-categories from `driven_by`, and the
+achievable saving — then the total reclaimable.
 
-**Funding** — state EXPLICITLY where every rupee of the upfront/deployed money comes from, naming
-the SPECIFIC sources from `funding_sources` (not vague phrases):
-- Bank cash: name each account from `funding_sources.bank_accounts` with its amount — e.g. "₹1,50,000
-  set aside from HDFC Savings (₹1,20,000) and ICICI Savings (₹30,000)". By default 10% of idle cash
-  is kept in the account (funding_sources.bank_use_pct shows how much is deployed).
-- Fixed deposits (`funding_sources.fixed_deposits`): if an FD's `matures_by_goal_end` is true, it
-  matures by your goal date and is used in full with NO penalty (usable_value_inr). If false and
-  `selected`, it is broken early — say so and name the penalty (penalty_if_broken_inr), e.g.
-  "breaking your Kotak FD frees ₹1,09,824 now (small ₹2,000 penalty)".
-- Liquid/debt funds: state the amount used (from_liquid_funds_inr) if any.
-- Also justify what is NOT used (equity_or_other_not_counted_inr kept invested, an FD left intact
-  because it isn't matured and you chose not to break it, no liquid funds on record). Use
-  `funding_sources.explanation` as the source of truth. Never give a vague "from existing funds".
-
-**Assumptions** — 2-4 bullets stating the assumptions the numbers rest on, pulled from the data's
-`note` and scenario fields, e.g.: loan interest rate & tenure; expected investment return
-(assumed_annual_return_pct) for savings goals; stamp-duty % for a house; 4% withdrawal + inflation
-for retirement/FIRE. Be explicit so the user can judge the scenarios.
+**Assumptions** — 1-2 short bullets from the data's `note`/scenario fields (loan rate & tenure;
+assumed_annual_return_pct; stamp-duty %; 4% rule + inflation).
 
 End with EXACTLY this italic line:
 *Want the full breakdown — total interest, spending cuts, and a month-by-month plan? Just ask for the detailed calculations.*\

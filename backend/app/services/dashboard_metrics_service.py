@@ -1114,10 +1114,18 @@ def compute_overall_financial_health(
     profile_income: float = 0.0,
     profile_fixed_rent: float = 0.0,
     profile_fixed_emi: float = 0.0,
+    liquid_funds_value: float = 0.0,
+    fixed_deposits_value: float = 0.0,
     reference: datetime | None = None,
     user_id: str | None = None,
 ) -> dict[str, Any]:
-    """Period-independent health score using trailing 6-month average spend."""
+    """Period-independent health score using trailing 6-month average spend.
+
+    The liquid balance that drives the emergency-buffer pillar combines spendable bank cash with
+    near-cash investments: `liquid_funds_value` (liquid/debt mutual funds, redeemable in ~1 day) and
+    `fixed_deposits_value` (FDs at their accessible-now value — break value net of penalty, or full
+    value once matured). Both default to 0 so callers that don't track those assets are unaffected.
+    """
     ref = reference or datetime.now()
 
     monthly_income = float(profile_income or 0)
@@ -1133,7 +1141,7 @@ def compute_overall_financial_health(
         reference=ref,
     )
     lifestyle_burn = compute_avg_monthly_expense(transactions, reference=ref)
-    liquid_balance = round(
+    bank_balance = round(
         sum(
             float(acc.get("current_balance") or 0)
             for acc in accounts
@@ -1141,6 +1149,10 @@ def compute_overall_financial_health(
         ),
         2,
     )
+    # Near-cash investments extend the emergency runway alongside bank cash.
+    liquid_funds_value = round(max(0.0, float(liquid_funds_value or 0)), 2)
+    fixed_deposits_value = round(max(0.0, float(fixed_deposits_value or 0)), 2)
+    liquid_balance = round(bank_balance + liquid_funds_value + fixed_deposits_value, 2)
     net_savings = round(monthly_income - lifestyle_burn, 2)
     savings_rate = (
         round((net_savings / monthly_income) * 100, 1) if monthly_income > 0 else 0.0
@@ -1159,11 +1171,18 @@ def compute_overall_financial_health(
     score_breakdown: dict[str, float] = {}
     health = compute_financial_health(summary, accounts, score_breakdown_out=score_breakdown)
 
+    # Surface what the liquid balance is composed of, so the UI / insights can explain the runway.
+    health["liquid_breakdown"] = {
+        "bank_balance": bank_balance,
+        "liquid_funds": liquid_funds_value,
+        "fixed_deposits": fixed_deposits_value,
+    }
+
     tab_info(
         "dashboard",
         "financial health user=%s tx=%d score=%s label=%s income=%.0f commitments=%.0f "
-        "survival_burn=%.0f lifestyle_burn=%.0f liquid=%.0f survival_buffer=%s "
-        "lifestyle_buffer=%s breakdown=%s",
+        "survival_burn=%.0f lifestyle_burn=%.0f liquid=%.0f (bank=%.0f funds=%.0f fd=%.0f) "
+        "survival_buffer=%s lifestyle_buffer=%s breakdown=%s",
         mask_user_id(user_id),
         len(transactions),
         health["score"],
@@ -1173,6 +1192,9 @@ def compute_overall_financial_health(
         survival_burn,
         lifestyle_burn,
         liquid_balance,
+        bank_balance,
+        liquid_funds_value,
+        fixed_deposits_value,
         health.get("survival_buffer_months"),
         health.get("lifestyle_buffer_months"),
         score_breakdown,

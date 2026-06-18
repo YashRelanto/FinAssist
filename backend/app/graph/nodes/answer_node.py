@@ -357,7 +357,10 @@ def answer_node(state: AgentState) -> dict:
                 max_tokens = 1400
             else:
                 system_prompt = GOAL_PLAN_SUMMARY_SYSTEM.format(context_text=ctx, **fields)
-                max_tokens = 700
+                # Headroom for the funding section, which now names each FD (maturity vs. broken-
+                # early + penalty) and each bank account — a rich profile overran the old 700 cap
+                # and got truncated mid-sentence. Still below the detailed view's 1400.
+                max_tokens = 1100
 
             completion = graph_chat_completion(
                 node="answer_node", purpose="goal_plan", model=settings.active_chat_model,
@@ -366,6 +369,11 @@ def answer_node(state: AgentState) -> dict:
                 max_tokens=max_tokens, temperature=0.15,
             )
             answer = completion.choices[0].message.content.strip()
+            # Guard against silent mid-sentence truncation: surface a length cut rather than
+            # emitting a half-finished answer unnoticed (the symptom that hid the 700-token cap).
+            if getattr(completion.choices[0], "finish_reason", None) == "length":
+                logger.warning("[answer_node] goal_plan answer hit the %d-token cap and was "
+                               "truncated (detailed=%s, goal_type=%s)", max_tokens, detailed, goal_type)
             _attach_chart_captions(artifacts, g)
 
         # ── Investment ──

@@ -622,12 +622,28 @@ async def get_financial_health_insights(user_id: str, llm: str | None = None):
         )
         profile = prof_res.data[0] if prof_res.data else {}
 
+        # Near-cash assets that extend the emergency runway, valued consistently with the goal
+        # planner: liquid/debt mutual funds (redeemable in ~1 day) and FDs at their accessible-now
+        # value (break value net of penalty; matured FDs at full value).
+        from app.graph.tools.goal_planner_tool import (
+            _fetch_fixed_deposits,
+            _fetch_investment_holdings,
+            _liquid_fund_value,
+        )
+
+        liquid_funds_value = _liquid_fund_value(_fetch_investment_holdings(user_id))
+        fixed_deposits_value = round(
+            sum(float(fd.get("break_value") or 0) for fd in _fetch_fixed_deposits(user_id)), 2
+        )
+
         health = compute_overall_financial_health(
             accounts=accounts,
             transactions=transactions,
             profile_income=float(profile.get("income") or 0),
             profile_fixed_rent=float(profile.get("fixed_rent") or 0),
             profile_fixed_emi=float(profile.get("fixed_emi") or 0),
+            liquid_funds_value=liquid_funds_value,
+            fixed_deposits_value=fixed_deposits_value,
             user_id=user_id,
         )
 

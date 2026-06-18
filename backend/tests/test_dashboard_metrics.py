@@ -360,6 +360,59 @@ def test_compute_financial_health_score():
     assert health["monthly_commitments_pct"] == 25.0
 
 
+def test_overall_financial_health_includes_liquid_funds_and_fds():
+    from app.services.dashboard_metrics_service import compute_overall_financial_health
+
+    accounts = [{"account_type": "savings", "current_balance": 60000}]
+    # 120000 expense averaged over the trailing 6 months → lifestyle burn 20000/month.
+    transactions = [
+        {"transaction_date": "2026-06-05", "amount": 120000, "transaction_type": "expense"},
+    ]
+    kwargs = dict(
+        accounts=accounts,
+        transactions=transactions,
+        profile_income=100000,
+        reference=datetime(2026, 6, 30),
+    )
+
+    bank_only = compute_overall_financial_health(**kwargs)
+    with_assets = compute_overall_financial_health(
+        liquid_funds_value=30000, fixed_deposits_value=30000, **kwargs
+    )
+
+    # Liquid balance + breakdown now combine bank cash with near-cash investments.
+    assert bank_only["total_liquid_balance"] == 60000.0
+    assert with_assets["total_liquid_balance"] == 120000.0
+    assert with_assets["liquid_breakdown"] == {
+        "bank_balance": 60000.0,
+        "liquid_funds": 30000.0,
+        "fixed_deposits": 30000.0,
+    }
+    # Adding near-cash assets extends the emergency runway (3 → 6 months here) and never
+    # lowers the score.
+    assert bank_only["lifestyle_buffer_months"] == 3.0
+    assert with_assets["lifestyle_buffer_months"] == 6.0
+    assert with_assets["score"] >= bank_only["score"]
+
+
+def test_overall_financial_health_defaults_to_bank_only():
+    from app.services.dashboard_metrics_service import compute_overall_financial_health
+
+    health = compute_overall_financial_health(
+        accounts=[{"account_type": "savings", "current_balance": 40000}],
+        transactions=[{"transaction_date": "2026-06-05", "amount": 60000, "transaction_type": "expense"}],
+        profile_income=50000,
+        reference=datetime(2026, 6, 30),
+    )
+    # No near-cash assets passed → breakdown shows bank only, totals unchanged.
+    assert health["liquid_breakdown"] == {
+        "bank_balance": 40000.0,
+        "liquid_funds": 0.0,
+        "fixed_deposits": 0.0,
+    }
+    assert health["total_liquid_balance"] == 40000.0
+
+
 def test_compute_monthly_recurring_obligations():
     from app.services.dashboard_metrics_service import compute_monthly_recurring_obligations
 
