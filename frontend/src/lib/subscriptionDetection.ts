@@ -35,66 +35,73 @@ function matchKnownSubscription(merchant: string): string | null {
   return null;
 }
 
-function daysBetween(a: string, b: string): number {
-  const da = new Date(`${a}T00:00:00`);
-  const db = new Date(`${b}T00:00:00`);
-  return Math.abs((db.getTime() - da.getTime()) / (1000 * 60 * 60 * 24));
+function recurringAmountToMonthly(amount: number, period?: string | null, skips?: number): number {
+  const step = Math.max(1, (skips ?? 0) + 1);
+  const key = (period || 'monthly').toLowerCase();
+  if (key === 'daily') return amount * (30 / step);
+  if (key === 'weekly') return amount * (52 / 12 / step);
+  if (key === 'yearly') return amount / (12 * step);
+  return amount / step;
 }
 
-function isRecurringMonthly(amounts: number[], dates: string[]): boolean {
-  if (amounts.length < 2 || dates.length < 2) return false;
-  const avg = amounts.reduce((s, v) => s + v, 0) / amounts.length;
-  const amountConsistent = amounts.every((a) => Math.abs(a - avg) / avg <= 0.15);
-  if (!amountConsistent) return false;
-
-  const sortedDates = [...dates].sort();
-  const gaps: number[] = [];
-  for (let i = 1; i < sortedDates.length; i++) {
-    gaps.push(daysBetween(sortedDates[i - 1], sortedDates[i]));
-  }
-  const monthlyGaps = gaps.filter((g) => g >= 25 && g <= 35);
-  return monthlyGaps.length >= 1;
-}
-
-/** Detect subscriptions from expense transactions using known brands + recurring patterns. */
+/** Detect OTT / platform subscriptions from expense transactions (keyword match only). */
 export function detectSubscriptions(transactions: Transaction[]): DetectedSubscription[] {
   const expenses = transactions.filter((t) => t.type === 'expense' && Math.abs(t.amount) > 0);
-  const byMerchant = new Map<string, { amounts: number[]; dates: string[] }>();
+
+  type Group = {
+    merchant: string;
+    displayName: string;
+    amounts: number[];
+    dates: string[];
+    hasRecurringFlag: boolean;
+  };
+
+  const bySubscription = new Map<string, Group>();
 
   for (const t of expenses) {
     const merchant = (t.merchant || '').trim();
     if (!merchant) continue;
-    const key = merchant.toLowerCase();
-    const entry = byMerchant.get(key) ?? { amounts: [], dates: [] };
-    entry.amounts.push(Math.abs(t.amount));
+
+    const displayName = matchKnownSubscription(merchant);
+    if (!displayName) continue;
+
+    const key = displayName.toLowerCase();
+    const entry = bySubscription.get(key) ?? {
+      merchant,
+      displayName,
+      amounts: [],
+      dates: [],
+      hasRecurringFlag: false,
+    };
+
+    const amount = Math.abs(t.amount);
+    if (t.is_recurring) {
+      entry.amounts.push(
+        recurringAmountToMonthly(amount, t.recurrence_period, t.recurrence_skips),
+      );
+      entry.hasRecurringFlag = true;
+    } else {
+      entry.amounts.push(amount);
+    }
     entry.dates.push(t.date);
-    byMerchant.set(key, entry);
+    bySubscription.set(key, entry);
   }
 
   const results: DetectedSubscription[] = [];
-  const seen = new Set<string>();
 
-  for (const [key, data] of byMerchant) {
-    const merchant = expenses.find((t) => t.merchant.toLowerCase() === key)?.merchant ?? key;
-    const known = matchKnownSubscription(merchant);
-    const recurring = isRecurringMonthly(data.amounts, data.dates);
-    if (!known && !recurring) continue;
-
-    const displayName = known ?? merchant;
-    const dedupeKey = displayName.toLowerCase();
-    if (seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
-
-    const avgAmount = data.amounts.reduce((s, v) => s + v, 0) / data.amounts.length;
-    const lastDate = [...data.dates].sort().pop() ?? '';
+  for (const group of bySubscription.values()) {
+    const monthlyAmount = Math.round(
+      group.amounts.reduce((s, v) => s + v, 0) / group.amounts.length,
+    );
+    const lastDate = [...group.dates].sort().pop() ?? '';
 
     results.push({
-      merchant,
-      displayName,
-      monthlyAmount: Math.round(avgAmount),
-      occurrences: data.amounts.length,
+      merchant: group.merchant,
+      displayName: group.displayName,
+      monthlyAmount,
+      occurrences: group.amounts.length,
       lastDate,
-      source: known ? 'known' : 'recurring',
+      source: group.hasRecurringFlag ? 'recurring' : 'known',
     });
   }
 

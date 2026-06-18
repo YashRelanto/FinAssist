@@ -301,7 +301,18 @@ export const MonthlySpendTrend: React.FC<MonthlySpendTrendProps> = ({
               <span className="w-6 h-0.5 bg-lumio-black rounded" /> Actual
             </span>
             <span className="flex items-center gap-2">
-              <span className="w-6 h-0.5 border-t-2 border-dashed border-lumio-muted rounded" /> Predicted
+              <svg width="24" height="8" aria-hidden="true" className="shrink-0">
+                <line
+                  x1="0"
+                  y1="4"
+                  x2="24"
+                  y2="4"
+                  stroke="#64748b"
+                  strokeWidth="2"
+                  strokeDasharray="4 3"
+                />
+              </svg>
+              Predicted
             </span>
           </div>
           {!hasSpend && (
@@ -356,7 +367,7 @@ export const FinancialHealthCard: React.FC<FinancialHealthCardProps> = ({
 
   const rows = [
     { label: 'Savings Rate', value: `${savingsRate}%` },
-    { label: 'Debt-to-Income', value: `${debtToIncome}%` },
+    { label: 'Monthly Commitments', value: `${debtToIncome}%` },
     { label: 'Net Savings', value: formatCurrency(netSavings) },
     {
       label: 'Emergency Buffer',

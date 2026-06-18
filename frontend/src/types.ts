@@ -39,6 +39,9 @@ export interface Transaction {
   notes?: string;
   type: 'income' | 'expense';
   runningBalance?: number;
+  is_recurring?: boolean;
+  recurrence_period?: string | null;
+  recurrence_skips?: number;
 }
 
 export interface Goal {

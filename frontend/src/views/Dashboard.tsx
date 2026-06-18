@@ -84,6 +84,8 @@ export const Dashboard: React.FC = () => {
     loadDashboardSummary,
     loadFinancialHealthInsights,
     loadForecast,
+    loadTransactions,
+    refreshAfterTransactionChange,
     dashboardSummaryLoading,
     analysisPeriod,
     setAnalysisPeriod,
@@ -128,6 +130,11 @@ export const Dashboard: React.FC = () => {
     },
     [loadDashboardSummary, loadHealthInsightsPipeline],
   );
+
+  React.useEffect(() => {
+    if (!user?.isAuthenticated) return;
+    void loadTransactions();
+  }, [user?.isAuthenticated, loadTransactions]);
 
   React.useEffect(() => {
     if (!user?.isAuthenticated) return;
@@ -311,7 +318,10 @@ export const Dashboard: React.FC = () => {
       <QuickAddModal
         isOpen={isQuickAddOpen}
         onClose={() => setIsQuickAddOpen(false)}
-        onSuccess={() => void refreshDashboard({ force: true })}
+        onSuccess={() => {
+          refreshAfterTransactionChange();
+          void refreshDashboard({ force: true });
+        }}
         accounts={dashboardSummary?.accounts}
       />
     </PageShell>

@@ -357,4 +357,35 @@ def test_compute_financial_health_score():
     health = compute_financial_health(summary, accounts)
     assert 0 <= health["score"] <= 100
     assert health["debt_to_income_pct"] == 25.0
-    assert health["emergency_buffer_months"] == 6.0
+    assert health["monthly_commitments_pct"] == 25.0
+
+
+def test_compute_monthly_recurring_obligations():
+    from app.services.dashboard_metrics_service import compute_monthly_recurring_obligations
+
+    transactions = [
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 499,
+            "recurrence_period": "monthly",
+            "recurrence_skips": 0,
+            "merchant_name": "Netflix",
+            "categories": {"main_category": "Life & Entertainment"},
+        },
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 1200,
+            "recurrence_period": "weekly",
+            "recurrence_skips": 0,
+            "merchant_name": "Gym",
+            "categories": {"main_category": "Life & Entertainment"},
+        },
+    ]
+    total = compute_monthly_recurring_obligations(
+        transactions,
+        profile_fixed_rent=15000,
+        profile_fixed_emi=5000,
+    )
+    assert total == round(15000 + 5000 + 499 + 1200 * (52 / 12), 2)

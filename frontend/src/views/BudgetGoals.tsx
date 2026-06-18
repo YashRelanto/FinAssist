@@ -111,7 +111,7 @@ export const BudgetGoals: React.FC = () => {
 
   useEffect(() => {
     if (!user?.isAuthenticated) return;
-    const onFocus = () => refreshSummary();
+    const onFocus = () => refreshSummary({ force: true });
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [user?.isAuthenticated, refreshSummary]);

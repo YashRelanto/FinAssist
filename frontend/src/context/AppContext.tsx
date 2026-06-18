@@ -31,7 +31,9 @@ interface AppContextType {
   addTransaction: (t: Omit<Transaction, 'id'>) => void;
   updateTransaction: (id: string, t: Partial<Transaction>, onComplete?: (success: boolean) => void) => void;
   deleteTransaction: (id: string) => void;
-  loadTransactions: () => Promise<void>;
+  loadTransactions: (options?: { force?: boolean }) => Promise<void>;
+  prependTransaction: (t: Transaction) => void;
+  refreshAfterTransactionChange: () => void;
   loadAccounts: (options?: { force?: boolean }) => void;
   loadDbCategories: () => void;
   analysisPeriod: AnalysisPeriod;
@@ -468,14 +470,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => window.removeEventListener('hashchange', handleHashAuth);
   }, []);
 
-  const loadTransactions = useCallback((): Promise<void> => {
+  const loadTransactions = useCallback((options?: { force?: boolean }): Promise<void> => {
     if (!isAuthed || !uid) {
       setTransactions([]);
       return Promise.resolve();
     }
 
     const now = Date.now();
-    if (now - lastLoadedRef.current.transactions < TTL.transactionsMs) {
+    if (options?.force) {
+      lastLoadedRef.current.transactions = 0;
+    }
+    if (!options?.force && now - lastLoadedRef.current.transactions < TTL.transactionsMs) {
       return Promise.resolve();
     }
     if (inflightRef.current.transactions) {
@@ -685,6 +690,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
       const now = Date.now();
+      if (options?.force) {
+        lastLoadedRef.current.budgetGoalsSummary = 0;
+        inflightRef.current.budgetGoalsSummary = undefined;
+      }
       if (!options?.force) {
         if (
           now - lastLoadedRef.current.budgetGoalsSummary < TTL.budgetGoalsSummaryMs
@@ -716,6 +725,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     },
     [isAuthed, uid],
   );
+
+  const refreshAfterTransactionChange = useCallback(() => {
+    lastLoadedRef.current.transactions = 0;
+    lastLoadedRef.current.dashboardSummary = 0;
+    lastLoadedRef.current.budgetGoalsSummary = 0;
+    void loadTransactions({ force: true });
+    void loadDashboardSummary({ force: true });
+    void loadBudgetGoalsSummary({ force: true });
+    invalidateDerivedCaches();
+  }, [loadTransactions, loadDashboardSummary, loadBudgetGoalsSummary]);
 
   const loadForecast = useCallback(
     async (params: {
@@ -948,6 +967,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => window.removeEventListener('focus', onFocus);
   }, [authReady, user.isAuthenticated, refreshUserData]);
 
+  const prependTransaction = (t: Transaction) => {
+    setTransactions((prev) => [t, ...prev]);
+  };
+
   const addTransaction = (t: Omit<Transaction, 'id'>) => {
     if (uid) {
       // Optimistic UI update (instant list refresh).
@@ -978,14 +1001,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
         .then(({ ok }) => {
           if (!ok) throw new Error('Database save failed');
-          // Ensure canonical IDs / ordering from backend.
-          lastLoadedRef.current.transactions = 0;
-          loadTransactions();
-          lastLoadedRef.current.dashboardSummary = 0;
-          void loadDashboardSummary({ force: true });
-          lastLoadedRef.current.budgetGoalsSummary = 0;
-          void loadBudgetGoalsSummary({ force: true });
-          invalidateDerivedCaches();
+          refreshAfterTransactionChange();
         })
         .catch((err) => {
           console.error('Database save failed:', err);
@@ -1036,10 +1052,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
       .then(({ ok, data }) => {
         if (ok && data.success) {
-          loadTransactions();
-          lastLoadedRef.current.dashboardSummary = 0;
-          void loadDashboardSummary({ force: true });
-          invalidateDerivedCaches();
+          refreshAfterTransactionChange();
           onComplete?.(true);
         } else {
           console.error('Failed to update transaction:', data.detail ?? data);
@@ -1060,13 +1073,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .then(data => {
         if (data.success) {
           setTransactions((prev) => prev.filter((t) => t.id !== id));
-          lastLoadedRef.current.transactions = 0;
-          loadTransactions();
-          lastLoadedRef.current.dashboardSummary = 0;
-          void loadDashboardSummary({ force: true });
-          lastLoadedRef.current.budgetGoalsSummary = 0;
-          void loadBudgetGoalsSummary({ force: true });
-          invalidateDerivedCaches();
+          refreshAfterTransactionChange();
         }
       })
       .catch(err => console.error('Failed to delete transaction:', err));
@@ -1259,7 +1266,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         if (response.ok) {
           console.log("Statement successfully uploaded and parsed.");
-          loadTransactions(); // Refetch transactions to update UI immediately
+          refreshAfterTransactionChange();
         } else {
           console.error("Backend failed to parse the statement.");
         }
@@ -1290,7 +1297,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       budgetGoalsSummary,
       analysisPeriod,
       setAnalysisPeriod,
-      addTransaction, updateTransaction, deleteTransaction, loadTransactions,
+      addTransaction, updateTransaction, deleteTransaction, loadTransactions, prependTransaction,
+      refreshAfterTransactionChange,
       loadAccounts,
       loadDbCategories,
       loadDashboardSummary,

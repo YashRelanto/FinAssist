@@ -402,13 +402,21 @@ def compute_savings_trajectory(
     }
 
 
-def format_goals_for_ui(goals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def format_goals_for_ui(
+    goals: list[dict[str, Any]],
+    *,
+    transactions: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     icons = ["Target", "ShieldCheck", "PlaneTakeoff", "Laptop"]
     colors = ["bg-primary", "bg-secondary", "bg-tertiary", "bg-outline"]
+    live_savings = (
+        compute_net_savings(transactions) if transactions is not None else None
+    )
     formatted: list[dict[str, Any]] = []
     for index, goal in enumerate(goals):
         target = float(goal.get("target_amount") or 0)
-        current = float(goal.get("current_amount") or 0)
+        stored_current = float(goal.get("current_amount") or 0)
+        current = live_savings if live_savings is not None else stored_current
         progress_pct = round((current / target) * 100) if target > 0 else 0
         formatted.append(
             {
@@ -433,16 +441,18 @@ def build_budget_goals_payload(
     budgets: list[dict[str, Any]],
     transactions: list[dict[str, Any]],
     goals: list[dict[str, Any]],
+    goal_transactions: list[dict[str, Any]] | None = None,
     reference: datetime | None = None,
 ) -> dict[str, Any]:
     ref = reference or datetime.now()
     trajectory = compute_savings_trajectory(transactions, reference=ref)
+    txs_for_goals = goal_transactions if goal_transactions is not None else transactions
     return {
         "success": True,
         "budget_utilization": compute_budget_utilization(
             budgets, transactions, reference=ref
         ),
-        "goals": format_goals_for_ui(goals),
+        "goals": format_goals_for_ui(goals, transactions=txs_for_goals),
         "trajectory": trajectory,
     }
 
@@ -720,6 +730,63 @@ def detect_spending_anomalies(
     return anomalies[:limit]
 
 
+def _recurring_amount_to_monthly(amount: float, period: str, skips: int) -> float:
+    """Normalize a recurring charge to an approximate monthly obligation."""
+    step = max(1, int(skips or 0) + 1)
+    period_key = (period or "monthly").strip().lower()
+    if period_key == "daily":
+        return amount * (30.0 / step)
+    if period_key == "weekly":
+        return amount * (52.0 / 12.0 / step)
+    if period_key == "yearly":
+        return amount / (12.0 * step)
+    return amount / step
+
+
+def _transaction_main_category(row: dict[str, Any]) -> str:
+    categories = row.get("categories") or {}
+    main = categories.get("main_category") or row.get("main_category") or ""
+    return str(main).strip().lower()
+
+
+def compute_monthly_recurring_obligations(
+    transactions: list[dict[str, Any]],
+    *,
+    profile_fixed_rent: float = 0.0,
+    profile_fixed_emi: float = 0.0,
+) -> float:
+    """Sum profile rent/EMI plus recurring expense transactions (monthly-normalized)."""
+    recurring_monthly = 0.0
+    has_recurring_rent = False
+    has_recurring_emi = False
+
+    for row in transactions:
+        if not row.get("is_recurring"):
+            continue
+        if (row.get("transaction_type") or "").lower() != EXPENSE_TYPE:
+            continue
+
+        amount = abs(float(row.get("amount") or 0))
+        if amount <= 0:
+            continue
+
+        period = row.get("recurrence_period") or "monthly"
+        skips = int(row.get("recurrence_skips") or 0)
+        recurring_monthly += _recurring_amount_to_monthly(amount, period, skips)
+
+        main_cat = _transaction_main_category(row)
+        merchant = str(row.get("merchant_name") or row.get("description") or "").lower()
+        sub_cat = str((row.get("categories") or {}).get("sub_category") or "").lower()
+        if "housing" in main_cat or "rent" in merchant or "rent" in sub_cat:
+            has_recurring_rent = True
+        if "financial" in main_cat or "emi" in merchant or "loan" in merchant or "emi" in sub_cat:
+            has_recurring_emi = True
+
+    profile_rent = float(profile_fixed_rent or 0) if not has_recurring_rent else 0.0
+    profile_emi = float(profile_fixed_emi or 0) if not has_recurring_emi else 0.0
+    return round(profile_rent + profile_emi + recurring_monthly, 2)
+
+
 def _health_label(score: int) -> str:
     if score >= 80:
         return "Excellent"
@@ -793,6 +860,7 @@ def compute_financial_health(
         "label": _health_label(score),
         "savings_rate": savings_rate,
         "debt_to_income_pct": debt_to_income,
+        "monthly_commitments_pct": debt_to_income,
         "net_savings": round(net_savings, 2),
         "emergency_buffer_months": emergency_months,
         "avg_credit_utilization_pct": avg_credit_util,
@@ -812,7 +880,11 @@ def compute_overall_financial_health(
     """Period-independent health score using trailing 6-month average spend."""
     ref = reference or datetime.now()
     ref_date = ref.date() if hasattr(ref, "date") else ref
-    fixed_expense = float(profile_fixed_rent or 0) + float(profile_fixed_emi or 0)
+    fixed_expense = compute_monthly_recurring_obligations(
+        transactions,
+        profile_fixed_rent=profile_fixed_rent,
+        profile_fixed_emi=profile_fixed_emi,
+    )
     monthly_income = float(profile_income or 0)
 
     monthly_stats = aggregate_monthly_stats(transactions)

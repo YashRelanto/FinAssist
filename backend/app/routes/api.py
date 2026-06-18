@@ -262,7 +262,7 @@ async def get_dashboard_summary(
         transactions: list = []
         tx_select = (
             "transaction_id, amount, transaction_type, transaction_date, "
-            "merchant_name, description, "
+            "merchant_name, description, is_recurring, recurrence_period, recurrence_skips, "
             "category_id, categories(main_category, sub_category)"
         )
         page_size = 1000
@@ -521,7 +521,7 @@ async def get_financial_health_insights(user_id: str, llm: str | None = None):
             supabase.table("transactions")
             .select(
                 "transaction_id, amount, transaction_type, transaction_date, "
-                "merchant_name, description, "
+                "merchant_name, description, is_recurring, recurrence_period, recurrence_skips, "
                 "category_id, categories(main_category, sub_category)"
             )
             .eq("user_id", user_id)
@@ -628,7 +628,7 @@ async def get_transactions(user_id: str, start_date: str = None, end_date: str =
             supabase.table("transactions")
             .select(
                 "transaction_id,transaction_date,amount,transaction_type,merchant_name,description,"
-                "account_id,category_id,"
+                "account_id,category_id,is_recurring,recurrence_period,recurrence_skips,"
                 "running_balance,"
                 "categories(main_category,sub_category),"
                 "accounts(account_name)"
@@ -730,9 +730,9 @@ async def get_upcoming_payments(user_id: str):
             step = skips + 1
             current = base_date
             
-            # Find first occurrence that is >= today
+            # Advance past dates on or before today so the next charge is in the future.
             iterations = 0
-            while current < today and iterations < 100:
+            while current <= today and iterations < 100:
                 iterations += 1
                 if period == "daily":
                     current += timedelta(days=step)
@@ -744,10 +744,7 @@ async def get_upcoming_payments(user_id: str):
                     current = add_years(current, step)
                 else:
                     break
-                    
-            if base_date >= today:
-                current = base_date
-                
+
             categories_info = row.get("categories") or {}
             accounts_info = row.get("accounts") or {}
             
@@ -955,6 +952,27 @@ async def get_budget_goals_summary(user_id: str):
             .order("transaction_date")
             .execute()
         )
+        goal_tx_select = "amount, transaction_type"
+        goal_transactions: list = []
+        page_size = 1000
+        offset = 0
+        while True:
+            goal_tx_res = (
+                supabase.table("transactions")
+                .select(goal_tx_select)
+                .eq("user_id", uid)
+                .order("transaction_date")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            batch = goal_tx_res.data or []
+            if not batch:
+                break
+            goal_transactions.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+
         goals_res = (
             supabase.table("goals").select("*").eq("user_id", uid).execute()
         )
@@ -962,6 +980,7 @@ async def get_budget_goals_summary(user_id: str):
             budgets=budgets,
             transactions=trans_response.data or [],
             goals=goals_res.data or [],
+            goal_transactions=goal_transactions,
         )
     except Exception as e:
         print(f"Error fetching budget-goals summary: {e}")
