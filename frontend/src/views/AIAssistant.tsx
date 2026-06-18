@@ -56,14 +56,16 @@ export const AIAssistant: React.FC = () => {
     return response.json();
   };
 
-  const handleSendMessage = async (text: string) => {
+  const handleSendMessage = async (text: string, displayText?: string) => {
     if (!text.trim()) return;
 
     const userMessage: Message = {
       id: Date.now(),
       role: 'user',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      text,
+      // `text` is the raw payload sent to the API (may be a JSON resume payload); `displayText`
+      // is what the user actually sees in the chat bubble (a readable version).
+      text: displayText || text,
       type: 'text',
     };
 
@@ -118,9 +120,14 @@ export const AIAssistant: React.FC = () => {
     );
     setPendingClarificationId(null);
 
-    // Send all answers as a single JSON string to resume the paused graph
+    // Send all answers as a single JSON string to resume the paused graph, but show the user a
+    // readable summary in the chat (not the raw JSON payload).
     const payload = JSON.stringify(answers);
-    await handleSendMessage(payload);
+    const readable = Object.values(answers)
+      .map((v) => String(v).trim())
+      .filter(Boolean)
+      .join(' · ');
+    await handleSendMessage(payload, readable || 'Answers submitted');
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
