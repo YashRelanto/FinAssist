@@ -12,6 +12,13 @@ except ImportError:
     pass
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 class Settings:
     # ── Supabase ──────────────────────────────────────────────────────────────
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
@@ -33,12 +40,19 @@ class Settings:
     # ── NVIDIA NIM ────────────────────────────────────────────────────────────
     LLM_PROVIDER: str = "nvidia"
     NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
-    NVIDIA_CHAT_MODEL: str = os.getenv("NVIDIA_CHAT_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
-    NVIDIA_ACCOUNT_HUB_MODEL: str = os.getenv(
-        "NVIDIA_ACCOUNT_HUB_MODEL",
-        "meta/llama-3.1-70b-instruct",
+    NVIDIA_CHAT_MODEL: str = os.getenv("NVIDIA_CHAT_MODEL")
+    NVIDIA_ANALYTICS_MODEL: str = os.getenv("NVIDIA_ANALYTICS_MODEL", "")
+    NVIDIA_FINANCIAL_HEALTH_MODEL: str = os.getenv(
+        "NVIDIA_FINANCIAL_HEALTH_MODEL", "qwen/qwen3.5-122b-a10b"
     )
     NVIDIA_BASE_URL: str = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
+
+    # config.py
+    active_chat_model: str = "meta/llama-3.3-70b-instruct"
+    brain_model: str = "meta/llama-3.3-70b-instruct"        # 70B for reliable goal routing
+    tool_model: str = "meta/llama-3.3-70b-instruct"         # SQL + answers
+    knowledge_model: str = "meta/llama-3.1-8b-instruct"     # RAG summarisation
+    fast_model: str = "meta/llama-3.1-8b-instruct"          # cheap captions / justifications
 
     @property
     def active_api_key(self) -> str:
@@ -49,12 +63,23 @@ class Settings:
         return self.NVIDIA_CHAT_MODEL
 
     @property
-    def active_base_url(self) -> str:
-        return self.NVIDIA_BASE_URL
+    def analytics_chat_model(self) -> str:
+        """Optional faster model for analytics/insights endpoints."""
+        return (self.NVIDIA_ANALYTICS_MODEL or self.NVIDIA_CHAT_MODEL or "").strip()
 
     @property
-    def account_hub_model(self) -> str:
-        return self.NVIDIA_ACCOUNT_HUB_MODEL
+    def financial_health_chat_model(self) -> str:
+        """Model for financial health score analysis (defaults to Qwen Coder)."""
+        return (
+            self.NVIDIA_FINANCIAL_HEALTH_MODEL
+            or self.NVIDIA_ANALYTICS_MODEL
+            or self.NVIDIA_CHAT_MODEL
+            or ""
+        ).strip()
+
+    @property
+    def active_base_url(self) -> str:
+        return self.NVIDIA_BASE_URL
 
     # ── ChromaDB ──────────────────────────────────────────────────────────────
     CHROMA_DB_PATH: str = os.getenv(
@@ -78,6 +103,22 @@ class Settings:
 
     # Public URL of this API (Edge Function calls POST {url}/api/internal/train-forecast)
     TRAINING_WORKER_URL: str = os.getenv("TRAINING_WORKER_URL", "http://localhost:8000")
+
+    # ── Tab-scoped logging (enable per UI tab) ────────────────────────────────
+    LOG_TAB_ANALYTICS: bool = _env_bool("LOG_TAB_ANALYTICS", True)
+    LOG_TAB_DASHBOARD: bool = _env_bool("LOG_TAB_DASHBOARD", True)
+    LOG_TAB_CHAT: bool = _env_bool("LOG_TAB_CHAT", True)
+    LOG_TAB_FORECASTING: bool = _env_bool("LOG_TAB_FORECASTING", True)
+
+    def is_tab_log_enabled(self, tab: str) -> bool:
+        key = (tab or "").strip().lower()
+        flags = {
+            "analytics": self.LOG_TAB_ANALYTICS,
+            "dashboard": self.LOG_TAB_DASHBOARD,
+            "chat": self.LOG_TAB_CHAT,
+            "forecasting": self.LOG_TAB_FORECASTING,
+        }
+        return flags.get(key, False)
 
 
 settings = Settings()

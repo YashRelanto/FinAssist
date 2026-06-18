@@ -83,3 +83,47 @@ export function isWithinAnalysisWindow(
   if (startDate && d < startDate) return false;
   return d <= endDate;
 }
+
+export type AnomalyItem = {
+  merchant: string;
+  amount: number;
+  [key: string]: unknown;
+};
+
+export type DashboardPeriodSlice = {
+  period?: AnalysisPeriod;
+  period_label?: string;
+  chart_data?: Array<{ name?: string; month?: string; date?: string; expense?: number }>;
+  chart_granularity?: 'daily' | 'monthly';
+  summary?: {
+    net_outflow?: number;
+    expense_change_pct?: number | null;
+    savings_rate?: number;
+    net_savings?: number;
+    monthly_income?: number;
+    fixed_expense?: number;
+    [key: string]: unknown;
+  };
+  expense_breakdown_month?: Array<{ name: string; value: number }>;
+  top_spending?: Array<{ merchant: string; total: number; count?: number }>;
+  spending_anomalies?: AnomalyItem[];
+  financial_health?: Record<string, unknown> | null;
+  predicted_next_month?: number | null;
+  predicted_month_label?: string | null;
+};
+
+export function getDashboardPeriodSlice(
+  dashboardSummary: { period_data?: Partial<Record<AnalysisPeriod, DashboardPeriodSlice>>; period?: AnalysisPeriod } | null,
+  period: AnalysisPeriod,
+): DashboardPeriodSlice | null {
+  if (!dashboardSummary) return null;
+  const slice = dashboardSummary.period_data?.[period];
+  if (slice) return slice;
+  if (!dashboardSummary.period_data && dashboardSummary.period === period) {
+    return dashboardSummary as DashboardPeriodSlice;
+  }
+  if (!dashboardSummary.period_data && !dashboardSummary.period) {
+    return dashboardSummary as DashboardPeriodSlice;
+  }
+  return null;
+}

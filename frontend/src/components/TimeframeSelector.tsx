@@ -11,12 +11,14 @@ interface TimeframeSelectorProps {
   value: AnalysisPeriod;
   onChange: (period: AnalysisPeriod) => void;
   className?: string;
+  tone?: 'light' | 'dark';
 }
 
 export const TimeframeSelector: React.FC<TimeframeSelectorProps> = ({
   value,
   onChange,
   className,
+  tone = 'light',
 }) => {
   const [open, setOpen] = React.useState(false);
   const selected = ANALYSIS_PERIOD_OPTIONS.find((o) => o.value === value);
@@ -26,7 +28,12 @@ export const TimeframeSelector: React.FC<TimeframeSelectorProps> = ({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 text-on-surface-variant hover:text-primary transition-colors font-semibold text-sm px-3 py-2 rounded-xl border border-outline-variant/40 bg-surface-container-low"
+        className={cn(
+          'flex items-center gap-2 transition-colors font-semibold text-sm px-3 py-1.5 rounded-full border',
+          tone === 'dark'
+            ? 'text-page-bg/80 hover:text-page-bg border-page-bg/20 bg-white/5'
+            : 'text-on-surface-variant hover:text-primary border-outline-variant/40 bg-surface-container-low',
+        )}
         aria-haspopup="listbox"
         aria-expanded={open}
       >

@@ -128,7 +128,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
             <button 
               type="button"
               onClick={() => setFormData({...formData, type: 'income'})}
-              className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${formData.type === 'income' ? 'bg-secondary text-white shadow-md' : 'text-outline hover:text-on-surface'}`}
+              className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${formData.type === 'income' ? 'bg-success text-white shadow-md' : 'text-outline hover:text-on-surface'}`}
             >
               Income
             </button>

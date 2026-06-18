@@ -91,8 +91,12 @@ export const Onboarding: React.FC = () => {
 
 
   const handleNext = () => {
-    if (step < totalSteps) setStep(step + 1);
-    else updateUser({ onboarded: true });
+    if (step < totalSteps) {
+      updateUser({}, { syncNow: true });
+      setStep(step + 1);
+    } else {
+      updateUser({ onboarded: true }, { syncNow: true });
+    }
   };
 
   const handleBack = () => {
@@ -344,8 +348,8 @@ export const Onboarding: React.FC = () => {
         />
       )}
 
-      <div className="min-h-screen bg-surface flex items-center justify-center p-4">
-        <div className="w-full max-w-xl bg-surface-container-lowest rounded-3xl shadow-2xl border border-outline-variant/30 overflow-hidden flex flex-col">
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <div className="w-full max-w-xl bento-card !p-0 overflow-hidden flex flex-col">
           {/* Progress Bar */}
           <div className="h-2 bg-surface-container-high flex">
             {Array.from({ length: totalSteps }).map((_, i) => (
@@ -353,7 +357,7 @@ export const Onboarding: React.FC = () => {
                 key={i} 
                 className={cn(
                   "flex-1 h-full transition-all duration-500",
-                  i + 1 <= step ? "bg-primary" : "bg-transparent"
+                  i + 1 <= step ? "bg-lumio-black" : "bg-transparent"
                 )} 
               />
             ))}
@@ -361,8 +365,8 @@ export const Onboarding: React.FC = () => {
 
           <div className="p-10 flex-1">
             <div className="mb-12 flex justify-between items-center text-[10px] font-bold text-outline uppercase tracking-[0.2em]">
-              <span>Step {step} of 5</span>
-              <span className="text-primary tracking-normal font-black">FinAssist Setup</span>
+              <span>Step {step} of {totalSteps}</span>
+              <span className="text-primary tracking-normal font-black">FinAssist AI Setup</span>
             </div>
 
             {/* Upload error banner */}

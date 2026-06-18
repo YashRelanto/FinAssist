@@ -1,23 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { apiFetch } from '../lib/api';
-import { 
-  Building2, 
-  CreditCard, 
-  Wallet, 
-  ShieldCheck, 
-  DollarSign, 
-  Plus, 
-  Trash2, 
-  ArrowLeft, 
-  Loader2, 
+import { createPortal } from 'react-dom';
+import {
+  Building2,
+  CreditCard,
+  Wallet,
+  ShieldCheck,
+  DollarSign,
+  Plus,
+  Trash2,
+  Loader2,
   AlertTriangle,
   History,
   Lock,
-  X
+  X,
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { cn, formatCurrency, CURRENCY_SYMBOL } from '../lib/utils';
 import { AccountModal } from '../components/AccountModal';
+import { PageHeader, PageShell, lumio } from '../components/PageShell';
 
 export const LinkedAccounts: React.FC = () => {
   const { user, accounts, loadAccounts, setCurrentPage } = useAppContext();
@@ -86,26 +87,16 @@ export const LinkedAccounts: React.FC = () => {
   };
 
   return (
-    <div className="max-w-5xl space-y-8 pb-20">
-      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <button 
-            onClick={() => setCurrentPage('settings')}
-            className="flex items-center gap-2 text-xs font-black text-primary uppercase tracking-widest hover:underline mb-2 transition-all active:scale-95"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" /> Back to Settings
+    <PageShell className="max-w-5xl">
+      <PageHeader
+        title="Linked Bank Accounts"
+        description="Manage secure ledger connections, starting balances, and account links."
+        actions={
+          <button type="button" onClick={() => setIsModalOpen(true)} className={lumio.btnPrimary}>
+            <Plus className="w-4 h-4" /> Link Account
           </button>
-          <h2 className="text-3xl font-bold text-on-surface">Linked Bank Accounts</h2>
-          <p className="text-on-surface-variant font-medium text-sm mt-1">Manage secure ledger connections, check starting balances, or delete stale links.</p>
-        </div>
-        
-        <button 
-          onClick={() => setIsModalOpen(true)}
-          className="px-5 py-3 bg-primary text-white font-bold text-xs rounded-xl shadow-lg hover:brightness-110 active:scale-95 transition-all flex items-center justify-center gap-2 shrink-0"
-        >
-          <Plus className="w-4 h-4" /> Link New Account
-        </button>
-      </header>
+        }
+      />
 
       {error && (
         <div className="p-4 bg-error-container/10 border border-error-container/30 text-error text-xs font-bold rounded-2xl flex items-center gap-3">
@@ -183,8 +174,8 @@ export const LinkedAccounts: React.FC = () => {
       )}
 
       {/* Premium Centered Confirmation Modal Popup */}
-      {deleteTarget && (
-        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm transition-all duration-300">
+      {deleteTarget && createPortal(
+        <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4 backdrop-blur-sm transition-all duration-300">
           <div className="bg-surface-container-lowest w-full max-w-md rounded-[28px] shadow-2xl overflow-hidden border border-outline-variant/30 flex flex-col transform transition-all scale-100 p-8 space-y-6">
             <div className="flex flex-col items-center text-center space-y-4">
               <div className="w-16 h-16 bg-error/10 text-error rounded-full flex items-center justify-center animate-bounce">
@@ -224,12 +215,13 @@ export const LinkedAccounts: React.FC = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Account Details Modal */}
-      {selectedAccount && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm transition-all duration-300">
+      {selectedAccount && createPortal(
+        <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4 backdrop-blur-sm transition-all duration-300">
           <div className="bg-surface-container-lowest w-full max-w-lg rounded-[28px] shadow-2xl overflow-hidden border border-outline-variant/30 flex flex-col transform transition-all scale-100">
             <div className="px-8 py-5 border-b border-outline-variant/20 flex justify-between items-center bg-surface-container-low">
               <div>
@@ -305,7 +297,8 @@ export const LinkedAccounts: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       <AccountModal 
@@ -319,6 +312,6 @@ export const LinkedAccounts: React.FC = () => {
           loadAccounts({ force: true });
         }}
       />
-    </div>
+    </PageShell>
   );
 };

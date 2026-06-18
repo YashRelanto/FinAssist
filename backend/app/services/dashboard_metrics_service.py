@@ -8,9 +8,13 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from app.utils.analysis_period import (
+    ALL_DASHBOARD_PERIODS,
+    add_months,
     filter_rows_by_date,
     month_start,
+    normalize_period,
     resolve_analysis_window,
+    sum_expenses_in_window,
 )
 
 INCOME_TYPE = "income"
@@ -485,6 +489,19 @@ def compute_summary_for_window(
     net = net_inflow - net_outflow
     savings_rate = round((net / monthly_income) * 100, 1) if monthly_income > 0 else 0.0
 
+    comp_start = window.get("comparison_start_date")
+    comp_end = window.get("comparison_end_date")
+    comp_expense = (
+        sum_expenses_in_window(rows, start_date=comp_start, end_date=comp_end)
+        if comp_start and comp_end
+        else 0.0
+    )
+    expense_change_pct = (
+        round((expense_tx - comp_expense) / comp_expense * 100)
+        if comp_expense > 0
+        else None
+    )
+
     total_balance = 0.0
     for acc in accounts:
         if (acc.get("account_type") or "").lower() == "credit_card":
@@ -500,24 +517,101 @@ def compute_summary_for_window(
         "net_inflow": round(net_inflow, 2),
         "net_outflow": round(net_outflow, 2),
         "monthly_expenses": round(expense_tx, 2),
+        "expense_change_pct": expense_change_pct,
         "net_savings": round(net, 2),
         "savings_rate": savings_rate,
     }
+
+
+def _calendar_months_in_window(window: dict[str, Any]) -> list[str]:
+    """Every YYYY-MM from window start through end (inclusive), month-aligned."""
+    start_str = window.get("start_date")
+    end_str = (window.get("end_date") or date.today().isoformat())[:10]
+    if not start_str:
+        return []
+    start_dt = datetime.strptime(start_str[:10], "%Y-%m-%d").date()
+    end_dt = datetime.strptime(end_str[:10], "%Y-%m-%d").date()
+    months: list[str] = []
+    cursor = month_start(start_dt)
+    end_month = month_start(end_dt)
+    while cursor <= end_month:
+        months.append(cursor.strftime("%Y-%m"))
+        cursor = add_months(cursor, 1)
+    return months
+
+
+def build_daily_chart_data_for_window(
+    transactions: list[dict[str, Any]],
+    *,
+    window: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Daily expense/income points for each day in a single-month analysis window."""
+    start_str = window.get("start_date")
+    end_str = (window.get("end_date") or date.today().isoformat())[:10]
+    if not start_str:
+        return []
+
+    daily: dict[str, dict[str, float]] = defaultdict(
+        lambda: {"income": 0.0, "expense": 0.0}
+    )
+    for row in filter_rows_by_date(
+        transactions,
+        start_date=start_str,
+        end_date=end_str,
+    ):
+        tx_type = (row.get("transaction_type") or "").lower()
+        if tx_type == TRANSFER_TYPE:
+            continue
+        day = str(row.get("transaction_date") or "")[:10]
+        if not day:
+            continue
+        amount = transaction_amount_value(row.get("amount"), tx_type)
+        if tx_type == INCOME_TYPE:
+            daily[day]["income"] += amount
+        elif tx_type == EXPENSE_TYPE:
+            daily[day]["expense"] += amount
+
+    start_dt = datetime.strptime(start_str[:10], "%Y-%m-%d").date()
+    end_dt = datetime.strptime(end_str[:10], "%Y-%m-%d").date()
+    chart: list[dict[str, Any]] = []
+    cursor = start_dt
+    while cursor <= end_dt:
+        day = cursor.isoformat()
+        stats = daily.get(day, {"income": 0.0, "expense": 0.0})
+        income = stats["income"]
+        expense = stats["expense"]
+        chart.append(
+            {
+                "name": cursor.strftime("%d"),
+                "date": day,
+                "income": income,
+                "expense": expense,
+                "net": income - expense,
+            }
+        )
+        cursor += timedelta(days=1)
+    return chart
 
 
 def build_chart_data_for_window(
     monthly_stats: dict[str, dict[str, float]],
     *,
     window: dict[str, Any],
+    transactions: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Chart bars for each calendar month in the analysis window."""
-    if not monthly_stats:
+    """Expense/income points for the analysis window (daily for 1m, monthly otherwise)."""
+    period = window.get("period", "1m")
+    if period == "1m" and transactions is not None:
+        return build_daily_chart_data_for_window(transactions, window=window)
+
+    if period == "all":
+        months = sorted(monthly_stats.keys()) if monthly_stats else []
+    else:
+        months = _calendar_months_in_window(window)
+
+    if not months:
         return []
-    start = window.get("start_date")
-    end = window.get("end_date") or date.today().isoformat()
-    months = sorted(k for k in monthly_stats if (not start or k >= start[:7]) and k <= end[:7])
-    if window.get("period") == "all":
-        months = sorted(monthly_stats.keys())
+
     chart: list[dict[str, Any]] = []
     for month in months[-12:]:
         stats = monthly_stats.get(month, {"income": 0.0, "expense": 0.0})
@@ -535,8 +629,340 @@ def build_chart_data_for_window(
     return chart
 
 
+def aggregate_top_spending_by_merchant(
+    transactions: list[dict[str, Any]],
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Top merchants by total expense amount within the analysis window."""
+    totals: dict[str, float] = defaultdict(float)
+    counts: dict[str, int] = defaultdict(int)
+    for row in filter_rows_by_date(
+        transactions,
+        start_date=start_date,
+        end_date=end_date,
+    ):
+        if (row.get("transaction_type") or "").lower() != EXPENSE_TYPE:
+            continue
+        merchant = (
+            row.get("merchant_name") or row.get("description") or "Unknown"
+        ).strip() or "Unknown"
+        amount = transaction_amount_value(row.get("amount"), EXPENSE_TYPE)
+        totals[merchant] += amount
+        counts[merchant] += 1
+    return [
+        {
+            "merchant": name,
+            "total": round(amount, 2),
+            "count": counts[name],
+        }
+        for name, amount in sorted(totals.items(), key=lambda item: item[1], reverse=True)[
+            :limit
+        ]
+    ]
+
+
+def detect_spending_anomalies(
+    transactions: list[dict[str, Any]],
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    threshold_ratio: float = 1.5,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Flag expense transactions that exceed the merchant average by a threshold."""
+    merchant_amounts: dict[str, list[float]] = defaultdict(list)
+    window_rows: list[dict[str, Any]] = []
+
+    for row in filter_rows_by_date(
+        transactions,
+        start_date=start_date,
+        end_date=end_date,
+    ):
+        if (row.get("transaction_type") or "").lower() != EXPENSE_TYPE:
+            continue
+        merchant = (
+            row.get("merchant_name") or row.get("description") or "Unknown"
+        ).strip() or "Unknown"
+        amount = transaction_amount_value(row.get("amount"), EXPENSE_TYPE)
+        if amount <= 0:
+            continue
+        merchant_amounts[merchant].append(amount)
+        window_rows.append({"merchant": merchant, "amount": amount})
+
+    anomalies: list[dict[str, Any]] = []
+    seen: set[tuple[str, float]] = set()
+    for item in window_rows:
+        merchant = item["merchant"]
+        amount = item["amount"]
+        amounts = merchant_amounts[merchant]
+        if len(amounts) < 2:
+            continue
+        avg = sum(amounts) / len(amounts)
+        if amount < avg * threshold_ratio:
+            continue
+        key = (merchant, amount)
+        if key in seen:
+            continue
+        seen.add(key)
+        anomalies.append(
+            {
+                "merchant": merchant,
+                "amount": round(amount, 2),
+                "avg_amount": round(avg, 2),
+                "pct_above_avg": round(((amount - avg) / avg) * 100),
+            }
+        )
+
+    anomalies.sort(key=lambda row: row["pct_above_avg"], reverse=True)
+    return anomalies[:limit]
+
+
+def _health_label(score: int) -> str:
+    if score >= 80:
+        return "Excellent"
+    if score >= 60:
+        return "Good"
+    if score >= 40:
+        return "Fair"
+    return "Needs Work"
+
+
+def compute_financial_health(
+    summary: dict[str, float],
+    accounts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Derive a 0–100 health score from real profile, balance, and spend data."""
+    monthly_income = float(summary.get("monthly_income") or 0)
+    net_savings = float(summary.get("net_savings") or 0)
+    savings_rate = float(summary.get("savings_rate") or 0)
+    fixed_expense = float(summary.get("fixed_expense") or 0)
+    net_outflow = float(summary.get("net_outflow") or 0)
+    total_balance = float(summary.get("total_balance") or 0)
+
+    debt_to_income = (
+        round((fixed_expense / monthly_income) * 100, 1) if monthly_income > 0 else 0.0
+    )
+    monthly_burn = fixed_expense if fixed_expense > 0 else net_outflow
+    emergency_months: float | None = None
+    if monthly_burn > 0 and total_balance > 0:
+        emergency_months = round(total_balance / monthly_burn, 1)
+
+    utilizations: list[float] = []
+    for acc in accounts:
+        if (acc.get("account_type") or "").lower() != "credit_card":
+            continue
+        credit_limit = float(acc.get("credit_limit") or 0)
+        if credit_limit <= 0:
+            continue
+        borrowed = abs(float(acc.get("current_balance") or 0))
+        utilizations.append(borrowed / credit_limit)
+    avg_credit_util = (
+        round(sum(utilizations) / len(utilizations) * 100, 1) if utilizations else None
+    )
+
+    score_parts: list[float] = []
+    if monthly_income > 0:
+        score_parts.append(min(40.0, max(0.0, savings_rate * 0.4)))
+    if debt_to_income <= 30:
+        score_parts.append(25.0)
+    elif debt_to_income <= 50:
+        score_parts.append(15.0)
+    elif debt_to_income <= 70:
+        score_parts.append(8.0)
+    if emergency_months is not None:
+        if emergency_months >= 6:
+            score_parts.append(20.0)
+        elif emergency_months >= 3:
+            score_parts.append(12.0)
+        elif emergency_months >= 1:
+            score_parts.append(6.0)
+    if avg_credit_util is not None:
+        if avg_credit_util <= 30:
+            score_parts.append(15.0)
+        elif avg_credit_util <= 50:
+            score_parts.append(10.0)
+        elif avg_credit_util <= 75:
+            score_parts.append(5.0)
+
+    score = min(100, round(sum(score_parts)))
+    return {
+        "score": score,
+        "label": _health_label(score),
+        "savings_rate": savings_rate,
+        "debt_to_income_pct": debt_to_income,
+        "net_savings": round(net_savings, 2),
+        "emergency_buffer_months": emergency_months,
+        "avg_credit_utilization_pct": avg_credit_util,
+        "total_liquid_balance": round(total_balance, 2),
+    }
+
+
+def compute_overall_financial_health(
+    *,
+    accounts: list[dict[str, Any]],
+    transactions: list[dict[str, Any]],
+    profile_income: float = 0.0,
+    profile_fixed_rent: float = 0.0,
+    profile_fixed_emi: float = 0.0,
+    reference: datetime | None = None,
+) -> dict[str, Any]:
+    """Period-independent health score using trailing 6-month average spend."""
+    ref = reference or datetime.now()
+    ref_date = ref.date() if hasattr(ref, "date") else ref
+    fixed_expense = float(profile_fixed_rent or 0) + float(profile_fixed_emi or 0)
+    monthly_income = float(profile_income or 0)
+
+    monthly_stats = aggregate_monthly_stats(transactions)
+    recent_months: list[str] = []
+    cursor = month_start(ref_date)
+    for _ in range(6):
+        recent_months.append(cursor.strftime("%Y-%m"))
+        cursor = add_months(cursor, -1)
+    recent_months.reverse()
+    monthly_expenses = [
+        float(monthly_stats.get(m, {}).get("expense", 0.0)) for m in recent_months
+    ]
+    avg_monthly_expense = (
+        sum(monthly_expenses) / len(monthly_expenses) if monthly_expenses else 0.0
+    )
+
+    total_balance = 0.0
+    for acc in accounts:
+        if (acc.get("account_type") or "").lower() == "credit_card":
+            continue
+        total_balance += float(acc.get("current_balance") or 0)
+
+    net_savings = monthly_income - avg_monthly_expense
+    savings_rate = (
+        round((net_savings / monthly_income) * 100, 1) if monthly_income > 0 else 0.0
+    )
+
+    summary = {
+        "monthly_income": monthly_income,
+        "fixed_expense": fixed_expense,
+        "net_outflow": round(avg_monthly_expense, 2),
+        "net_savings": round(net_savings, 2),
+        "savings_rate": savings_rate,
+        "total_balance": total_balance,
+    }
+    return compute_financial_health(summary, accounts)
+
+
+def enrich_chart_data_with_forecast(
+    chart_data: list[dict[str, Any]],
+    *,
+    predicted_next_month: float | None,
+    predicted_month_label: str | None,
+    predicted_month: str | None,
+    period: str,
+) -> list[dict[str, Any]]:
+    """Add actual_expense / predicted_expense series for dotted forecast line."""
+    enriched: list[dict[str, Any]] = []
+    for point in chart_data:
+        row = dict(point)
+        expense = float(row.get("expense") or 0)
+        row["actual_expense"] = expense
+        row["predicted_expense"] = None
+        enriched.append(row)
+
+    if not predicted_next_month or predicted_next_month <= 0:
+        return enriched
+
+    if enriched:
+        enriched[-1]["predicted_expense"] = float(enriched[-1].get("actual_expense") or 0)
+
+    label = predicted_month_label or "Next month"
+    if period == "1m":
+        short_name = label.split()[0][:3] if label else "Nxt"
+    else:
+        short_name = label[:7] if len(label) > 7 else label
+
+    enriched.append(
+        {
+            "name": short_name,
+            "date": f"{predicted_month}-01" if predicted_month else None,
+            "month": predicted_month,
+            "is_forecast": True,
+            "income": 0.0,
+            "expense": None,
+            "net": None,
+            "actual_expense": None,
+            "predicted_expense": round(float(predicted_next_month), 2),
+        }
+    )
+    return enriched
+
+
+def build_period_dashboard_slice(
+    *,
+    accounts: list[dict[str, Any]],
+    transactions: list[dict[str, Any]],
+    monthly_stats: dict[str, dict[str, float]],
+    period: str,
+    reference: datetime,
+    profile_income: float = 0.0,
+    profile_fixed_rent: float = 0.0,
+    profile_fixed_emi: float = 0.0,
+    forecast_meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Metrics and chart series for a single analysis period."""
+    window = resolve_analysis_window(period, reference=reference.date())
+    summary = compute_summary_for_window(
+        accounts,
+        transactions,
+        window=window,
+        profile_income=profile_income,
+        profile_fixed_rent=profile_fixed_rent,
+        profile_fixed_emi=profile_fixed_emi,
+    )
+    start_date = window.get("start_date")
+    end_date = window.get("end_date")
+    chart_granularity = "daily" if period == "1m" else "monthly"
+    raw_chart = build_chart_data_for_window(
+        monthly_stats,
+        window=window,
+        transactions=transactions,
+    )
+    predicted_next_month = (forecast_meta or {}).get("predicted_next_month")
+    chart_data = enrich_chart_data_with_forecast(
+        raw_chart,
+        predicted_next_month=predicted_next_month,
+        predicted_month_label=(forecast_meta or {}).get("predicted_month_label"),
+        predicted_month=(forecast_meta or {}).get("predicted_month"),
+        period=period,
+    )
+
+    return {
+        **window,
+        "chart_granularity": chart_granularity,
+        "summary": summary,
+        "chart_data": chart_data,
+        "predicted_next_month": predicted_next_month,
+        "predicted_month_label": (forecast_meta or {}).get("predicted_month_label"),
+        "expense_breakdown_month": aggregate_expense_by_category(
+            transactions,
+            start_date=start_date,
+            end_date=end_date,
+        ),
+        "top_spending": aggregate_top_spending_by_merchant(
+            transactions,
+            start_date=start_date,
+            end_date=end_date,
+        ),
+        "spending_anomalies": detect_spending_anomalies(
+            transactions,
+            start_date=start_date,
+            end_date=end_date,
+        ),
+    }
+
+
 def build_dashboard_payload(
     *,
+    user_id: str,
     accounts: list[dict[str, Any]],
     transactions: list[dict[str, Any]],
     recent_rows: list[dict[str, Any]],
@@ -548,28 +974,50 @@ def build_dashboard_payload(
     period: str = "1m",
 ) -> dict[str, Any]:
     ref = reference or datetime.now()
-    window = resolve_analysis_window(period, reference=ref.date())
+    period_key = normalize_period(period)
     monthly_stats = aggregate_monthly_stats(transactions)
 
-    return {
-        "success": True,
-        **window,
-        "summary": compute_summary_for_window(
-            accounts,
-            transactions,
-            window=window,
+    forecast_meta: dict[str, Any] | None = None
+    try:
+        from app.services.prophet.inference import get_next_month_prediction
+
+        forecast_meta = get_next_month_prediction(user_id, transactions)
+    except Exception:
+        forecast_meta = None
+
+    period_data = {
+        p: build_period_dashboard_slice(
+            accounts=accounts,
+            transactions=transactions,
+            monthly_stats=monthly_stats,
+            period=p,
+            reference=ref,
             profile_income=profile_income,
             profile_fixed_rent=profile_fixed_rent,
             profile_fixed_emi=profile_fixed_emi,
-        ),
-        "chart_data": build_chart_data_for_window(monthly_stats, window=window),
+            forecast_meta=forecast_meta,
+        )
+        for p in ALL_DASHBOARD_PERIODS
+    }
+    active = period_data[period_key]
+    financial_health = compute_overall_financial_health(
+        accounts=accounts,
+        transactions=transactions,
+        profile_income=profile_income,
+        profile_fixed_rent=profile_fixed_rent,
+        profile_fixed_emi=profile_fixed_emi,
+        reference=ref,
+    )
+
+    return {
+        "success": True,
+        "period": period_key,
+        "period_data": period_data,
+        "financial_health": financial_health,
+        "forecast": forecast_meta,
+        **active,
         "accounts": accounts,
         "recent_transactions": format_recent_transactions(recent_rows),
-        "expense_breakdown_month": aggregate_expense_by_category(
-            transactions,
-            start_date=window.get("start_date"),
-            end_date=window.get("end_date"),
-        ),
         "budget_utilization": compute_budget_utilization(
             budgets, transactions, reference=ref
         ),

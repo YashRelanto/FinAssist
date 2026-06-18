@@ -67,8 +67,8 @@ export interface HeatmapData {
 
 export interface Budget {
   id: string;
-  userId: string;
-  categoryId: string;
+  userId?: string;
+  categoryId?: string;
   categoryName: string;
   budgetName: string;
   amount: number;

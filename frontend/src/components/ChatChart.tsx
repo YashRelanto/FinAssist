@@ -22,6 +22,7 @@ export interface ChartArtifact {
   type: string;
   chart_type: 'line' | 'bar' | 'pie' | string;
   title?: string;
+  caption?: string;
   x_field: string;
   y_field: string;
   data: Array<Record<string, any>>;
@@ -35,7 +36,7 @@ const COLORS = [
 const AXIS_STYLE = { fontSize: 10, fontWeight: 700, fill: 'var(--color-outline, #8a8a8a)' } as const;
 
 export const ChatChart: React.FC<{ artifact: ChartArtifact }> = ({ artifact }) => {
-  const { chart_type, title, x_field, y_field, data } = artifact || ({} as ChartArtifact);
+  const { chart_type, title, caption, x_field, y_field, data } = artifact || ({} as ChartArtifact);
 
   if (!data || data.length === 0 || !x_field || !y_field) return null;
 
@@ -111,6 +112,11 @@ export const ChatChart: React.FC<{ artifact: ChartArtifact }> = ({ artifact }) =
           {chart as React.ReactElement}
         </ResponsiveContainer>
       </div>
+      {caption && (
+        <p className="text-[11px] leading-relaxed text-on-surface-variant font-medium mt-2 px-1">
+          {caption}
+        </p>
+      )}
     </div>
   );
 };

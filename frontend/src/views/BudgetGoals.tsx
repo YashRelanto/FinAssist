@@ -25,6 +25,7 @@ import { BudgetModal } from '../components/BudgetModal';
 import { Budget } from '../types';
 import { GoalWithProgress, SavingsTrajectory } from '../lib/budgetGoalsApi';
 import type { BudgetUtilizationItem } from '../components/Dashboard/BudgetUtilization';
+import { PageHeader, PageLoading, PageShell, lumio } from '../components/PageShell';
 
 const getCategoryIcon = (category: string) => {
   switch (category) {
@@ -75,6 +76,7 @@ export const BudgetGoals: React.FC = () => {
     deleteBudget,
     budgetGoalsSummary,
     loadBudgetGoalsSummary,
+    authReady,
   } = useAppContext();
 
   const [goalModalOpen, setGoalModalOpen] = useState(false);
@@ -101,8 +103,9 @@ export const BudgetGoals: React.FC = () => {
   );
 
   useEffect(() => {
+    if (!authReady || !user?.isAuthenticated) return;
     refreshSummary();
-  }, [refreshSummary]);
+  }, [authReady, user?.isAuthenticated, refreshSummary]);
 
   useEffect(() => {
     if (!user?.isAuthenticated) return;
@@ -219,34 +222,21 @@ export const BudgetGoals: React.FC = () => {
     defaultBudgets.forEach((b) => addBudget(b));
   };
 
-  if ((loading || !budgetGoalsSummary) && user?.isAuthenticated) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary" />
-      </div>
-    );
+  if (!authReady || (loading && !budgetGoalsSummary)) {
+    return <PageLoading />;
   }
 
   return (
-    <div className="space-y-10">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
-        <div>
-          <h2 className="text-3xl font-bold text-on-surface">Budget & Goals</h2>
-          <p className="text-on-surface-variant mt-2 max-w-2xl text-sm font-medium">
-            Strategic oversight of your financial commitments. Budget utilization
-            is computed from your live expenses within each budget&apos;s date
-            range.
-          </p>
-        </div>
-        <div className="flex gap-4 w-full md:w-auto">
-          <button
-            onClick={handleAddGoal}
-            className="flex-1 md:flex-none px-6 py-2.5 rounded-lg bg-primary text-white font-bold text-sm hover:brightness-110 shadow-md transition-all flex items-center justify-center gap-2"
-          >
-            <Plus className="w-4 h-4" /> Create New Goal
+    <PageShell>
+      <PageHeader
+        title="Budget & Goals"
+        description="Strategic oversight of your financial commitments. Budget utilization is computed from live expenses within each budget's date range."
+        actions={
+          <button type="button" onClick={handleAddGoal} className={lumio.btnPrimary}>
+            <Plus className="w-4 h-4" /> Create Goal
           </button>
-        </div>
-      </div>
+        }
+      />
 
       <section className="space-y-6">
         <div className="flex justify-between items-center">
@@ -507,6 +497,6 @@ export const BudgetGoals: React.FC = () => {
         onClose={closeBudgetModal}
         editingBudget={editingBudget}
       />
-    </div>
+    </PageShell>
   );
 };

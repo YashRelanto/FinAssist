@@ -79,6 +79,13 @@ class ChatResponse(BaseModel):
             "(e.g. 'BankBazaar', 'MoneyControl', 'Supabase: transactions')."
         ),
     )
+    clarification_questions: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "When intent='clarification', the list of questions to ask the user. "
+            "Each item: {id: 'q0', question: '...'}. The frontend shows them one-at-a-time."
+        ),
+    )
     artifacts: list[dict] = Field(
         default_factory=list,
         description=(
@@ -334,8 +341,28 @@ async def post_chat_message(
 
         if is_paused:
             logger.info("Resuming paused graph for thread=%s", request.thread_id)
+            # Recover the EXACT questions that were asked (stored in the interrupt payload)
+            # so the brain maps the user's answers to the right questions, regardless of any
+            # non-determinism when the node re-executes on resume.
+            original_questions = None
+            try:
+                for task in (state_snapshot.tasks or []):
+                    for intr in (getattr(task, "interrupts", None) or []):
+                        val = getattr(intr, "value", None)
+                        if isinstance(val, dict) and val.get("type") == "clarification_batch":
+                            original_questions = val.get("questions")
+                            break
+                    if original_questions:
+                        break
+            except Exception:
+                original_questions = None
+
+            resume_value: Any = (
+                {"answers": request.message, "questions": original_questions}
+                if original_questions else request.message
+            )
             final_state = await finassist_graph.ainvoke(
-                Command(resume=request.message), config=config
+                Command(resume=resume_value), config=config
             )
         else:
             initial_state = make_initial_state(
@@ -346,11 +373,20 @@ async def post_chat_message(
             )
             final_state = await finassist_graph.ainvoke(initial_state, config=config)
 
-        # If the Brain raised a clarification interrupt, surface the question.
+        # If the Brain raised a clarification interrupt, surface the questions.
         interrupts = final_state.get("__interrupt__") if isinstance(final_state, dict) else None
+        clarification_questions_out: List[dict] = []
         if interrupts:
             payload = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
-            answer = (payload or {}).get("question", "Could you clarify your request?")
+            if isinstance(payload, dict) and payload.get("type") == "clarification_batch":
+                qs = payload.get("questions") or []
+                clarification_questions_out = qs
+                answer = "I have a few quick questions to help me create the best plan for you."
+            else:
+                # Legacy single-question form (backward compat)
+                question = (payload or {}).get("question", "Could you clarify your request?")
+                clarification_questions_out = [{"id": "q0", "question": question}]
+                answer = question
             intent = "clarification"
             sources = []
         else:
@@ -419,8 +455,9 @@ async def post_chat_message(
     # 3. Build and return the response model
     return ChatResponse(
         answer=answer,
-        intent=intent.lower(),  # Convert to lowercase to match expected frontend schema
+        intent=intent.lower(),
         sources=sources,
+        clarification_questions=clarification_questions_out,
         artifacts=artifacts,
         metadata=metadata,
         thread_id=request.thread_id,
