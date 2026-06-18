@@ -996,6 +996,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           sub_category: t.subCategory || 'General',
           sub_category_name: t.subCategory || 'General',
           transaction_date: t.date,
+          is_recurring: Boolean((t as Transaction).is_recurring),
+          recurrence_period: (t as Transaction).is_recurring
+            ? (t as Transaction).recurrence_period ?? 'monthly'
+            : null,
+          recurrence_skips: (t as Transaction).is_recurring
+            ? (t as Transaction).recurrence_skips ?? 0
+            : 0,
         }),
       })
         .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
@@ -1042,6 +1049,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       main_category: t.category ?? existing?.category ?? 'Others',
       sub_category: t.subCategory || existing?.subCategory || 'General',
       transaction_date: t.date ?? existing?.date ?? new Date().toISOString().split('T')[0],
+      is_recurring: Boolean(
+        (t as Transaction & { is_recurring?: boolean }).is_recurring ??
+          existing?.is_recurring ??
+          false,
+      ),
+      recurrence_period:
+        (t as Transaction & { recurrence_period?: string | null }).recurrence_period ??
+        existing?.recurrence_period ??
+        null,
+      recurrence_skips:
+        (t as Transaction & { recurrence_skips?: number }).recurrence_skips ??
+        existing?.recurrence_skips ??
+        0,
     };
 
     apiFetch(`/api/transactions/${id}`, {

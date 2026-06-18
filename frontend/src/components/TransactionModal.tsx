@@ -6,6 +6,12 @@ import { useAppContext } from '../context/AppContext';
 import { CURRENCY_SYMBOL } from '../lib/utils';
 import { AppModal } from './AppModal';
 
+type TransactionFormState = Omit<Transaction, 'id'> & {
+  isRecurring?: boolean;
+  recurrencePeriod?: string;
+  recurrenceSkips?: string;
+};
+
 interface TransactionModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -27,7 +33,7 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
 
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [formData, setFormData] = useState<Omit<Transaction, 'id'>>({
+  const [formData, setFormData] = useState<TransactionFormState>({
     date: new Date().toISOString().split('T')[0],
     merchant: '',
     category: 'Housing',
@@ -35,7 +41,25 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
     amount: 0,
     account: defaultAccount,
     type: 'expense',
-    notes: ''
+    notes: '',
+    isRecurring: false,
+    recurrencePeriod: 'monthly',
+    recurrenceSkips: '0',
+  });
+
+  const resetForm = (overrides: Partial<TransactionFormState> = {}) => ({
+    date: new Date().toISOString().split('T')[0],
+    merchant: '',
+    category: 'Housing',
+    subCategory: '',
+    amount: 0,
+    account: defaultAccount,
+    type: 'expense' as const,
+    notes: '',
+    isRecurring: false,
+    recurrencePeriod: 'monthly',
+    recurrenceSkips: '0',
+    ...overrides,
   });
 
   useEffect(() => {
@@ -43,36 +67,21 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
       setSaveError(null);
       if (editingTransaction) {
         const { id, ...rest } = editingTransaction;
-        setFormData({
+        setFormData(resetForm({
           ...rest,
-          account: editingTransaction.account_id || editingTransaction.account || defaultAccount
-        });
+          account: editingTransaction.account_id || editingTransaction.account || defaultAccount,
+          isRecurring: Boolean(editingTransaction.is_recurring),
+          recurrencePeriod: editingTransaction.recurrence_period || 'monthly',
+          recurrenceSkips: String(editingTransaction.recurrence_skips ?? 0),
+        }));
       } else if (pendingDate) {
-        setFormData({
-          date: pendingDate,
-          merchant: '',
-          category: 'Housing',
-          subCategory: '',
-          amount: 0,
-          account: defaultAccount,
-          type: 'expense',
-          notes: ''
-        });
+        setFormData(resetForm({ date: pendingDate }));
         resetPendingDate();
       } else {
-        setFormData({
-          date: new Date().toISOString().split('T')[0],
-          merchant: '',
-          category: 'Housing',
-          subCategory: '',
-          amount: 0,
-          account: defaultAccount,
-          type: 'expense',
-          notes: ''
-        });
+        setFormData(resetForm());
       }
     }
-  }, [editingTransaction, isOpen, pendingDate, accounts]);
+  }, [editingTransaction, isOpen, pendingDate, accounts, defaultAccount, resetPendingDate]);
 
   if (!isOpen) return null;
 
@@ -82,7 +91,12 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
     setSaveError(null);
 
     if (editingTransaction) {
-      updateTransaction(editingTransaction.id, formData, (success) => {
+      updateTransaction(editingTransaction.id, {
+        ...formData,
+        is_recurring: formData.isRecurring,
+        recurrence_period: formData.isRecurring ? formData.recurrencePeriod : null,
+        recurrence_skips: formData.isRecurring ? parseInt(formData.recurrenceSkips || '0', 10) : 0,
+      }, (success) => {
         setIsSaving(false);
         if (success) {
           onSaved?.();
@@ -94,7 +108,12 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
       return;
     }
 
-    addTransaction(formData);
+    addTransaction({
+      ...formData,
+      is_recurring: formData.isRecurring,
+      recurrence_period: formData.isRecurring ? formData.recurrencePeriod : null,
+      recurrence_skips: formData.isRecurring ? parseInt(formData.recurrenceSkips || '0', 10) : 0,
+    });
     onSaved?.();
     onClose();
     setIsSaving(false);
@@ -242,6 +261,52 @@ export const TransactionModal: React.FC<TransactionModalProps> = ({
                   className="w-full pl-10 pr-4 py-3 bg-surface-container-low rounded-lg border border-outline-variant focus:ring-2 focus:ring-primary transition-all text-sm"
                 ></textarea>
               </div>
+            </div>
+
+            <div className="bg-surface-container-low p-4 rounded-xl space-y-3 border border-outline-variant/20">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="modalIsRecurring"
+                  checked={Boolean(formData.isRecurring)}
+                  onChange={(e) => setFormData({ ...formData, isRecurring: e.target.checked })}
+                  className="w-4 h-4 rounded text-primary focus:ring-primary cursor-pointer"
+                />
+                <label
+                  htmlFor="modalIsRecurring"
+                  className="text-xs font-black text-on-surface uppercase tracking-widest cursor-pointer select-none"
+                >
+                  Make Recurring Payment
+                </label>
+              </div>
+
+              {formData.isRecurring && (
+                <div className="grid grid-cols-2 gap-4 pt-1">
+                  <div className="space-y-1">
+                    <label className="text-[8px] font-black text-outline uppercase tracking-[0.2em]">Period</label>
+                    <select
+                      value={formData.recurrencePeriod || 'monthly'}
+                      onChange={(e) => setFormData({ ...formData, recurrencePeriod: e.target.value })}
+                      className="w-full bg-surface-container-lowest border border-outline-variant/50 rounded-lg px-2 py-1.5 text-xs font-bold focus:ring-2 focus:ring-primary outline-none"
+                    >
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="monthly">Monthly</option>
+                      <option value="yearly">Yearly</option>
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[8px] font-black text-outline uppercase tracking-[0.2em]">Skips</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={formData.recurrenceSkips || '0'}
+                      onChange={(e) => setFormData({ ...formData, recurrenceSkips: e.target.value })}
+                      className="w-full bg-surface-container-lowest border border-outline-variant/50 rounded-lg px-2 py-1.5 text-xs font-bold focus:ring-2 focus:ring-primary outline-none"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

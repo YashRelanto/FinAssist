@@ -544,6 +544,7 @@ async def get_financial_health_insights(user_id: str, llm: str | None = None):
             profile_income=float(profile.get("income") or 0),
             profile_fixed_rent=float(profile.get("fixed_rent") or 0),
             profile_fixed_emi=float(profile.get("fixed_emi") or 0),
+            user_id=user_id,
         )
 
         build_kwargs = dict(health=health, profile=profile, include_llm=include_llm)
