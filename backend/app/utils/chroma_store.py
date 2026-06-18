@@ -259,6 +259,83 @@ class ChromaStore:
             )
             return []
 
+    def search_with_embeddings(
+        self,
+        collection_name: str,
+        query: str,
+        n_results: int = 15,
+    ) -> tuple[list[dict], list[float]]:
+        """
+        Like search() but also returns document embeddings and the query embedding.
+        Used by the knowledge tool for MMR + reranking.
+
+        Returns
+        -------
+        (docs, query_embedding)
+          docs            : list[dict] — same shape as search(), plus key "embedding": list[float]
+          query_embedding : list[float] — embedding of the query string (empty list on failure)
+        """
+        if not query or not query.strip():
+            return [], []
+        try:
+            collection = self._get_or_create_collection(collection_name)
+            count = collection.count()
+            if count == 0:
+                return [], []
+
+            safe_n = min(n_results, count)
+            results = collection.query(
+                query_texts=[query],
+                n_results=safe_n,
+                include=["documents", "metadatas", "distances", "embeddings"],
+            )
+
+            ids        = results.get("ids",        [[]])[0]
+            documents  = results.get("documents",  [[]])[0]
+            metadatas  = results.get("metadatas",  [[]])[0]
+            distances  = results.get("distances",  [[]])[0]
+            embeddings = results.get("embeddings", [[]])[0]  # list of list[float]
+
+            def _to_list(v) -> list:
+                # ChromaDB returns numpy arrays; convert to plain Python list so callers
+                # can safely do `if not emb`, boolean checks, and JSON serialisation.
+                if v is None:
+                    return []
+                if hasattr(v, "tolist"):
+                    return v.tolist()
+                return list(v)
+
+            docs = []
+            for doc_id, text, meta, dist, emb in zip(ids, documents, metadatas, distances, embeddings):
+                docs.append({
+                    "id":        doc_id,
+                    "text":      text or "",
+                    "metadata":  meta or {},
+                    "distance":  round(float(dist), 6),
+                    "embedding": _to_list(emb),
+                })
+
+            # Compute query embedding so the caller can do MMR without a second round-trip.
+            query_emb: list[float] = []
+            if self._ef is not None:
+                try:
+                    query_emb = _to_list(self._ef([query])[0])
+                except Exception as exc:
+                    logger.warning("[ChromaStore] query embedding failed: %s", exc)
+
+            logger.info(
+                "[ChromaStore] search_with_embeddings('%s', n=%d) → %d results",
+                collection_name, safe_n, len(docs),
+            )
+            return docs, query_emb
+
+        except Exception as exc:
+            logger.error(
+                "[ChromaStore] search_with_embeddings() failed on '%s': %s",
+                collection_name, exc,
+            )
+            return [], []
+
     def add_documents(
         self,
         collection_name: str,
