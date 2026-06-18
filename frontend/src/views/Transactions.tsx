@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Search, Download, Upload, Plus, Edit2, Trash2 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { TransactionModal } from '../components/TransactionModal';
+import { QuickAddModal } from '../components/Dashboard/QuickAddModal';
 import { BulkUploadModal } from '../components/BulkUploadModal';
 import { cn, formatCurrency } from '../lib/utils';
 import { Transaction } from '../types';
@@ -19,6 +20,7 @@ export const Transactions: React.FC = () => {
     categories,
     pendingDate,
     loadTransactions,
+    refreshAfterTransactionChange,
     transactions,
     accounts,
     dbCategories,
@@ -27,6 +29,7 @@ export const Transactions: React.FC = () => {
   } = useAppContext();
   const [isLoading, setIsLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<Transaction | undefined>(undefined);
   const [search, setSearch] = useState('');
@@ -42,14 +45,18 @@ export const Transactions: React.FC = () => {
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   React.useEffect(() => {
-    if (authReady && user?.isAuthenticated && activeUserId(user)) {
-      setIsLoading(true);
-      loadTransactions().finally(() => {
-        setIsLoading(false);
-      });
-      loadDbCategories();
+    if (!authReady || !user?.isAuthenticated || !activeUserId(user)) return;
+    if (transactions.length > 0) {
+      setIsLoading(false);
+      if (dbCategories.length === 0) loadDbCategories();
+      return;
     }
-  }, [authReady, user?.isAuthenticated, user?.userId, user?.id, loadTransactions, loadDbCategories]);
+    setIsLoading(true);
+    loadTransactions().finally(() => {
+      setIsLoading(false);
+    });
+    loadDbCategories();
+  }, [authReady, user?.isAuthenticated, user?.userId, user?.id, transactions.length, dbCategories.length, loadTransactions, loadDbCategories]);
 
   const handleUpdateCategory = async (trans: any, newMainCat: string) => {
     try {
@@ -83,14 +90,12 @@ export const Transactions: React.FC = () => {
   };
 
   const handleAdd = () => {
-    setEditingTransaction(undefined);
-    setModalOpen(true);
+    setQuickAddOpen(true);
   };
 
   React.useEffect(() => {
     if (pendingDate) {
-      setEditingTransaction(undefined);
-      setModalOpen(true);
+      setQuickAddOpen(true);
     }
   }, [pendingDate]);
 
@@ -250,7 +255,7 @@ export const Transactions: React.FC = () => {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search merchant, category..."
-                className={lumio.input}
+                className={cn(lumio.input, 'pl-10')}
               />
             </div>
           </div>
@@ -422,13 +427,22 @@ export const Transactions: React.FC = () => {
         onClose={() => {
           setModalOpen(false);
           setEditingTransaction(undefined);
-          loadTransactions();
+          loadTransactions({ force: true });
         }}
         editingTransaction={editingTransaction}
         accounts={accounts}
         onSaved={() => {
-          loadTransactions();
+          loadTransactions({ force: true });
         }}
+      />
+
+      <QuickAddModal
+        isOpen={quickAddOpen}
+        onClose={() => setQuickAddOpen(false)}
+        onSuccess={() => {
+          refreshAfterTransactionChange();
+        }}
+        accounts={accounts}
       />
 
       <BulkUploadModal

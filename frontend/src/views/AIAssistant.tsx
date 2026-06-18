@@ -1,34 +1,24 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, User, Bot, Paperclip, Loader2 } from 'lucide-react';
-import { cn, formatCurrency, APP_NAME, APP_ADVISOR_GREETING } from '../lib/utils';
+import { cn, formatCurrency, APP_NAME } from '../lib/utils';
 import { useAppContext } from '../context/AppContext';
 import { apiFetch } from '../lib/api';
 import { ChatChart } from '../components/ChatChart';
 import { PageHeader, PageShell } from '../components/PageShell';
 import { Markdown } from '../components/Markdown';
-import { ClarificationCard, ClarificationQuestion } from '../components/ClarificationCard';
+import { ClarificationCard, type ClarificationQuestion } from '../components/ClarificationCard';
 
 interface Message {
   id: number;
   role: 'user' | 'ai';
   time: string;
   text: string;
-  type: 'text' | 'card' | 'clarification';
-  artifacts?: any[];
-  data?: any[];
+  type: 'text' | 'clarification' | 'card';
+  artifacts?: unknown[];
   clarificationQuestions?: ClarificationQuestion[];
   clarificationAnswered?: boolean;
+  data?: { label: string; value: number; color: string; percent: number }[];
 }
-
-const initialMessages = [
-  { 
-    id: 1, 
-    role: 'ai', 
-    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 
-    text: APP_ADVISOR_GREETING,
-    type: 'text' 
-  }
-];
 
 export const AIAssistant: React.FC = () => {
   const { user, chatMessages: messages, setChatMessages: setMessages } = useAppContext();
@@ -42,14 +32,16 @@ export const AIAssistant: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
-  const handleSendMessage = async (text: string) => {
+  const handleSendMessage = async (text: string, displayText?: string) => {
     if (!text.trim()) return;
 
     const userMessage: Message = {
       id: Date.now(),
       role: 'user',
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      text,
+      // `text` is the raw payload sent to the API (may be a JSON resume payload); `displayText`
+      // is what the user actually sees in the chat bubble (a readable version).
+      text: displayText || text,
       type: 'text',
     };
 
@@ -113,9 +105,14 @@ export const AIAssistant: React.FC = () => {
     );
     setPendingClarificationId(null);
 
-    // Send all answers as a single JSON string to resume the paused graph
+    // Send all answers as a single JSON string to resume the paused graph, but show the user a
+    // readable summary in the chat (not the raw JSON payload).
     const payload = JSON.stringify(answers);
-    await handleSendMessage(payload);
+    const readable = Object.values(answers)
+      .map((v) => String(v).trim())
+      .filter(Boolean)
+      .join(' · ');
+    await handleSendMessage(payload, readable || 'Answers submitted');
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {

@@ -9,7 +9,7 @@ Endpoints:
 
 import logging
 import time
-from typing import Optional, Dict, List, Any
+from typing import Dict, List, Any
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, status

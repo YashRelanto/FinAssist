@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { MessageSquare } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { cn } from '../lib/utils';
 import { useAppContext } from '../context/AppContext';
 import { APP_NAME } from '../lib/utils';
 import { TopNav } from './TopNav';
@@ -19,36 +19,22 @@ import { LinkedAccounts } from '../views/LinkedAccounts';
 import { EditProfile } from '../views/EditProfile';
 import { Reports } from '../views/Reports';
 
+const TAB_PAGES: { id: string; Component: React.FC }[] = [
+  { id: 'dashboard', Component: Dashboard },
+  { id: 'forecasting', Component: Forecasting },
+  { id: 'transactions', Component: Transactions },
+  { id: 'ai-assistant', Component: AIAssistant },
+  { id: 'budget-goals', Component: BudgetGoals },
+  { id: 'investments', Component: Investments },
+  { id: 'settings', Component: Settings },
+  { id: 'linked-accounts', Component: LinkedAccounts },
+  { id: 'edit-profile', Component: EditProfile },
+  { id: 'admin', Component: AdminPanel },
+  { id: 'reports', Component: Reports },
+];
+
 export const Layout: React.FC = () => {
   const { currentPage, setCurrentPage, user, authReady } = useAppContext();
-
-  const renderPage = () => {
-    switch (currentPage) {
-      case 'forecasting':
-        return <Forecasting />;
-      case 'transactions':
-        return <Transactions />;
-      case 'ai-assistant':
-        return <AIAssistant />;
-      case 'budget-goals':
-        return <BudgetGoals />;
-      case 'investments':
-        return <Investments />;
-      case 'settings':
-        return <Settings />;
-      case 'linked-accounts':
-        return <LinkedAccounts />;
-      case 'edit-profile':
-        return <EditProfile />;
-      case 'admin':
-        return <AdminPanel />;
-      case 'reports':
-        return <Reports />;
-      case 'dashboard':
-      default:
-        return <Dashboard />;
-    }
-  };
 
   if (!authReady) {
     return (
@@ -75,17 +61,15 @@ export const Layout: React.FC = () => {
       <TopNav variant="app" />
 
       <main className="flex-1 flex flex-col pt-24 md:pt-28 pb-16 px-4 md:px-margin w-full max-w-[1440px] mx-auto relative z-10">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={currentPage}
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+        {TAB_PAGES.map(({ id, Component }) => (
+          <div
+            key={id}
+            className={cn(currentPage !== id && 'hidden')}
+            aria-hidden={currentPage !== id}
           >
-            {renderPage()}
-          </motion.div>
-        </AnimatePresence>
+            <Component />
+          </div>
+        ))}
       </main>
 
       {currentPage !== 'ai-assistant' && (

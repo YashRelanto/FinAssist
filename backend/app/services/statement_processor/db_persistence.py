@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 from fastapi import HTTPException
 from app.utils.supabase_client import supabase
 from .models import ParsedTransaction, AccountMetadata

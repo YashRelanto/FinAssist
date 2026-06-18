@@ -5,9 +5,39 @@ interface MerchantAnalyticsPanelProps {
   topMerchants: { name: string; total: number; txn_count: number }[];
   merchantGrowth: { name: string; current_total: number; prior_total: number; growth_pct: number }[];
   concentration?: { top_n: number; pct_of_total: number };
-  fastestGrowingInsight?: string;
-  concentrationInsight?: string;
+  fastestGrowingInsight?: string | Record<string, unknown>;
+  concentrationInsight?: string | { top_n?: number; pct_of_total?: number };
   loading?: boolean;
+}
+
+function formatConcentrationText(
+  insight: MerchantAnalyticsPanelProps['concentrationInsight'],
+  concentration?: { top_n: number; pct_of_total: number },
+): string | null {
+  if (typeof insight === 'string' && insight.trim()) {
+    return insight;
+  }
+  const conc =
+    insight && typeof insight === 'object' && 'pct_of_total' in insight
+      ? insight
+      : concentration;
+  if (conc?.pct_of_total && conc.pct_of_total > 0) {
+    return `Top ${conc.top_n ?? 5} merchants account for ${conc.pct_of_total}% of total spending.`;
+  }
+  return null;
+}
+
+function formatFastestGrowingText(
+  insight: MerchantAnalyticsPanelProps['fastestGrowingInsight'],
+): string | null {
+  if (typeof insight === 'string' && insight.trim()) {
+    return insight;
+  }
+  if (insight && typeof insight === 'object' && 'name' in insight && 'growth_pct' in insight) {
+    const m = insight as { name: string; growth_pct: number };
+    return `${m.name} is your fastest growing merchant (+${m.growth_pct}%).`;
+  }
+  return null;
 }
 
 export const MerchantAnalyticsPanel: React.FC<MerchantAnalyticsPanelProps> = ({
@@ -25,16 +55,15 @@ export const MerchantAnalyticsPanel: React.FC<MerchantAnalyticsPanelProps> = ({
   }
 
   const maxTotal = topMerchants[0]?.total ?? 1;
+  const concentrationText = formatConcentrationText(concentrationInsight, concentration);
+  const fastestGrowingText = formatFastestGrowingText(fastestGrowingInsight);
 
   return (
     <div className="bg-surface-container-lowest p-8 rounded-[32px] border border-outline-variant/30 space-y-8">
       <h3 className="text-lg font-black tracking-tight">Merchant Analytics</h3>
 
-      {concentration && concentration.pct_of_total > 0 && (
-        <p className="text-sm font-medium text-on-surface/80">
-          {concentrationInsight ||
-            `Top ${concentration.top_n} merchants account for ${concentration.pct_of_total}% of total spending.`}
-        </p>
+      {concentrationText && (
+        <p className="text-sm font-medium text-on-surface/80">{concentrationText}</p>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -81,9 +110,9 @@ export const MerchantAnalyticsPanel: React.FC<MerchantAnalyticsPanelProps> = ({
               <p className="text-xs text-outline">No growth data for comparison window.</p>
             )}
           </div>
-          {fastestGrowingInsight && (
+          {fastestGrowingText && (
             <p className="text-xs text-primary font-medium bg-primary/5 rounded-xl px-3 py-2 mt-4">
-              {fastestGrowingInsight}
+              {fastestGrowingText}
             </p>
           )}
         </div>

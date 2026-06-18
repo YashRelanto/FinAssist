@@ -16,6 +16,7 @@ from app.utils.analysis_period import (
     resolve_analysis_window,
     sum_expenses_in_window,
 )
+from app.utils.tab_logging import mask_user_id, tab_info
 
 INCOME_TYPE = "income"
 EXPENSE_TYPE = "expense"
@@ -402,13 +403,21 @@ def compute_savings_trajectory(
     }
 
 
-def format_goals_for_ui(goals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def format_goals_for_ui(
+    goals: list[dict[str, Any]],
+    *,
+    transactions: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     icons = ["Target", "ShieldCheck", "PlaneTakeoff", "Laptop"]
     colors = ["bg-primary", "bg-secondary", "bg-tertiary", "bg-outline"]
+    live_savings = (
+        compute_net_savings(transactions) if transactions is not None else None
+    )
     formatted: list[dict[str, Any]] = []
     for index, goal in enumerate(goals):
         target = float(goal.get("target_amount") or 0)
-        current = float(goal.get("current_amount") or 0)
+        stored_current = float(goal.get("current_amount") or 0)
+        current = live_savings if live_savings is not None else stored_current
         progress_pct = round((current / target) * 100) if target > 0 else 0
         formatted.append(
             {
@@ -433,16 +442,18 @@ def build_budget_goals_payload(
     budgets: list[dict[str, Any]],
     transactions: list[dict[str, Any]],
     goals: list[dict[str, Any]],
+    goal_transactions: list[dict[str, Any]] | None = None,
     reference: datetime | None = None,
 ) -> dict[str, Any]:
     ref = reference or datetime.now()
     trajectory = compute_savings_trajectory(transactions, reference=ref)
+    txs_for_goals = goal_transactions if goal_transactions is not None else transactions
     return {
         "success": True,
         "budget_utilization": compute_budget_utilization(
             budgets, transactions, reference=ref
         ),
-        "goals": format_goals_for_ui(goals),
+        "goals": format_goals_for_ui(goals, transactions=txs_for_goals),
         "trajectory": trajectory,
     }
 
@@ -720,6 +731,259 @@ def detect_spending_anomalies(
     return anomalies[:limit]
 
 
+def _recurring_amount_to_monthly(amount: float, period: str, skips: int) -> float:
+    """Normalize a recurring charge to an approximate monthly obligation."""
+    step = max(1, int(skips or 0) + 1)
+    period_key = (period or "monthly").strip().lower()
+    if period_key == "daily":
+        return amount * (30.0 / step)
+    if period_key == "weekly":
+        return amount * (52.0 / 12.0 / step)
+    if period_key == "yearly":
+        return amount / (12.0 * step)
+    return amount / step
+
+
+def _transaction_main_category(row: dict[str, Any]) -> str:
+    categories = row.get("categories") or {}
+    main = categories.get("main_category") or row.get("main_category") or ""
+    return str(main).strip().lower()
+
+
+def compute_monthly_recurring_obligations(
+    transactions: list[dict[str, Any]],
+    *,
+    profile_fixed_rent: float = 0.0,
+    profile_fixed_emi: float = 0.0,
+) -> float:
+    """Sum profile rent/EMI plus recurring expense transactions (monthly-normalized)."""
+    recurring_monthly = 0.0
+    has_recurring_rent = False
+    has_recurring_emi = False
+
+    for row in transactions:
+        if not row.get("is_recurring"):
+            continue
+        if (row.get("transaction_type") or "").lower() != EXPENSE_TYPE:
+            continue
+
+        amount = abs(float(row.get("amount") or 0))
+        if amount <= 0:
+            continue
+
+        period = row.get("recurrence_period") or "monthly"
+        skips = int(row.get("recurrence_skips") or 0)
+        recurring_monthly += _recurring_amount_to_monthly(amount, period, skips)
+
+        main_cat = _transaction_main_category(row)
+        merchant = str(row.get("merchant_name") or row.get("description") or "").lower()
+        sub_cat = str((row.get("categories") or {}).get("sub_category") or "").lower()
+        if "housing" in main_cat or "rent" in merchant or "rent" in sub_cat:
+            has_recurring_rent = True
+        if "financial" in main_cat or "emi" in merchant or "loan" in merchant or "emi" in sub_cat:
+            has_recurring_emi = True
+
+    profile_rent = float(profile_fixed_rent or 0) if not has_recurring_rent else 0.0
+    profile_emi = float(profile_fixed_emi or 0) if not has_recurring_emi else 0.0
+    return round(profile_rent + profile_emi + recurring_monthly, 2)
+
+
+def _merchant_text(row: dict[str, Any]) -> str:
+    return str(row.get("merchant_name") or row.get("description") or "").lower()
+
+
+def _sub_category_text(row: dict[str, Any]) -> str:
+    return str((row.get("categories") or {}).get("sub_category") or "").lower()
+
+
+def _is_fixed_obligation_row(row: dict[str, Any]) -> bool:
+    main_cat = _transaction_main_category(row)
+    merchant = _merchant_text(row)
+    sub_cat = _sub_category_text(row)
+    if "rent" in merchant or "mortgage" in merchant or "home loan" in merchant:
+        return True
+    if "housing" in main_cat and ("rent" in merchant or "rent" in sub_cat or "lease" in sub_cat):
+        return True
+    if "financial" in main_cat or "emi" in merchant or "loan" in merchant or "emi" in sub_cat:
+        return True
+    return False
+
+
+def _is_essential_recurring_row(row: dict[str, Any]) -> bool:
+    if not row.get("is_recurring"):
+        return False
+    if _is_fixed_obligation_row(row):
+        return False
+    main_cat = _transaction_main_category(row)
+    merchant = _merchant_text(row)
+    sub_cat = _sub_category_text(row)
+    if "communication" in main_cat:
+        return True
+    essential_kw = (
+        "electric",
+        "internet",
+        "broadband",
+        "wifi",
+        "utility",
+        "utilities",
+        "lpg",
+        "gas bill",
+        "water bill",
+        "phone",
+        "mobile",
+        "recharge",
+    )
+    return any(k in merchant or k in sub_cat for k in essential_kw)
+
+
+def _is_essential_living_row(row: dict[str, Any]) -> bool:
+    if (row.get("transaction_type") or "").lower() != EXPENSE_TYPE:
+        return False
+    if _is_fixed_obligation_row(row):
+        return False
+    if _is_essential_recurring_row(row):
+        return False
+
+    main_cat = normalize_category_name((row.get("categories") or {}).get("main_category"))
+    main_lower = main_cat.lower()
+    merchant = _merchant_text(row)
+    sub_cat = _sub_category_text(row)
+
+    if main_cat in ("Food & Drinks",) or "food" in main_lower:
+        return True
+    if "health" in main_lower:
+        return True
+    living_kw = (
+        "grocery",
+        "groceries",
+        "medicine",
+        "medical",
+        "pharmacy",
+        "hospital",
+        "clinic",
+        "kirana",
+        "supermarket",
+        "bigbasket",
+        "blinkit",
+        "zepto",
+    )
+    return any(k in merchant or k in sub_cat for k in living_kw)
+
+
+def _recent_month_keys(reference: datetime, count: int = 6) -> list[str]:
+    ref_date = reference.date() if hasattr(reference, "date") else reference
+    months: list[str] = []
+    cursor = month_start(ref_date)
+    for _ in range(count):
+        months.append(cursor.strftime("%Y-%m"))
+        cursor = add_months(cursor, -1)
+    months.reverse()
+    return months
+
+
+def compute_avg_monthly_essential_living(
+    transactions: list[dict[str, Any]],
+    *,
+    reference: datetime | None = None,
+    months: int = 6,
+) -> float:
+    """Trailing average of groceries, medicines, and similar essential living spend."""
+    ref = reference or datetime.now()
+    recent_months = _recent_month_keys(ref, months)
+    if not recent_months:
+        return 0.0
+
+    monthly_totals = {month: 0.0 for month in recent_months}
+    for row in transactions:
+        if not _is_essential_living_row(row):
+            continue
+        month = month_key_from_date(row.get("transaction_date"))
+        if month not in monthly_totals:
+            continue
+        monthly_totals[month] += transaction_amount_value(
+            row.get("amount"), EXPENSE_TYPE
+        )
+
+    values = list(monthly_totals.values())
+    return round(sum(values) / len(values), 2) if values else 0.0
+
+
+def compute_avg_monthly_expense(
+    transactions: list[dict[str, Any]],
+    *,
+    reference: datetime | None = None,
+    months: int = 6,
+) -> float:
+    """Trailing average of total monthly expenses over the last N calendar months.
+
+    This is the "lifestyle burn": everything the user actually spends, used to
+    estimate how long liquid savings would last at their current lifestyle.
+    """
+    ref = reference or datetime.now()
+    recent_months = _recent_month_keys(ref, months)
+    if not recent_months:
+        return 0.0
+
+    monthly_stats = aggregate_monthly_stats(transactions)
+    monthly_expenses = [
+        round(float(monthly_stats.get(month, {}).get("expense", 0.0)), 2)
+        for month in recent_months
+    ]
+    return round(sum(monthly_expenses) / len(monthly_expenses), 2)
+
+
+def compute_survival_burn(
+    transactions: list[dict[str, Any]],
+    *,
+    profile_fixed_rent: float = 0.0,
+    profile_fixed_emi: float = 0.0,
+    reference: datetime | None = None,
+) -> float:
+    """
+    Absolute minimum monthly spend: fixed obligations + essential recurring bills
+    + average essential living costs (groceries, medicines, etc.).
+    """
+    has_recurring_rent = False
+    has_recurring_emi = False
+    fixed_recurring = 0.0
+    essential_recurring = 0.0
+
+    for row in transactions:
+        if not row.get("is_recurring"):
+            continue
+        if (row.get("transaction_type") or "").lower() != EXPENSE_TYPE:
+            continue
+
+        amount = abs(float(row.get("amount") or 0))
+        if amount <= 0:
+            continue
+
+        period = row.get("recurrence_period") or "monthly"
+        skips = int(row.get("recurrence_skips") or 0)
+        monthly = _recurring_amount_to_monthly(amount, period, skips)
+
+        if _is_fixed_obligation_row(row):
+            fixed_recurring += monthly
+            main_cat = _transaction_main_category(row)
+            merchant = _merchant_text(row)
+            sub_cat = _sub_category_text(row)
+            if "housing" in main_cat or "rent" in merchant or "rent" in sub_cat:
+                has_recurring_rent = True
+            if "financial" in main_cat or "emi" in merchant or "loan" in merchant or "emi" in sub_cat:
+                has_recurring_emi = True
+        elif _is_essential_recurring_row(row):
+            essential_recurring += monthly
+
+    profile_rent = float(profile_fixed_rent or 0) if not has_recurring_rent else 0.0
+    profile_emi = float(profile_fixed_emi or 0) if not has_recurring_emi else 0.0
+    fixed_obligations = profile_rent + profile_emi + fixed_recurring
+    essential_living = compute_avg_monthly_essential_living(
+        transactions, reference=reference
+    )
+
+    return round(fixed_obligations + essential_recurring + essential_living, 2)
+
+
 def _health_label(score: int) -> str:
     if score >= 80:
         return "Excellent"
@@ -733,70 +997,113 @@ def _health_label(score: int) -> str:
 def compute_financial_health(
     summary: dict[str, float],
     accounts: list[dict[str, Any]],
+    *,
+    score_breakdown_out: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    """Derive a 0–100 health score from real profile, balance, and spend data."""
+    """Derive a 0–100 health score from real profile, balance, and spend data.
+
+    The score is the sum of four independent pillars (max 100):
+      - Savings rate ....... up to 40 points
+      - Monthly commitments  up to 25 points (lower commitment-to-income is better)
+      - Emergency buffer ... up to 20 points (months of liquid savings)
+      - Credit utilization . up to 15 points (lower is better)
+    """
     monthly_income = float(summary.get("monthly_income") or 0)
     net_savings = float(summary.get("net_savings") or 0)
     savings_rate = float(summary.get("savings_rate") or 0)
-    fixed_expense = float(summary.get("fixed_expense") or 0)
-    net_outflow = float(summary.get("net_outflow") or 0)
-    total_balance = float(summary.get("total_balance") or 0)
+    monthly_commitments = float(summary.get("fixed_expense") or 0)
+    total_expense = float(summary.get("net_outflow") or 0)
+    liquid_balance = float(summary.get("total_balance") or 0)
+    survival_burn = float(summary.get("survival_burn") or 0)
+    lifestyle_burn = float(summary.get("lifestyle_burn") or total_expense)
 
-    debt_to_income = (
-        round((fixed_expense / monthly_income) * 100, 1) if monthly_income > 0 else 0.0
-    )
-    monthly_burn = fixed_expense if fixed_expense > 0 else net_outflow
-    emergency_months: float | None = None
-    if monthly_burn > 0 and total_balance > 0:
-        emergency_months = round(total_balance / monthly_burn, 1)
-
-    utilizations: list[float] = []
-    for acc in accounts:
-        if (acc.get("account_type") or "").lower() != "credit_card":
-            continue
-        credit_limit = float(acc.get("credit_limit") or 0)
-        if credit_limit <= 0:
-            continue
-        borrowed = abs(float(acc.get("current_balance") or 0))
-        utilizations.append(borrowed / credit_limit)
-    avg_credit_util = (
-        round(sum(utilizations) / len(utilizations) * 100, 1) if utilizations else None
+    # Share of income committed to recurring obligations (rent, EMIs, subscriptions).
+    commitments_to_income_pct = (
+        round((monthly_commitments / monthly_income) * 100, 1) if monthly_income > 0 else 0.0
     )
 
-    score_parts: list[float] = []
+    # How many months liquid savings last at bare-essential vs. actual spend.
+    survival_buffer_months = (
+        round(liquid_balance / survival_burn, 1)
+        if survival_burn > 0 and liquid_balance > 0
+        else None
+    )
+    lifestyle_buffer_months = (
+        round(liquid_balance / lifestyle_burn, 1)
+        if lifestyle_burn > 0 and liquid_balance > 0
+        else None
+    )
+    # The emergency-buffer pillar is scored against actual spend (the lifestyle
+    # buffer), matching the dashboard's "Recommended" buffer.
+    emergency_buffer_months = lifestyle_buffer_months
+
+    card_utilizations = [
+        abs(float(acc.get("current_balance") or 0)) / float(acc.get("credit_limit") or 0)
+        for acc in accounts
+        if (acc.get("account_type") or "").lower() == "credit_card"
+        and float(acc.get("credit_limit") or 0) > 0
+    ]
+    avg_credit_utilization_pct = (
+        round(sum(card_utilizations) / len(card_utilizations) * 100, 1)
+        if card_utilizations
+        else None
+    )
+
+    score_breakdown: dict[str, float] = {}
+
     if monthly_income > 0:
-        score_parts.append(min(40.0, max(0.0, savings_rate * 0.4)))
-    if debt_to_income <= 30:
-        score_parts.append(25.0)
-    elif debt_to_income <= 50:
-        score_parts.append(15.0)
-    elif debt_to_income <= 70:
-        score_parts.append(8.0)
-    if emergency_months is not None:
-        if emergency_months >= 6:
-            score_parts.append(20.0)
-        elif emergency_months >= 3:
-            score_parts.append(12.0)
-        elif emergency_months >= 1:
-            score_parts.append(6.0)
-    if avg_credit_util is not None:
-        if avg_credit_util <= 30:
-            score_parts.append(15.0)
-        elif avg_credit_util <= 50:
-            score_parts.append(10.0)
-        elif avg_credit_util <= 75:
-            score_parts.append(5.0)
+        # 0.4 points per 1% saved, capped at 40 (a 100% savings rate maxes it out).
+        score_breakdown["savings_rate"] = round(min(40.0, max(0.0, savings_rate * 0.4)), 2)
 
-    score = min(100, round(sum(score_parts)))
+    if commitments_to_income_pct <= 30:
+        score_breakdown["monthly_commitments"] = 25.0
+    elif commitments_to_income_pct <= 50:
+        score_breakdown["monthly_commitments"] = 15.0
+    elif commitments_to_income_pct <= 70:
+        score_breakdown["monthly_commitments"] = 8.0
+    else:
+        score_breakdown["monthly_commitments"] = 0.0
+
+    if emergency_buffer_months is None:
+        score_breakdown["emergency_buffer"] = 0.0
+    elif emergency_buffer_months >= 6:
+        score_breakdown["emergency_buffer"] = 20.0
+    elif emergency_buffer_months >= 3:
+        score_breakdown["emergency_buffer"] = 12.0
+    elif emergency_buffer_months >= 1:
+        score_breakdown["emergency_buffer"] = 6.0
+    else:
+        score_breakdown["emergency_buffer"] = 0.0
+
+    if avg_credit_utilization_pct is None:
+        score_breakdown["credit_utilization"] = 0.0
+    elif avg_credit_utilization_pct <= 30:
+        score_breakdown["credit_utilization"] = 15.0
+    elif avg_credit_utilization_pct <= 50:
+        score_breakdown["credit_utilization"] = 10.0
+    elif avg_credit_utilization_pct <= 75:
+        score_breakdown["credit_utilization"] = 5.0
+    else:
+        score_breakdown["credit_utilization"] = 0.0
+
+    score = min(100, round(sum(score_breakdown.values())))
+    if score_breakdown_out is not None:
+        score_breakdown_out.clear()
+        score_breakdown_out.update(score_breakdown)
     return {
         "score": score,
         "label": _health_label(score),
         "savings_rate": savings_rate,
-        "debt_to_income_pct": debt_to_income,
+        "debt_to_income_pct": commitments_to_income_pct,
+        "monthly_commitments_pct": commitments_to_income_pct,
         "net_savings": round(net_savings, 2),
-        "emergency_buffer_months": emergency_months,
-        "avg_credit_utilization_pct": avg_credit_util,
-        "total_liquid_balance": round(total_balance, 2),
+        "emergency_buffer_months": emergency_buffer_months,
+        "survival_buffer_months": survival_buffer_months,
+        "lifestyle_buffer_months": lifestyle_buffer_months,
+        "survival_burn_monthly": round(survival_burn, 2) if survival_burn > 0 else None,
+        "lifestyle_burn_monthly": round(lifestyle_burn, 2) if lifestyle_burn > 0 else None,
+        "avg_credit_utilization_pct": avg_credit_utilization_pct,
+        "total_liquid_balance": round(liquid_balance, 2),
     }
 
 
@@ -808,47 +1115,69 @@ def compute_overall_financial_health(
     profile_fixed_rent: float = 0.0,
     profile_fixed_emi: float = 0.0,
     reference: datetime | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """Period-independent health score using trailing 6-month average spend."""
     ref = reference or datetime.now()
-    ref_date = ref.date() if hasattr(ref, "date") else ref
-    fixed_expense = float(profile_fixed_rent or 0) + float(profile_fixed_emi or 0)
+
     monthly_income = float(profile_income or 0)
-
-    monthly_stats = aggregate_monthly_stats(transactions)
-    recent_months: list[str] = []
-    cursor = month_start(ref_date)
-    for _ in range(6):
-        recent_months.append(cursor.strftime("%Y-%m"))
-        cursor = add_months(cursor, -1)
-    recent_months.reverse()
-    monthly_expenses = [
-        float(monthly_stats.get(m, {}).get("expense", 0.0)) for m in recent_months
-    ]
-    avg_monthly_expense = (
-        sum(monthly_expenses) / len(monthly_expenses) if monthly_expenses else 0.0
+    monthly_commitments = compute_monthly_recurring_obligations(
+        transactions,
+        profile_fixed_rent=profile_fixed_rent,
+        profile_fixed_emi=profile_fixed_emi,
     )
-
-    total_balance = 0.0
-    for acc in accounts:
-        if (acc.get("account_type") or "").lower() == "credit_card":
-            continue
-        total_balance += float(acc.get("current_balance") or 0)
-
-    net_savings = monthly_income - avg_monthly_expense
+    survival_burn = compute_survival_burn(
+        transactions,
+        profile_fixed_rent=profile_fixed_rent,
+        profile_fixed_emi=profile_fixed_emi,
+        reference=ref,
+    )
+    lifestyle_burn = compute_avg_monthly_expense(transactions, reference=ref)
+    liquid_balance = round(
+        sum(
+            float(acc.get("current_balance") or 0)
+            for acc in accounts
+            if (acc.get("account_type") or "").lower() != "credit_card"
+        ),
+        2,
+    )
+    net_savings = round(monthly_income - lifestyle_burn, 2)
     savings_rate = (
         round((net_savings / monthly_income) * 100, 1) if monthly_income > 0 else 0.0
     )
 
     summary = {
         "monthly_income": monthly_income,
-        "fixed_expense": fixed_expense,
-        "net_outflow": round(avg_monthly_expense, 2),
-        "net_savings": round(net_savings, 2),
+        "fixed_expense": monthly_commitments,
+        "survival_burn": survival_burn,
+        "lifestyle_burn": lifestyle_burn,
+        "net_outflow": lifestyle_burn,
+        "net_savings": net_savings,
         "savings_rate": savings_rate,
-        "total_balance": total_balance,
+        "total_balance": liquid_balance,
     }
-    return compute_financial_health(summary, accounts)
+    score_breakdown: dict[str, float] = {}
+    health = compute_financial_health(summary, accounts, score_breakdown_out=score_breakdown)
+
+    tab_info(
+        "dashboard",
+        "financial health user=%s tx=%d score=%s label=%s income=%.0f commitments=%.0f "
+        "survival_burn=%.0f lifestyle_burn=%.0f liquid=%.0f survival_buffer=%s "
+        "lifestyle_buffer=%s breakdown=%s",
+        mask_user_id(user_id),
+        len(transactions),
+        health["score"],
+        health["label"],
+        monthly_income,
+        monthly_commitments,
+        survival_burn,
+        lifestyle_burn,
+        liquid_balance,
+        health.get("survival_buffer_months"),
+        health.get("lifestyle_buffer_months"),
+        score_breakdown,
+    )
+    return health
 
 
 def enrich_chart_data_with_forecast(
@@ -960,6 +1289,31 @@ def build_period_dashboard_slice(
     }
 
 
+def resolve_dashboard_forecast_meta(
+    user_id: str,
+    transactions: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Resolve next-month forecast for dashboard charts (aligned with /api/forecast)."""
+    from app.services.prophet.inference import get_next_month_prediction
+
+    try:
+        meta = get_next_month_prediction(user_id, transactions)
+        if meta:
+            return meta
+
+        lookback = (date.today() - timedelta(days=730)).isoformat()
+        recent = [
+            t
+            for t in transactions
+            if str(t.get("transaction_date") or "")[:10] >= lookback
+        ]
+        if recent:
+            return get_next_month_prediction(user_id, recent)
+        return None
+    except Exception:
+        return None
+
+
 def build_dashboard_payload(
     *,
     user_id: str,
@@ -977,13 +1331,7 @@ def build_dashboard_payload(
     period_key = normalize_period(period)
     monthly_stats = aggregate_monthly_stats(transactions)
 
-    forecast_meta: dict[str, Any] | None = None
-    try:
-        from app.services.prophet.inference import get_next_month_prediction
-
-        forecast_meta = get_next_month_prediction(user_id, transactions)
-    except Exception:
-        forecast_meta = None
+    forecast_meta = resolve_dashboard_forecast_meta(user_id, transactions)
 
     period_data = {
         p: build_period_dashboard_slice(
@@ -1007,6 +1355,7 @@ def build_dashboard_payload(
         profile_fixed_rent=profile_fixed_rent,
         profile_fixed_emi=profile_fixed_emi,
         reference=ref,
+        user_id=user_id,
     )
 
     return {

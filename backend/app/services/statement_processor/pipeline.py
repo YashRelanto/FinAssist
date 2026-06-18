@@ -1,4 +1,4 @@
-from typing import List, Tuple, Dict, Any, Optional
+from typing import Dict, Any, Optional
 from .bank_detector import BankDetector
 from .pdf_ocr_extractor import PDFOCRExtractor
 from .account_extractor import AccountExtractor
@@ -7,7 +7,6 @@ from .merchant_normalizer import MerchantNormalizer
 from .categorizer import Categorizer
 from .validator import Validator
 from .db_persistence import DBPersistence
-from .models import ParsedTransaction
 
 class StatementPipeline:
     """

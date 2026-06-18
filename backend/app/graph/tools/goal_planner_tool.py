@@ -12,6 +12,7 @@ import logging
 import math
 import re
 from collections import defaultdict
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from app.graph.state import AgentState
@@ -58,6 +59,7 @@ def _parse_amount(v: Any) -> Optional[float]:
 
 
 def _months_from_timeline(timeline: Any) -> Optional[float]:
+    """Default is months"""
     if timeline is None:
         return None
     if isinstance(timeline, (int, float)):
@@ -125,7 +127,7 @@ _MONEY_TOKENS = {
 }
 _SKIP_TOKENS = {
     "pct", "percent", "age", "rate", "count", "ratio", "share", "tenure", "observed",
-    "travelers", "month", "months", "year", "years", "timeline", "coverage", "fv",
+    "travelers", "month", "months", "y  ear", "years", "timeline", "coverage", "fv",
 }
 
 
@@ -189,24 +191,119 @@ def _years_to_fi(current: float, monthly: float, corpus: float, annual_return: f
     return None  # FI not reachable within 50 years on these assumptions
 
 
+# ── Fixed-deposit valuation ───────────────────────────────────────────────────
+
+_FD_COMPOUND_N = {"monthly": 12, "quarterly": 4, "half-yearly": 2, "annually": 1}
+
+
+def _parse_date(v: Any) -> Optional[date]:
+    if not v:
+        return None
+    if isinstance(v, date):
+        return v
+    try:
+        return datetime.strptime(str(v)[:10], "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _fd_value(principal: float, rate_pct: float, comp_freq: str, years: float,
+              payout_type: str = "cumulative") -> float:
+    """Value of an FD after `years` at `rate_pct` p.a. with the given compounding."""
+    principal = max(0.0, float(principal or 0))
+    if years <= 0:
+        return principal
+    # A payout FD pays interest out periodically, so the corpus stays at principal.
+    if str(payout_type or "").lower() == "payout":
+        return principal
+    r = float(rate_pct or 0) / 100.0
+    cf = str(comp_freq or "quarterly").lower()
+    if cf == "simple":
+        return principal * (1 + r * years)
+    n = _FD_COMPOUND_N.get(cf, 4)
+    return principal * (1 + r / n) ** (n * years)
+
+
+def _fd_years(start: Optional[date], end: Optional[date]) -> float:
+    if not start or not end:
+        return 0.0
+    return max(0.0, (end - start).days / 365.25)
+
+
+def _fd_metrics(fd: Dict[str, Any], as_of: Optional[date] = None) -> Dict[str, Any]:
+    """
+    Per-FD value snapshot: current accrued value, maturity value, and the net cash if the FD is
+    broken TODAY (interest recomputed at a penalised rate) plus the cost of doing so.
+    """
+    as_of = as_of or date.today()
+    start = _parse_date(fd.get("start_date"))
+    maturity = _parse_date(fd.get("maturity_date"))
+    principal = float(fd.get("principal_amount") or 0)
+    rate = float(fd.get("interest_rate_pct") or 0)
+    comp = fd.get("compounding_frequency") or "quarterly"
+    payout = fd.get("payout_type") or "cumulative"
+    penalty = float(fd.get("premature_penalty_pct") or 1.0)
+
+    full_term = _fd_years(start, maturity)
+    elapsed = min(_fd_years(start, as_of), full_term) if start else 0.0
+    matured = bool(maturity and as_of >= maturity)
+
+    maturity_value = round(_fd_value(principal, rate, comp, full_term, payout), 2)
+    if matured:
+        current_value = break_value = maturity_value
+    else:
+        current_value = round(_fd_value(principal, rate, comp, elapsed, payout), 2)
+        # Premature withdrawal: interest accrues at a reduced (penalised) rate for the elapsed time.
+        break_value = round(_fd_value(principal, max(0.0, rate - penalty), comp, elapsed, payout), 2)
+    return {
+        "principal_amount": round(principal, 2),
+        "current_value": current_value,
+        "maturity_value": maturity_value,
+        "break_value": break_value,                              # net cash if broken today
+        "break_cost": round(max(0.0, current_value - break_value), 2),  # interest given up to break
+        "matured": matured,
+        "days_to_maturity": (maturity - as_of).days if maturity else None,
+        "full_term_years": round(full_term, 2),
+    }
+
+
+def _fetch_fixed_deposits(user_id: str) -> List[Dict[str, Any]]:
+    """Active FDs for the user with their computed current / maturity / break values."""
+    rows: List[Dict] = []
+    try:
+        if supabase_db:
+            resp = (supabase_db.table("fixed_deposits").select("*")
+                    .eq("user_id", user_id).eq("is_active", True).execute())
+            rows = resp.data or []
+    except Exception as exc:
+        logger.warning("[goal_planner] FD fetch error: %s", exc)
+    out = []
+    for r in rows:
+        m = _fd_metrics(r)
+        out.append({
+            "fd_id": r.get("fd_id"),
+            "bank_name": r.get("bank_name"),
+            "label": r.get("label"),
+            "interest_rate_pct": r.get("interest_rate_pct"),
+            "maturity_date": r.get("maturity_date"),
+            **m,
+        })
+    return out
+
+
+# Mutual-fund name tokens that indicate a readily-redeemable (near-cash) holding.
+_LIQUID_INV_KW = ("liquid", "debt", "fd", "fixed deposit", "savings", "money market",
+                  "overnight", "ultra short", "short term", "arbitrage")
+
+
+def _liquid_fund_value(inv_data: Optional[Dict]) -> float:
+    """Value of liquid / debt mutual-fund holdings (redeemable in ~1 day) — near-cash."""
+    holdings = (inv_data or {}).get("holdings") or []
+    return round(sum(float(h.get("current_value") or 0) for h in holdings
+                     if any(kw in (h.get("name") or "").lower() for kw in _LIQUID_INV_KW)), 2)
+
+
 # ── Evidence extraction helpers ───────────────────────────────────────────────
-
-def _extract_nl2sql_financials(evidence: List[Dict]) -> Optional[Dict]:
-    for e in evidence:
-        if e.get("tool") != "nl2sql":
-            continue
-        data = e.get("data") or {}
-        rows = data.get("rows") or []
-        analytics = data.get("analytics") or {}
-        balances = [float(r["current_balance"] or 0) for r in rows
-                    if isinstance(r, dict) and "current_balance" in r]
-        return {
-            "total_current_balance": sum(balances) if balances else None,
-            "total_income":  analytics.get("total_income"),
-            "total_expense": analytics.get("total_expense") or analytics.get("total_amount"),
-        }
-    return None
-
 
 def _extract_spending_categories(evidence: List[Dict]) -> List[Dict]:
     """Pull category breakdown from nl2sql evidence."""
@@ -253,22 +350,28 @@ def _spending_reduction_opportunities(categories: List[Dict]) -> List[Dict]:
     for cat in categories:
         name = (cat.get("category") or "").lower()
         amount = float(cat.get("amount") or 0)
+        if amount <= 500:
+            continue
         if any(nr in name for nr in _NON_REDUCIBLE):
             continue
         # Match on the main category OR any of its sub-categories.
         subs = cat.get("subcategories") or []
         haystack = name + " " + " ".join((s.get("name") or "").lower() for s in subs)
-        for kw, pct in _REDUCIBLE_KEYWORDS.items():
-            if kw in haystack and amount > 500:
-                result.append({
-                    "category": cat["category"],
-                    "current_monthly": round(amount, 2),
-                    "suggested_reduction_pct": pct,
-                    "potential_saving": round(amount * pct / 100, 2),
-                    # sub-category detail so the answer can JUSTIFY the cut
-                    "driven_by": [{"name": s.get("name"), "amount": s.get("amount")} for s in subs[:3]],
-                })
-                break
+        # Score ALL keyword matches and pick the HIGHEST reduction — never first-match-wins
+        # (dict order must not silently determine the recommendation).
+        matches = [(kw, pct) for kw, pct in _REDUCIBLE_KEYWORDS.items() if kw in haystack]
+        if not matches:
+            continue
+        best_kw, best_pct = max(matches, key=lambda kp: kp[1])
+        result.append({
+            "category": cat["category"],
+            "current_monthly": round(amount, 2),
+            "suggested_reduction_pct": best_pct,
+            "matched_keyword": best_kw,
+            "potential_saving": round(amount * best_pct / 100, 2),
+            # sub-category detail so the answer can JUSTIFY the cut
+            "driven_by": [{"name": s.get("name"), "amount": s.get("amount")} for s in subs[:3]],
+        })
     result.sort(key=lambda x: x["potential_saving"], reverse=True)
     return result[:4]
 
@@ -276,10 +379,8 @@ def _spending_reduction_opportunities(categories: List[Dict]) -> List[Dict]:
 def _check_investment_liquidity(gap: float, inv_data: Dict) -> Dict:
     total_current = float(inv_data.get("total_current") or 0)
     holdings = inv_data.get("holdings") or []
-    LIQUID_KW = ("liquid", "debt", "fd", "fixed deposit", "savings", "money market",
-                 "overnight", "ultra short", "short term")
     liquid_h = [h for h in holdings
-                if any(kw in (h.get("name") or "").lower() for kw in LIQUID_KW)]
+                if any(kw in (h.get("name") or "").lower() for kw in _LIQUID_INV_KW)]
     liquid_val = round(sum(float(h.get("current_value") or 0) for h in liquid_h), 2)
     if liquid_val == 0 and total_current > 0:
         liquid_val = round(total_current * 0.15, 2)  # conservative estimate
@@ -327,9 +428,13 @@ def _compute_monthly_aggregates(user_id: str) -> Dict[str, float]:
                 monthly[month][ttype] += amount
     except Exception as exc:
         logger.error("[goal_planner] aggregate error: %s", exc)
-    n = max(len(monthly), 1)
-    total_exp = sum(m["expense"] for m in monthly.values())
-    total_inc = sum(m["income"] for m in monthly.values())
+    # Base everything on the user's RECENT behaviour — the last 6 months that have data reflect
+    # current capacity far better than stale history. (e.g. don't ask someone to save more than
+    # they have actually been saving lately.)
+    recent_keys = sorted(monthly.keys())[-6:]
+    n = max(len(recent_keys), 1)
+    total_exp = sum(monthly[m]["expense"] for m in recent_keys)
+    total_inc = sum(monthly[m]["income"] for m in recent_keys)
     monthly_income = round(total_inc / n, 2)
 
     # If there are no income transactions, fall back to the declared profile income so
@@ -346,11 +451,17 @@ def _compute_monthly_aggregates(user_id: str) -> Dict[str, float]:
             logger.warning("[goal_planner] profile income fallback failed: %s", exc)
 
     monthly_spend = round(total_exp / n, 2)
+    net_flow = round(monthly_income - monthly_spend, 2)
     return {
-        "months_observed": len(monthly),
+        "months_observed": len(recent_keys),
+        "months_analyzed": len(recent_keys),
         "monthly_avg_spend": monthly_spend,
         "monthly_avg_income": monthly_income,
-        "monthly_net_flow": round(monthly_income - monthly_spend, 2),
+        "monthly_net_flow": net_flow,
+        # How much of income the user actually keeps, and the realistic slice of that surplus we
+        # may ask them to commit to a goal (NOT all of it — see _CAP_UTIL).
+        "savings_rate_pct": round(net_flow / monthly_income * 100, 1) if monthly_income > 0 else 0.0,
+        "monthly_savings_capacity": round(max(0.0, net_flow) * _CAP_UTIL, 2),
         "income_source": income_source,
     }
 
@@ -370,6 +481,7 @@ def _classify_balances(rows: List[Dict]) -> Dict[str, Any]:
     - Negative balances never reduce the liquid total (clamped to 0).
     """
     liquid = 0.0
+    liquid_accounts: List[Dict] = []
     credit_accounts: List[Dict] = []
     illiquid_accounts: List[Dict] = []
     for r in (rows or []):
@@ -381,13 +493,19 @@ def _classify_balances(rows: List[Dict]) -> Dict[str, Any]:
             illiquid_accounts.append({"name": r.get("account_name"), "type": atype,
                                       "balance": round(max(0.0, bal), 2)})
         elif atype == "" or any(t in atype for t in _LIQUID_TYPES):
-            liquid += max(0.0, bal)   # a negative balance must not reduce deployable cash
+            b = max(0.0, bal)         # a negative balance must not reduce deployable cash
+            liquid += b
+            if b > 0:                 # keep the per-account detail so we can name WHICH bank to use
+                liquid_accounts.append({"name": r.get("account_name") or "Bank account",
+                                        "type": atype or "savings", "balance": round(b, 2)})
         else:
             # Unknown type: be conservative and treat as illiquid rather than spendable.
             illiquid_accounts.append({"name": r.get("account_name"), "type": atype,
                                       "balance": round(max(0.0, bal), 2)})
+    liquid_accounts.sort(key=lambda a: a["balance"], reverse=True)
     return {
         "liquid_balance": round(liquid, 2),
+        "liquid_accounts": liquid_accounts,
         "credit_accounts": credit_accounts,
         "illiquid_accounts": illiquid_accounts,
     }
@@ -414,23 +532,32 @@ def _compute_category_breakdown(user_id: str, months_observed: int) -> List[Dict
     """
     cats: Dict[str, float] = defaultdict(float)
     subs: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    rows: List[Dict] = []
     try:
         if supabase_db:
             resp = (supabase_db.table("transactions")
-                    .select("amount, transaction_type, merchant_name, categories(main_category, sub_category)")
+                    .select("amount, transaction_type, transaction_date, merchant_name, categories(main_category, sub_category)")
                     .eq("user_id", user_id).execute())
-            for tx in resp.data or []:
-                if (tx.get("transaction_type") or "").lower() != "expense":
-                    continue
-                amount = abs(float(tx.get("amount") or 0))
-                cat_obj = tx.get("categories") or {}
-                main = cat_obj.get("main_category") or "Others"
-                sub = cat_obj.get("sub_category") or tx.get("merchant_name") or "Other"
-                cats[main] += amount
-                subs[main][sub] += amount
+            rows = resp.data or []
     except Exception as exc:
         logger.warning("[goal_planner] category breakdown error: %s", exc)
-    n = max(months_observed, 1)
+    # Same recent window as the aggregates (last 6 months with data) so category averages line up
+    # with the monthly spend the surplus is computed from.
+    recent = set(sorted({(t.get("transaction_date") or "")[:7] for t in rows
+                          if (t.get("transaction_date") or "")})[-6:])
+    for tx in rows:
+        if (tx.get("transaction_type") or "").lower() != "expense":
+            continue
+        month = (tx.get("transaction_date") or "")[:7]
+        if recent and month not in recent:
+            continue
+        amount = abs(float(tx.get("amount") or 0))
+        cat_obj = tx.get("categories") or {}
+        main = cat_obj.get("main_category") or "Others"
+        sub = cat_obj.get("sub_category") or tx.get("merchant_name") or "Other"
+        cats[main] += amount
+        subs[main][sub] += amount
+    n = max(len(recent) or months_observed, 1)
     items = sorted(cats.items(), key=lambda x: x[1], reverse=True)
     out = []
     for main, total in items[:10]:
@@ -474,13 +601,14 @@ def _sc(tag: str, label: str, recommended: bool,
         monthly_savings_needed: float, net_flow: float, **extra) -> Dict:
     """Build a standard scenario dict."""
     ms = round(monthly_savings_needed, 2)
+    safe = net_flow * _CAP_UTIL   # only ~70% of surplus may be committed — keep a lifestyle cushion
     return {
         "tag": tag,
         "label": label,
         "recommended": recommended,
         "monthly_savings_needed": ms,
-        "feasible": net_flow >= ms if net_flow > 0 else False,
-        "shortfall_per_month": round(max(0.0, ms - net_flow), 2),
+        "feasible": safe >= ms if net_flow > 0 else False,
+        "shortfall_per_month": round(max(0.0, ms - safe), 2),
         **extra,
     }
 
@@ -495,7 +623,8 @@ def _inv_emi(emi_budget: float, annual_rate_pct: float, tenure_months: int) -> f
     return emi_budget * ((1 + r) ** tenure_months - 1) / (r * (1 + r) ** tenure_months)
 
 
-_CAP_UTIL = 0.95   # use 95% of capacity when solving, leaving a small buffer
+_CAP_UTIL = 0.70   # only ask the user to commit ~70% of their realistic monthly surplus to a goal,
+                   # never all of it — a lifestyle cushion stays untouched (realistic affordability)
 _SAVINGS_RETURN_PCT = 7.0   # expected p.a. return for cash goals >12 months (debt/hybrid MF)
 _RETURN_MIN_MONTHS = 12     # only assume growth for goals longer than this
 _TARGET_FLOOR_FRAC = 0.5   # if a goal can only be financed below this fraction of what the user
@@ -511,10 +640,82 @@ def _max_stretch_months(user_months: int) -> int:
 
 
 def _deployable(agg: dict) -> float:
-    """Idle liquid funds that can seed a down payment, keeping a 3-month emergency buffer."""
+    """
+    Funds that can genuinely seed a goal, drawn from THREE sources (see `_funding_sources`):
+      1. idle bank cash, keeping a 3-month emergency buffer;
+      2. liquid / debt mutual funds (redeemable in ~1 day) — near-cash;
+      3. fixed deposits, at their net break value (after the premature-withdrawal penalty).
+    The scenario builders only ever draw the amount a goal actually needs (lump = min(need, avail)),
+    so surfacing the full pool here lets FDs + liquid funds influence EVERY goal without forcing
+    their use on goals that don't need them.
+    """
     liquid = agg.get("total_current_balance") or 0.0
-    buffer = 3 * (agg.get("monthly_avg_spend") or 0.0)
-    return round(max(0.0, liquid - buffer), 2)
+    # Keep a 3-month emergency buffer by default; drop it if the user explicitly said to use it all.
+    buffer = 0.0 if agg.get("deploy_all") else 3 * (agg.get("monthly_avg_spend") or 0.0)
+    bank_surplus = max(0.0, liquid - buffer)
+    near_cash = agg.get("liquid_fund_value") or 0.0
+    fd_breakable = agg.get("fd_breakable_value") or 0.0
+    return round(bank_surplus + near_cash + fd_breakable, 2)
+
+
+def _funding_sources(agg: dict) -> Dict[str, Any]:
+    """
+    Breakdown of EVERY asset and whether it can seed the goal — so the answer is transparent about
+    what is used AND justifies what is NOT (e.g. equity kept invested, no liquid funds on record).
+    """
+    liquid = agg.get("total_current_balance") or 0.0
+    buffer = 0.0 if agg.get("deploy_all") else 3 * (agg.get("monthly_avg_spend") or 0.0)
+    bank_surplus = round(max(0.0, liquid - buffer), 2)
+    near_cash = round(agg.get("liquid_fund_value") or 0.0, 2)
+    fd_breakable = round(agg.get("fd_breakable_value") or 0.0, 2)
+    portfolio = round(agg.get("portfolio_value") or 0.0, 2)
+    equity_other = round(max(0.0, portfolio - near_cash), 2)  # non-liquid investments (kept invested)
+
+    # Name the exact bank accounts that hold the idle cash (largest first) so the answer can say
+    # precisely which account to draw from.
+    bank_accounts = [{"name": a.get("name"), "balance": round(float(a.get("balance") or 0), 2)}
+                     for a in (agg.get("liquid_accounts") or []) if (a.get("balance") or 0) > 0]
+    buffer_note = ("using your FULL balance, no emergency buffer kept (as you asked)"
+                   if agg.get("deploy_all") else "after keeping a 3-month expense buffer")
+    reasons: List[str] = []
+    if bank_surplus > 0:
+        named_banks = ", ".join(f"{a['name']} ({_inr(a['balance'])})" for a in bank_accounts) or "your bank account"
+        reasons.append(f"Bank savings: {_inr(bank_surplus)} can be set aside now ({buffer_note}) from {named_banks}.")
+    else:
+        reasons.append("Bank savings: nothing spare after keeping a 3-month emergency buffer.")
+    reasons.append(
+        f"Liquid/debt funds: {_inr(near_cash)} available (near-cash, used first)."
+        if near_cash > 0 else
+        "Liquid/debt funds: none on record, so none used."
+    )
+    fds = agg.get("fd_list") or []
+    if fd_breakable > 0 and fds:
+        named = "; ".join(
+            f"{(f.get('bank_name') or f.get('label') or 'FD')} FD of {_inr(f.get('principal_amount'))} "
+            f"(~{_inr(f.get('break_value'))} if broken now)"
+            for f in fds
+        )
+        reasons.append(f"Fixed deposits that can be utilised (breaking early, small penalty): {named}.")
+    elif fd_breakable > 0:
+        reasons.append(f"Fixed deposits: {_inr(fd_breakable)} could be freed by breaking them early (a small interest penalty applies).")
+    else:
+        reasons.append("Fixed deposits: none on record.")
+    if equity_other > 0:
+        reasons.append(
+            f"Equity / other investments: {_inr(equity_other)} is kept invested — liquidating growth "
+            "assets for this goal isn't advisable, so it is NOT counted as funding."
+        )
+    return {
+        "from_bank_savings": bank_surplus,
+        "from_liquid_funds": near_cash,
+        "from_fixed_deposits": fd_breakable,
+        "deployable_total": round(bank_surplus + near_cash + fd_breakable, 2),
+        "equity_or_other_not_counted": equity_other,
+        "requires_breaking_fd": fd_breakable > 0,
+        "bank_accounts": bank_accounts,                 # which accounts hold the idle cash
+        "fixed_deposits": agg.get("fd_list") or [],     # which FDs (named) can be deployed
+        "explanation": reasons,
+    }
 
 
 def _loan_scenarios(*, price: float, existing: float, user_months: float, user_dp_pct: float,
@@ -540,7 +741,11 @@ def _loan_scenarios(*, price: float, existing: float, user_months: float, user_d
     price = max(price, 0.0)
     deployable = max(deployable, 0.0)
     user_months = max(1, int(round(user_months)))
-    cap = surplus + cuts                      # realistic monthly capacity (discretionary trimmed)
+    cap = surplus + cuts                      # SAVING-phase capacity (short-term cuts are OK)
+    # The EMI runs for years, so it must be sustainable from the BASE surplus alone — we do NOT
+    # assume the user permanently slashes spending to pay an EMI. (Cuts help the down payment, not
+    # the long-term EMI.)
+    emi_cap = surplus * _CAP_UTIL
     cuts_note = f" (with ₹{round(cuts):,}/mo spending cuts)" if cuts > 0 else ""
     max_months = _max_stretch_months(user_months)
 
@@ -571,23 +776,29 @@ def _loan_scenarios(*, price: float, existing: float, user_months: float, user_d
             "total_cost_of_ownership": round(P + interest + extra_upfront, 2),
             "timeline_months": months,
             "monthly_savings_needed": save,
-            "feasible": (save <= capacity + 1) and (emi <= capacity + 1),
-            "shortfall_per_month": round(max(0.0, save - capacity), 2),
+            # The down-payment SAVING must fit ~70% of the saving capacity (surplus + short-term
+            # cuts); the post-purchase EMI must fit ~70% of the BASE surplus (emi_cap) — a plan
+            # whose EMI eats the whole surplus is NOT affordable, even with cuts.
+            "feasible": (save <= capacity * _CAP_UTIL + 1) and (emi <= emi_cap + 1),
+            "shortfall_per_month": round(max(0.0, save - capacity * _CAP_UTIL), 2),
+            "emi_fits_base_surplus": emi <= emi_cap + 1,
             "recommended_instrument": instrument,
         }
 
     def feasible_band(months, capacity, available):
-        """[dp_lo, dp_hi] of down-payment % that keeps BOTH EMI and monthly saving within capacity,
-        after using `available` (existing + deployable spare funds) as a head-start."""
-        c = capacity * _CAP_UTIL
-        max_loan = _inv_emi(c, rate, tenure)
+        """[dp_lo, dp_hi] of down-payment % that keeps the EMI within base surplus AND the monthly
+        saving within the saving capacity, after using `available` (existing + spare funds) up front."""
+        c = capacity * _CAP_UTIL                          # this month's saving allowance
+        max_loan = _inv_emi(emi_cap, rate, tenure)        # EMI must fit BASE surplus, not surplus+cuts
         dp_lo = max(0.0, (price - max_loan) / price * 100.0) if price else 0.0                       # EMI fits
         dp_hi = ((c * months + available - extra_upfront) / price * 100.0) if price else 100.0       # saving fits
         return dp_lo, min(100.0, dp_hi)
 
-    # A — user's exact plan, no fund deployment, judged honestly against base surplus
+    # A — user's exact plan (their down-payment % and timeline), DEPLOYING their available assets
+    # (idle bank cash + liquid funds + breakable FDs) toward the upfront, judged honestly against
+    # the base surplus. This reflects "use my money / break my FDs" in the user's own plan.
     sc_a = make("A", f"Your Plan — {user_dp_pct:.0f}% {down_label} over {user_months} months",
-                False, user_dp_pct, user_months, surplus, price, 0.0)
+                False, user_dp_pct, user_months, surplus, price, deployable)
 
     # B — SOLVE for feasibility: deploy spare funds, raise the down payment so the EMI fits, keep
     #     the timeline (modest stretch only if no down payment works at all).
@@ -608,26 +819,34 @@ def _loan_scenarios(*, price: float, existing: float, user_months: float, user_d
         sc_b = make("B", f"Keep this {asset} — a stretch even at {max_months} months on your budget{cuts_note}",
                     False, dp_b, max_months, cap, price, deployable)
 
-    # C — RIGHT-SIZE: biggest purchase that fits the ORIGINAL timeline (deploying spare funds too).
+    # C — RIGHT-SIZE / MAX FINANCEABLE: the biggest purchase that fits, putting ALL deployable
+    # funds (idle cash, liquid funds AND broken FDs) toward the down payment, PLUS the largest loan
+    # whose EMI fits the base surplus. Maximising the down payment with assets (incl. breaking FDs)
+    # shrinks the loan, so a bigger car becomes affordable than at the user's stated down-payment %.
     dp_frac = min(max(user_dp_pct / 100.0, 0.0), 1.0)
     c = cap * _CAP_UTIL
     avail_c = existing + deployable
-    price_by_save = ((c * user_months + avail_c - extra_upfront) / dp_frac) if dp_frac > 0 else float("inf")
-    price_by_emi = (_inv_emi(c, rate, tenure) / (1 - dp_frac)) if dp_frac < 1 else float("inf")
-    price_c = max(0.0, min(price_by_save, price_by_emi))
+    max_loan = _inv_emi(emi_cap, rate, tenure)                          # biggest EMI-affordable loan
+    down_avail = max(0.0, avail_c + c * user_months - extra_upfront)    # most we can put down
+    price_c = down_avail + max_loan
     price_c_capped = min(price_c, price)
     out_of_reach = price > 0 and price_c < price * _TARGET_FLOOR_FRAC
+    # Down-payment % for the right-sized car: assets first, loan covers the rest. Keep it UNROUNDED
+    # so the loan = exactly max_loan and the EMI lands on emi_cap (rounding the % would push a few
+    # hundred rupees into the loan and trip the EMI cap). make() rounds the % for display.
+    dp_pct_c = min(100.0, down_avail / price_c_capped * 100.0) if price_c_capped > 0 else user_dp_pct
+    deploy_c = f" by deploying {_inr(deployable)} of savings/investments now" if deployable > 0 else ""
     if price_c >= price * 0.98:
         need = max(0.0, price * dp_frac + extra_upfront - avail_c)
         months_fast = max(1, math.ceil(need / c)) if c > 0 else user_months
         sc_c = make("C", f"Buy Sooner — same {asset} in {months_fast} months{cuts_note}",
                     False, user_dp_pct, months_fast, cap, price, deployable)
     elif out_of_reach:
-        sc_c = make("C", f"Most you can finance — a {_inr(price_c_capped)} {asset} (your {_inr(price)} target is out of reach in {user_months} months){cuts_note}",
-                    False, user_dp_pct, user_months, cap, price_c_capped, deployable)
+        sc_c = make("C", f"Most you can finance — a {_inr(price_c_capped)} {asset}{deploy_c} (your {_inr(price)} target is out of reach in {user_months} months){cuts_note}",
+                    False, dp_pct_c, user_months, cap, price_c_capped, deployable)
     else:
-        sc_c = make("C", f"Right-Size — a {_inr(price_c_capped)} {asset} fits your {user_months}-month timeline{cuts_note}",
-                    False, user_dp_pct, user_months, cap, price_c_capped, deployable)
+        sc_c = make("C", f"Right-Size — a {_inr(price_c_capped)} {asset} fits your {user_months}-month timeline{deploy_c}{cuts_note}",
+                    False, dp_pct_c, user_months, cap, price_c_capped, deployable)
 
     # Recommend the plan that actually WORKS.
     (sc_b if sc_b["feasible"] else sc_c)["recommended"] = True
@@ -637,20 +856,24 @@ def _loan_scenarios(*, price: float, existing: float, user_months: float, user_d
 
 def _savings_scenarios(*, target: float, existing: float, user_months: float,
                        surplus: float, cuts: float, instrument: str, asset: str = "goal",
-                       annual_return_pct: float = _SAVINGS_RETURN_PCT) -> tuple:
+                       annual_return_pct: float = _SAVINGS_RETURN_PCT,
+                       deployable: float = 0.0) -> tuple:
     """
     Three DYNAMIC scenarios for a cash (no-loan) goal, respecting the user's timeline.
     Money invested for >12 months GROWS, so the monthly contribution needed for long goals is
     the SIP amount (lower than a flat gap/months). Short goals (<=12 months) and 0%-return goals
     (e.g. an emergency fund kept liquid) stay linear.
-      A 'Your Plan'   — your timeline.
-      B 'Recommended' — keep the timeline if the monthly fits surplus + cuts; else stretch
-                        MODESTLY (bounded) to the soonest feasible point.
-      C 'Right-Size'  — the largest target reachable within the original timeline (or, if it
-                        already fits, the soonest the user could reach it).
+
+    `deployable` is the user's spare assets (idle bank cash + liquid funds + breakable FDs). It is
+    used as a one-time head-start that REDUCES the gap to save for — so these assets genuinely cut
+    the monthly commitment on every cash goal. Only the amount the goal needs is ever drawn.
+      A 'Your Plan'   — your timeline (no assets deployed — judged honestly).
+      B 'Recommended' — deploy spare assets + keep the timeline if it fits; else stretch MODESTLY.
+      C 'Right-Size'  — the largest target reachable within the original timeline (deploying assets).
     """
     surplus = max(surplus, 0.0)
     cuts = max(cuts, 0.0)
+    deployable = max(0.0, deployable)
     user_months = max(1, int(round(user_months)))
     cap = surplus + cuts
     c = cap * _CAP_UTIL
@@ -659,65 +882,73 @@ def _savings_scenarios(*, target: float, existing: float, user_months: float,
     cuts_note = f" (with ₹{round(cuts):,}/mo spending cuts)" if cuts > 0 else ""
     max_months = _max_stretch_months(user_months)
 
-    def _monthly_for(target_amt, months):
-        """Monthly contribution needed to reach target_amt from `existing` over `months`."""
+    def _monthly_for(target_amt, months, base):
+        """Monthly contribution needed to reach target_amt from `base` (existing + deployed) over `months`."""
         if months > _RETURN_MIN_MONTHS and grows:
-            existing_fv = _corpus_growth(existing, 0.0, r, months)
-            need = max(0.0, target_amt - existing_fv)
+            base_fv = _corpus_growth(base, 0.0, r, months)
+            need = max(0.0, target_amt - base_fv)
             return round(_monthly_sip_for_corpus(need, annual_return_pct, months), 2)
-        return round(max(0.0, target_amt - existing) / months, 2)
+        return round(max(0.0, target_amt - base) / months, 2)
 
-    def _reachable(months):
-        """Largest target reachable from `existing` over `months` at full capacity c."""
+    def _reachable(months, base):
+        """Largest target reachable from `base` over `months` at full capacity c."""
         if months > _RETURN_MIN_MONTHS and grows:
-            return _corpus_growth(existing, c, r, months)
-        return existing + c * months
+            return _corpus_growth(base, c, r, months)
+        return base + c * months
 
-    def build(tag, label, recommended, target_amt, months, capacity):
+    def build(tag, label, recommended, target_amt, months, capacity, deploy):
         months = max(1, int(months))
-        save = _monthly_for(target_amt, months)
+        deploy = round(min(max(0.0, deploy), max(0.0, target_amt - existing)), 2)  # only what's needed
+        base = existing + deploy
+        save = _monthly_for(target_amt, months, base)
         return {
             "tag": tag, "label": label, "recommended": recommended,
             "timeline_months": months,
             "monthly_savings_needed": save,
             "target_amount": round(target_amt, 2),
             "gap": round(max(0.0, target_amt - existing), 2),
+            "deployed_now": deploy,                       # spare assets put in up-front (incl. broken FDs)
             "assumed_annual_return_pct": annual_return_pct,
-            "feasible": save <= capacity + 1,
-            "shortfall_per_month": round(max(0.0, save - capacity), 2),
+            # Only ~70% of the monthly capacity may be committed — keep a lifestyle cushion.
+            "feasible": save <= capacity * _CAP_UTIL + 1,
+            "shortfall_per_month": round(max(0.0, save - capacity * _CAP_UTIL), 2),
             "recommended_instrument": instrument,
         }
 
-    # A — your plan
-    sc_a = build("A", f"Your Plan — {user_months} months", False, target, user_months, surplus)
+    # A — your plan over your timeline, DEPLOYING available assets (bank cash + liquid funds +
+    # breakable FDs), judged honestly against the monthly surplus alone.
+    sc_a = build("A", f"Your Plan — {user_months} months", False, target, user_months, surplus, deployable)
 
-    # B — keep the timeline if it fits; else stretch MODESTLY (capped ~1.5x) to the soonest point
+    # B — deploy spare assets, keep the timeline if it fits; else stretch MODESTLY (capped ~1.5x)
+    deploy_b = round(min(deployable, max(0.0, target - existing)), 2)
+    base_b = existing + deploy_b
     months_b = user_months
-    while c > 0 and _monthly_for(target, months_b) > c and months_b < max_months:
+    while c > 0 and _monthly_for(target, months_b, base_b) > c and months_b < max_months:
         months_b += 1
+    deploy_note = f", deploy {_inr(deploy_b)} now" if deploy_b > 0 else ""
     if months_b == user_months:
-        label_b = f"Keep this target — your {user_months}-month timeline{cuts_note}"
+        label_b = f"Keep this target — your {user_months}-month timeline{deploy_note}{cuts_note}"
     else:
-        label_b = f"Keep this target — {months_b} months (a {months_b-user_months}-month extension){cuts_note}"
-    sc_b = build("B", label_b, False, target, months_b, cap)
+        label_b = f"Keep this target — {months_b} months (a {months_b-user_months}-month extension){deploy_note}{cuts_note}"
+    sc_b = build("B", label_b, False, target, months_b, cap, deployable)
 
     # C — right-size the target to the original timeline (or reach sooner if it already fits)
-    reachable = _reachable(user_months)
+    reachable = _reachable(user_months, existing + deployable)
     affordable_target = round(min(reachable, target), 2)
     out_of_reach = target > 0 and affordable_target < target * _TARGET_FLOOR_FRAC
     if reachable >= target * 0.98:
         months_fast = user_months
-        while c > 0 and _monthly_for(target, months_fast) <= c and months_fast > 1:
+        while c > 0 and _monthly_for(target, months_fast, existing + deployable) <= c and months_fast > 1:
             months_fast -= 1
         months_fast = min(months_fast + 1, user_months)  # smallest months that still fits
         sc_c = build("C", f"Reach Sooner — same target in {months_fast} months{cuts_note}",
-                     False, target, months_fast, cap)
+                     False, target, months_fast, cap, deployable)
     elif out_of_reach:
         sc_c = build("C", f"Most you can save — {_inr(affordable_target)} (your {_inr(target)} target is out of reach in {user_months} months){cuts_note}",
-                     False, affordable_target, user_months, cap)
+                     False, affordable_target, user_months, cap, deployable)
     else:
         sc_c = build("C", f"Right-Size — a {_inr(affordable_target)} target fits your {user_months}-month timeline{cuts_note}",
-                     False, affordable_target, user_months, cap)
+                     False, affordable_target, user_months, cap, deployable)
 
     # Recommend whichever actually works within the user's (modestly stretched) timeline.
     (sc_b if sc_b["feasible"] else sc_c)["recommended"] = True
@@ -749,8 +980,10 @@ def _education_scenarios(*, cost: float, existing: float, user_months: float, se
     user_months = max(1, int(round(user_months)))
     avail = existing + deployable
     cuts_note = f" (with ₹{round(cuts):,}/mo spending cuts)" if cuts > 0 else ""
-    # The self-funded portion is paid DURING study (surplus + short-term spending cuts).
-    save_cap = (surplus + cuts) * _CAP_UTIL
+    # The self-funded portion is saved over the WHOLE study period, so it must come from the
+    # SUSTAINABLE base surplus (~70%) — we never ask the user to save more per month than they
+    # realistically can. (Don't bake in permanent spending cuts to inflate the self-funding.)
+    save_cap = surplus * _CAP_UTIL
     yrs = max(1, tenure // 12)
 
     def make(tag, label, recommended, self_amt, months):
@@ -808,26 +1041,38 @@ def _education_scenarios(*, cost: float, existing: float, user_months: float, se
 
 # ── Type-specific planners ────────────────────────────────────────────────────
 
-def _plan_gadget(goal: dict, agg: dict) -> dict:
-    target   = _parse_amount(goal.get("target_amount")) or 0.0
-    existing = _parse_amount(goal.get("existing_savings") or 0) or 0.0
-    months   = _months_from_timeline(goal.get("timeline")) or 6.0
-    net      = agg["monthly_net_flow"]
-    cuts     = agg.get("total_spending_cuts", 0.0)
-    scenarios, meta = _savings_scenarios(target=target, existing=existing, user_months=months,
-                                   surplus=net, cuts=cuts,
-                                   instrument="Liquid Mutual Fund or high-yield savings account")
+def _savings_goal(goal: dict, agg: dict, *, target: float, existing: float, months: float,
+                  instrument: str, extra: dict, annual_return_pct: float = _SAVINGS_RETURN_PCT) -> dict:
+    """
+    Shared body for every cash (no-loan) goal. Runs `_savings_scenarios` (deploying spare assets)
+    and merges the recommended scenario's headline numbers with the goal-specific `extra` fields.
+    """
+    scenarios, meta = _savings_scenarios(
+        target=target, existing=existing, user_months=months,
+        surplus=agg["monthly_net_flow"], cuts=agg.get("total_spending_cuts", 0.0),
+        deployable=_deployable(agg), instrument=instrument, annual_return_pct=annual_return_pct,
+    )
     rec = next(s for s in scenarios if s["recommended"])
     return {
-        "purchase_price": target, "existing_savings": existing, "gap": round(max(0.0, target - existing), 2),
+        **extra,
         "monthly_savings_needed": rec["monthly_savings_needed"],
         "recommended_timeline_months": rec["timeline_months"],
         "feasible": rec["feasible"],
         "shortfall_per_month": rec["shortfall_per_month"],
-        "recommended_instrument": "Liquid Mutual Fund or high-yield savings account",
+        "recommended_instrument": instrument,
         **meta,
         "scenarios": scenarios,
     }
+
+
+def _plan_gadget(goal: dict, agg: dict) -> dict:
+    target   = _parse_amount(goal.get("target_amount")) or 0.0
+    existing = _parse_amount(goal.get("existing_savings") or 0) or 0.0
+    months   = _months_from_timeline(goal.get("timeline")) or 6.0
+    return _savings_goal(goal, agg, target=target, existing=existing, months=months,
+                         instrument="Liquid Mutual Fund or high-yield savings account",
+                         extra={"purchase_price": target, "existing_savings": existing,
+                                "gap": round(max(0.0, target - existing), 2)})
 
 
 def _plan_car(goal: dict, agg: dict) -> dict:
@@ -838,11 +1083,12 @@ def _plan_car(goal: dict, agg: dict) -> dict:
     user_dp  = _num(goal.get("down_payment_pct"), 100 if "cash" in pref else 30)
     net      = agg["monthly_net_flow"]
     cuts     = agg.get("total_spending_cuts", 0.0)
+    tenure_months = max(1, int(_num(goal.get("loan_tenure_months"), 60)))
 
     scenarios, meta = _loan_scenarios(
         price=price, existing=existing, user_months=months, user_dp_pct=user_dp,
         surplus=net, cuts=cuts, deployable=_deployable(agg),
-        rate=10.0, tenure=60, down_label="down payment", asset="car",
+        rate=10.0, tenure=tenure_months, down_label="down payment", asset="car",
         instrument="Recurring Deposit or Liquid MF for the down payment",
     )
     rec = next(s for s in scenarios if s["recommended"])
@@ -865,7 +1111,8 @@ def _plan_car(goal: dict, agg: dict) -> dict:
         "recommended_timeline_months": rec["timeline_months"],
         "feasible": rec["feasible"],
         "shortfall_per_month": rec["shortfall_per_month"],
-        "note": "EMI at 10% p.a., 5-year tenure. Verify current rates with your bank.",
+        "note": f"EMI at 10% p.a., {tenure_months // 12}-year ({tenure_months}-month) tenure. "
+                "Verify current rates with your bank.",
         "recommended_instrument": "Recurring Deposit or Liquid MF for the down payment",
         **meta,
         "scenarios": scenarios,
@@ -878,55 +1125,25 @@ def _plan_travel(goal: dict, agg: dict) -> dict:
     months    = _months_from_timeline(goal.get("timeline")) or 6.0
     travelers = int(_num(goal.get("travelers"), 1))
     total     = base_cost * travelers if travelers > 1 else base_cost
-    net       = agg["monthly_net_flow"]
-
-    cuts = agg.get("total_spending_cuts", 0.0)
-    scenarios, meta = _savings_scenarios(target=total, existing=existing, user_months=months,
-                                   surplus=net, cuts=cuts,
-                                   instrument="Liquid Mutual Fund (instant redemption)")
-    rec = next(s for s in scenarios if s["recommended"])
-    return {
-        "trip_cost_total": round(total, 2), "per_person_cost": round(base_cost, 2),
-        "travelers": travelers, "existing_savings": existing,
-        "gap": round(max(0.0, total - existing), 2),
-        "monthly_savings_needed": rec["monthly_savings_needed"],
-        "recommended_timeline_months": rec["timeline_months"],
-        "feasible": rec["feasible"],
-        "shortfall_per_month": rec["shortfall_per_month"],
-        "recommended_instrument": "Liquid Mutual Fund (instant redemption)",
-        **meta,
-        "scenarios": scenarios,
-    }
+    return _savings_goal(goal, agg, target=total, existing=existing, months=months,
+                         instrument="Liquid Mutual Fund (instant redemption)",
+                         extra={"trip_cost_total": round(total, 2), "per_person_cost": round(base_cost, 2),
+                                "travelers": travelers, "existing_savings": existing,
+                                "gap": round(max(0.0, total - existing), 2)})
 
 
 def _plan_emergency_fund(goal: dict, agg: dict) -> dict:
     user_cov  = _num(goal.get("target_months_coverage"), 6)
     current   = _parse_amount(goal.get("existing_savings") or 0) or 0.0
     spend     = agg["monthly_avg_spend"]
-    net       = agg["monthly_net_flow"]
-    cuts      = agg.get("total_spending_cuts", 0.0)
     target    = round(spend * user_cov, 2)
-    user_months = _months_from_timeline(goal.get("timeline")) or 12.0
-
+    months    = _months_from_timeline(goal.get("timeline")) or 12.0
     # An emergency fund must stay instantly accessible — assume no growth (kept liquid).
-    scenarios, meta = _savings_scenarios(target=target, existing=current, user_months=user_months,
-                                   surplus=net, cuts=cuts, annual_return_pct=0.0,
-                                   instrument="High-yield savings account + Liquid MF (instant access)")
-    rec = next(s for s in scenarios if s["recommended"])
-    return {
-        "monthly_expense_baseline": spend,
-        "target_coverage_months": user_cov,
-        "emergency_fund_target": target,
-        "current_emergency_savings": current,
-        "gap": round(max(0.0, target - current), 2),
-        "monthly_savings_needed": rec["monthly_savings_needed"],
-        "recommended_timeline_months": rec["timeline_months"],
-        "feasible": rec["feasible"],
-        "shortfall_per_month": rec["shortfall_per_month"],
-        "recommended_instrument": "High-yield savings account + Liquid MF (instant access)",
-        **meta,
-        "scenarios": scenarios,
-    }
+    return _savings_goal(goal, agg, target=target, existing=current, months=months, annual_return_pct=0.0,
+                         instrument="High-yield savings account + Liquid MF (instant access)",
+                         extra={"monthly_expense_baseline": spend, "target_coverage_months": user_cov,
+                                "emergency_fund_target": target, "current_emergency_savings": current,
+                                "gap": round(max(0.0, target - current), 2)})
 
 
 def _plan_house(goal: dict, agg: dict) -> dict:
@@ -934,7 +1151,8 @@ def _plan_house(goal: dict, agg: dict) -> dict:
     user_dp  = _num(goal.get("down_payment_pct"), 20)
     existing = _parse_amount(goal.get("existing_savings") or 0) or 0.0
     months   = _months_from_timeline(goal.get("timeline")) or 36.0
-    stamp    = round(prop * 0.07, 2)  # ~7% India stamp duty + registration
+    stamp_pct = _num(goal.get("stamp_duty_pct"), 7.0)        # rough default; varies by state
+    stamp     = round(prop * stamp_pct / 100.0, 2)
     net      = agg["monthly_net_flow"]
     cuts     = agg.get("total_spending_cuts", 0.0)
 
@@ -959,7 +1177,10 @@ def _plan_house(goal: dict, agg: dict) -> dict:
         "shortfall_per_month": rec["shortfall_per_month"],
         "home_loan_amount": rec["loan_amount"],
         "estimated_home_loan_emi": rec["estimated_emi"],
-        "note": "Home loan EMI at 8.5% p.a., 20-year tenure. Verify with your bank.",
+        "note": f"Home loan EMI at 8.5% p.a., 20-year tenure. Stamp duty + registration estimated "
+                f"at {stamp_pct:.0f}% — a ROUGH figure that varies 4–10% by state, gender and "
+                f"property type; verify your state's rate. Verify loan rates with your bank.",
+        "stamp_duty_pct_assumed": stamp_pct,
         "recommended_instrument": "Equity MF SIP (if >3 years away) + FD / RD closer to purchase",
         **meta,
         "scenarios": scenarios,
@@ -974,8 +1195,14 @@ def _plan_education(goal: dict, agg: dict) -> dict:
     net      = agg["monthly_net_flow"]
     cuts     = agg.get("total_spending_cuts", 0.0)
 
-    # Map the user's stated preference to a self-funded % (the rest is an education loan).
-    user_self_pct = 0 if ("full" in pref and "loan" in pref) else (50 if "hybrid" in pref else 100)
+    # Map the user's stated preference to a self-funded % (the rest is an education loan):
+    #   hybrid / both → 50%;  loan / full loan / debt → 0% self;  self-funded / cash → 100%.
+    if "hybrid" in pref or "both" in pref:
+        user_self_pct = 50
+    elif "loan" in pref or "debt" in pref or "full" in pref:
+        user_self_pct = 0
+    else:
+        user_self_pct = 100
 
     # Loan tenure is configurable (10/15/20-year are common); default to 15 years.
     tenure_years = max(1, int(_num(goal.get("loan_tenure_years"), 15)))
@@ -1016,7 +1243,11 @@ def _plan_retirement(goal: dict, agg: dict) -> dict:
     cur_age  = _num(goal.get("current_age"), 30)
     ret_age  = _num(goal.get("target_age"), 60)
     ret_exp  = _parse_amount(goal.get("monthly_retirement_expenses") or agg["monthly_avg_spend"]) or agg["monthly_avg_spend"]
-    cur_inv  = _parse_amount(goal.get("target_amount") or goal.get("existing_savings") or 0) or 0.0
+    # Current invested corpus is read AUTOMATICALLY from the user's tracked portfolio + fixed
+    # deposits (held to maturity) — we don't ask for it. Fall back to any explicitly provided
+    # savings only if nothing is on record.
+    cur_inv  = round((agg.get("portfolio_value") or 0.0) + (agg.get("fd_current_value") or 0.0), 2) \
+        or _parse_amount(goal.get("existing_savings") or 0) or 0.0
     yrs      = max(0.0, ret_age - cur_age)
     mo       = yrs * 12
     net      = agg["monthly_net_flow"]
@@ -1085,10 +1316,16 @@ def _plan_retirement(goal: dict, agg: dict) -> dict:
 
 def _plan_fire(goal: dict, agg: dict) -> dict:
     exp     = _parse_amount(goal.get("target_amount") or goal.get("monthly_retirement_expenses")) or agg["monthly_avg_spend"]
+    # Current net worth is read AUTOMATICALLY from portfolio + fixed deposits + liquid balances —
+    # we don't ask. Honour an explicitly provided figure only if present.
     worth   = _parse_amount(goal.get("existing_savings") or 0) or 0.0
+    if worth <= 0:
+        worth = round((agg.get("portfolio_value") or 0.0)
+                      + (agg.get("fd_current_value") or 0.0)
+                      + (agg.get("total_current_balance") or 0.0), 2)
     net     = agg["monthly_net_flow"]
     cuts    = agg.get("total_spending_cuts", 0.0)
-    invest  = max(0.0, (net + cuts) * 0.7)  # 70% of (surplus + reclaimed spending cuts) invested
+    invest  = max(0.0, (net + cuts) * _CAP_UTIL)  # 70% of (surplus + reclaimed spending cuts) invested
     RETURN  = 0.12
 
     def _fire_sc(tag, label, recommended, exp_mult):
@@ -1132,30 +1369,16 @@ def _plan_wedding(goal: dict, agg: dict) -> dict:
     budget   = _parse_amount(goal.get("target_amount")) or 0.0
     existing = _parse_amount(goal.get("existing_savings") or 0) or 0.0
     months   = _months_from_timeline(goal.get("timeline")) or 18.0
-    net      = agg["monthly_net_flow"]
-    cuts     = agg.get("total_spending_cuts", 0.0)
-
-    scenarios, meta = _savings_scenarios(target=budget, existing=existing, user_months=months,
-                                   surplus=net, cuts=cuts,
-                                   instrument="FD ladder + Recurring Deposit (low-risk, accessible)")
-    rec = next(s for s in scenarios if s["recommended"])
-    return {
-        "wedding_budget": budget, "existing_savings": existing,
-        "gap": round(max(0.0, budget - existing), 2),
-        "monthly_savings_needed": rec["monthly_savings_needed"],
-        "recommended_timeline_months": rec["timeline_months"],
-        "feasible": rec["feasible"],
-        "shortfall_per_month": rec["shortfall_per_month"],
-        "recommended_instrument": "FD ladder + Recurring Deposit (low-risk, accessible)",
-        **meta,
-        "scenarios": scenarios,
-    }
+    return _savings_goal(goal, agg, target=budget, existing=existing, months=months,
+                         instrument="FD ladder + Recurring Deposit (low-risk, accessible)",
+                         extra={"wedding_budget": budget, "existing_savings": existing,
+                                "gap": round(max(0.0, budget - existing), 2)})
 
 
 def _plan_multi_goal(goal: dict, agg: dict) -> dict:
     sub_goals = goal.get("sub_goals") or []
     net       = agg["monthly_net_flow"]
-    investable = max(0.0, net * 0.8)
+    investable = max(0.0, net * _CAP_UTIL)
 
     planned = []
     total_needed = 0.0
@@ -1164,22 +1387,43 @@ def _plan_multi_goal(goal: dict, agg: dict) -> dict:
         ex      = _parse_amount(sg.get("existing_savings") or 0) or 0.0
         mo      = _months_from_timeline(sg.get("timeline"))
         if target and mo and mo > 0:
-            ms = max(0.0, round((target - ex) / mo, 2))
+            gap = max(0.0, target - ex)
+            ms = round(gap / mo, 2)
             total_needed += ms
             planned.append({
                 "description": sg.get("description"),
                 "goal_type": sg.get("goal_type", "generic"),
                 "target_amount": target, "timeline_months": mo,
+                "gap": round(gap, 2),
                 "monthly_savings_needed": ms,
             })
     planned.sort(key=lambda x: x.get("timeline_months") or float("inf"))
 
     def _allocate(strategy: str) -> list:
+        if strategy == "sequential":
+            # Fund goals one after another at FULL capacity: compute each goal's funding window
+            # (gap / investable, rounded up) and schedule them back-to-back.
+            result = []
+            start = 0
+            for p in planned:
+                if investable > 0:
+                    duration = max(1, math.ceil(p["gap"] / investable))
+                    alloc = round(min(investable, p["gap"]), 2)
+                else:
+                    duration = int(p.get("timeline_months") or 1)
+                    alloc = 0.0
+                result.append({
+                    **p,
+                    "allocated_monthly": alloc,
+                    "start_month": start + 1,
+                    "end_month": start + duration,
+                    "funding_window": f"Month {start + 1}–{start + duration}",
+                })
+                start += duration
+            return result
         result = []
         for i, p in enumerate(planned):
-            if strategy == "sequential":
-                alloc = p["monthly_savings_needed"] if i == 0 else 0.0
-            elif strategy == "parallel":
+            if strategy == "parallel":
                 prop  = p["monthly_savings_needed"] / max(total_needed, 1)
                 alloc = round(investable * prop, 2)
             else:  # hybrid: 60% to most urgent, 40% split
@@ -1213,22 +1457,10 @@ def _plan_generic(goal: dict, agg: dict) -> dict:
     target   = _parse_amount(goal.get("target_amount")) or 0.0
     existing = _parse_amount(goal.get("existing_savings") or 0) or 0.0
     months   = _months_from_timeline(goal.get("timeline")) or 12.0
-    net      = agg["monthly_net_flow"]
-    cuts     = agg.get("total_spending_cuts", 0.0)
-    scenarios, meta = _savings_scenarios(target=target, existing=existing, user_months=months,
-                                   surplus=net, cuts=cuts,
-                                   instrument="Liquid MF or FD based on timeline")
-    rec = next(s for s in scenarios if s["recommended"])
-    return {
-        "target_amount": target, "existing_savings": existing, "gap": round(max(0.0, target - existing), 2),
-        "monthly_savings_needed": rec["monthly_savings_needed"],
-        "recommended_timeline_months": rec["timeline_months"],
-        "feasible": rec["feasible"],
-        "shortfall_per_month": rec["shortfall_per_month"],
-        "recommended_instrument": "Liquid MF or FD based on timeline",
-        **meta,
-        "scenarios": scenarios,
-    }
+    return _savings_goal(goal, agg, target=target, existing=existing, months=months,
+                         instrument="Liquid MF or FD based on timeline",
+                         extra={"target_amount": target, "existing_savings": existing,
+                                "gap": round(max(0.0, target - existing), 2)})
 
 
 _GOAL_PLANNERS = {
@@ -1247,6 +1479,18 @@ _GOAL_PLANNERS = {
 
 # ── Main tool node ────────────────────────────────────────────────────────────
 
+def _goal_summary(goal_type: str, target_amount: Any, timeline: Any,
+                  monthly_needed: Any, net_flow: Any, feasible: Any, n_scenarios: int) -> str:
+    """One-line evidence summary that never renders '₹None' for a missing target."""
+    target_display = _inr(target_amount) if target_amount else "N/A"
+    return (
+        f"Goal '{goal_type}' — target={target_display}, "
+        f"timeline={timeline}, monthly_needed={_inr(monthly_needed or 0)}, "
+        f"net_flow={_inr(net_flow)}, feasible={feasible}, "
+        f"scenarios={n_scenarios}"
+    )
+
+
 def goal_planner_tool(state: AgentState) -> dict:
     user_id   = state.get("user_id") or ""
     task      = state.get("brain_task") or {}
@@ -1257,6 +1501,18 @@ def goal_planner_tool(state: AgentState) -> dict:
     agg          = _compute_monthly_aggregates(user_id)
     balance_info = _get_account_balances(user_id)
     agg["total_current_balance"] = balance_info["liquid_balance"]
+    agg["liquid_accounts"]       = balance_info.get("liquid_accounts") or []
+
+    # Honour an EXPLICIT "deploy everything / break my FDs / put all my money in" instruction:
+    # when present we drop the 3-month bank buffer so the full asset pool can fund the goal.
+    _ftxt = " ".join(str(goal.get(k) or "") for k in
+                     ("funding", "financing_preference", "loan_preference", "description")).lower()
+    _ftxt += " " + str(task.get("sub_question") or "").lower()
+    agg["deploy_all"] = (
+        ("all" in _ftxt and any(w in _ftxt for w in ("money", "fund", "saving")))
+        or "everything" in _ftxt
+        or ("break" in _ftxt and "fd" in _ftxt)
+    )
 
     # Spending reduction opportunities — computed BEFORE the planner so scenario C can use the
     # total potential cut to build an "accelerated" feasible plan.
@@ -1265,6 +1521,16 @@ def goal_planner_tool(state: AgentState) -> dict:
         spending_cats = _compute_category_breakdown(user_id, agg["months_observed"])
     spend_ops = _spending_reduction_opportunities(spending_cats) if spending_cats else []
     agg["total_spending_cuts"] = round(sum(o.get("potential_saving", 0) for o in spend_ops), 2)
+
+    # Investment portfolio + fixed deposits — fetched UP-FRONT (before the planner) so EVERY goal
+    # can draw on them as a genuine funding source. We never ask the user for these figures.
+    inv_data = _extract_investment_data(evidence) or _fetch_investment_holdings(user_id)
+    fds = _fetch_fixed_deposits(user_id)
+    agg["portfolio_value"]    = round(float((inv_data or {}).get("total_current") or 0.0), 2)
+    agg["liquid_fund_value"]  = _liquid_fund_value(inv_data)                     # near-cash MFs
+    agg["fd_current_value"]   = round(sum(f.get("current_value") or 0.0 for f in fds), 2)  # held-to-maturity
+    agg["fd_breakable_value"] = round(sum(f.get("break_value") or 0.0 for f in fds), 2)    # net if broken now
+    agg["fd_list"]            = fds                                              # for naming sources by bank
 
     # Run type-specific planner
     goal_type = str(goal.get("goal_type") or "generic").lower().strip()
@@ -1275,8 +1541,19 @@ def goal_planner_tool(state: AgentState) -> dict:
         extra["spending_reduction_opportunities"] = spend_ops
         extra["spending_by_category"] = spending_cats
 
-    # Investment liquidity check — prefer investment evidence, else fetch directly.
-    inv_data = _extract_investment_data(evidence) or _fetch_investment_holdings(user_id)
+    # Where the deployable seed money comes from (bank cash / liquid funds / breakable FDs) — so
+    # the answer is transparent that some funding may require breaking an FD.
+    extra["funding_sources"] = _funding_sources(agg)
+    if fds:
+        extra["fixed_deposits"] = fds
+        extra["fixed_deposits_summary"] = {
+            "count": len(fds),
+            "total_current_value": agg["fd_current_value"],
+            "total_break_value": agg["fd_breakable_value"],
+            "total_maturity_value": round(sum(f.get("maturity_value") or 0.0 for f in fds), 2),
+        }
+
+    # Investment liquidity check — uses the portfolio fetched above.
     if inv_data:
         gap = extra.get("gap") or max(0.0, (extra.get("target_amount") or 0) - (extra.get("existing_savings") or 0))
         extra["investment_liquidity_check"] = _check_investment_liquidity(gap, inv_data)
@@ -1302,8 +1579,12 @@ def goal_planner_tool(state: AgentState) -> dict:
         "monthly_avg_spend": agg["monthly_avg_spend"],
         "monthly_avg_income": agg["monthly_avg_income"],
         "monthly_net_flow": agg["monthly_net_flow"],
+        "savings_rate_pct": agg.get("savings_rate_pct"),
+        "monthly_savings_capacity": agg.get("monthly_savings_capacity"),
+        "months_analyzed": agg.get("months_analyzed"),
         "income_source": agg.get("income_source"),
         "liquid_balance": agg.get("total_current_balance"),
+        "liquid_accounts": agg.get("liquid_accounts") or [],
         "credit_accounts": credit_accounts,
         "illiquid_accounts": illiquid_accounts,
         "payment_source_note": payment_source_note,
@@ -1317,11 +1598,10 @@ def goal_planner_tool(state: AgentState) -> dict:
     _attach_inr(data)
 
     ms      = extra.get("monthly_savings_needed") or extra.get("total_monthly_needed") or 0
-    summary = (
-        f"Goal '{goal_type}' — target=₹{data.get('target_amount')}, "
-        f"timeline={goal.get('timeline')}, monthly_needed=₹{ms}, "
-        f"net_flow=₹{agg['monthly_net_flow']}, feasible={extra.get('feasible')}, "
-        f"scenarios={len(extra.get('scenarios') or [])}"
+    summary = _goal_summary(
+        goal_type, data.get("target_amount"), goal.get("timeline"),
+        ms, agg["monthly_net_flow"], extra.get("feasible"),
+        len(extra.get("scenarios") or []),
     )
     logger.info("[goal_planner] %s", summary)
 

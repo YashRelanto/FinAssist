@@ -39,6 +39,9 @@ export interface Transaction {
   notes?: string;
   type: 'income' | 'expense';
   runningBalance?: number;
+  is_recurring?: boolean;
+  recurrence_period?: string | null;
+  recurrence_skips?: number;
 }
 
 export interface Goal {
@@ -76,5 +79,17 @@ export interface Budget {
   startDate: string;
   endDate: string;
   alertThreshold: number;
+}
+
+export interface BudgetUtilizationItem {
+  id: string;
+  budget_name: string;
+  category: string;
+  limit: number;
+  spent: number;
+  utilization_pct: number;
+  alert_threshold: number;
+  over_budget: boolean;
+  alert: boolean;
 }
 

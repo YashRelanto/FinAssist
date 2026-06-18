@@ -75,7 +75,7 @@ def build_health_insight_facts(
             "benchmark_fair": _BENCHMARKS["savings_rate_fair"],
         },
         {
-            "pillar": "Debt-to-Income",
+            "pillar": "Monthly Commitments",
             "value": debt_to_income,
             "unit": "percent",
             "status": _pillar_status(debt_to_income, _BENCHMARKS["debt_to_income_good"], _BENCHMARKS["debt_to_income_fair"], higher_is_better=False),
@@ -117,7 +117,7 @@ def build_health_insight_facts(
         )
     if debt_to_income > _BENCHMARKS["debt_to_income_good"]:
         improvement_triggers.append(
-            f"Debt-to-income is {debt_to_income}% — aim below 30% by reducing fixed obligations or increasing income."
+            f"Monthly commitments are {debt_to_income}% of income — aim below 30% by reducing recurring obligations or increasing income."
         )
     if emergency_months is None or float(emergency_months) < _BENCHMARKS["emergency_months_good"]:
         target = _BENCHMARKS["emergency_months_good"]
@@ -173,7 +173,6 @@ def build_health_insight_facts(
 
 def _rule_based_health_insights(facts: dict[str, Any]) -> dict[str, Any]:
     score_info = facts["health_score"]
-    metrics = facts["metrics"]
     score = score_info["score"]
     label = score_info["label"]
 
@@ -206,8 +205,8 @@ def _rule_based_health_insights(facts: dict[str, Any]) -> dict[str, Any]:
         else:
             if p["pillar"] == "Savings Rate":
                 insight = f"Savings rate is {value}% — target at least 20% of income."
-            elif p["pillar"] == "Debt-to-Income":
-                insight = f"Debt-to-income is {value}% — keep fixed obligations under 30% of income."
+            elif p["pillar"] == "Monthly Commitments":
+                insight = f"Monthly commitments are {value}% of income — keep recurring costs under 30%."
             elif p["pillar"] == "Emergency Buffer":
                 insight = f"Emergency buffer is {value} months — aim for 6 months of expenses."
             else:

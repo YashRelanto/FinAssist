@@ -357,4 +357,79 @@ def test_compute_financial_health_score():
     health = compute_financial_health(summary, accounts)
     assert 0 <= health["score"] <= 100
     assert health["debt_to_income_pct"] == 25.0
-    assert health["emergency_buffer_months"] == 6.0
+    assert health["monthly_commitments_pct"] == 25.0
+
+
+def test_compute_monthly_recurring_obligations():
+    from app.services.dashboard_metrics_service import compute_monthly_recurring_obligations
+
+    transactions = [
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 499,
+            "recurrence_period": "monthly",
+            "recurrence_skips": 0,
+            "merchant_name": "Netflix",
+            "categories": {"main_category": "Life & Entertainment"},
+        },
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 1200,
+            "recurrence_period": "weekly",
+            "recurrence_skips": 0,
+            "merchant_name": "Gym",
+            "categories": {"main_category": "Life & Entertainment"},
+        },
+    ]
+    total = compute_monthly_recurring_obligations(
+        transactions,
+        profile_fixed_rent=15000,
+        profile_fixed_emi=5000,
+    )
+    assert total == round(15000 + 5000 + 499 + 1200 * (52 / 12), 2)
+
+
+def test_compute_survival_burn():
+    from app.services.dashboard_metrics_service import compute_survival_burn
+
+    transactions = [
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 20000,
+            "recurrence_period": "monthly",
+            "recurrence_skips": 0,
+            "merchant_name": "Rent",
+            "categories": {"main_category": "Housing", "sub_category": "Rent"},
+            "transaction_date": "2026-06-01",
+        },
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 1200,
+            "recurrence_period": "monthly",
+            "recurrence_skips": 0,
+            "merchant_name": "Airtel Broadband",
+            "categories": {"main_category": "Communication/PC"},
+            "transaction_date": "2026-06-05",
+        },
+        {
+            "transaction_type": "expense",
+            "amount": 2500,
+            "merchant_name": "BigBasket Groceries",
+            "categories": {"main_category": "Food & Drinks"},
+            "transaction_date": "2026-06-10",
+        },
+        {
+            "transaction_type": "expense",
+            "amount": 3000,
+            "merchant_name": "BigBasket Groceries",
+            "categories": {"main_category": "Food & Drinks"},
+            "transaction_date": "2026-05-10",
+        },
+    ]
+    burn = compute_survival_burn(transactions, profile_fixed_rent=0, profile_fixed_emi=0)
+    # Essential living averages across 6 calendar months (most months are zero).
+    assert burn == round(20000 + 1200 + (2500 + 3000) / 6, 2)

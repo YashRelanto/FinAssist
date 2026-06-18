@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { RefreshCw } from 'lucide-react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
+import { RefreshCw, Info } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -10,6 +10,7 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { formatCurrency } from '../../lib/utils';
+import { useAppContext } from '../../context/AppContext';
 
 interface DashboardHeroProps {
   onRefresh: () => void;
@@ -68,24 +69,68 @@ export const MonthlySpendTrend: React.FC<MonthlySpendTrendProps> = ({
   loading = false,
   onPeriodChange,
 }) => {
+  const { currentPage } = useAppContext();
+  const isChartVisible = currentPage === 'dashboard';
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const [chartReady, setChartReady] = useState(false);
   const isDaily = chartGranularity === 'daily' || analysisPeriod === '1m';
 
-  const points = useMemo(
-    () =>
-      chartData.map((item) => ({
-        label: item.name || item.month || '',
-        date: item.date,
-        actual:
-          item.actual_expense != null
-            ? item.actual_expense
-            : item.is_forecast
-              ? null
-              : (item.expense ?? 0),
-        predicted: item.predicted_expense ?? null,
-        isForecast: Boolean(item.is_forecast),
-      })),
-    [chartData],
-  );
+  const points = useMemo(() => {
+    let mapped = chartData.map((item) => ({
+      label: item.name || item.month || '',
+      date: item.date,
+      actual:
+        item.actual_expense != null
+          ? item.actual_expense
+          : item.is_forecast
+            ? null
+            : (item.expense ?? 0),
+      predicted: item.predicted_expense ?? null,
+      isForecast: Boolean(item.is_forecast),
+    }));
+
+    const forecastIdx = mapped.findIndex((p) => p.isForecast);
+    if (forecastIdx > 0) {
+      const bridge = mapped[forecastIdx - 1];
+      if (bridge.predicted == null && bridge.actual != null) {
+        mapped = mapped.map((p, i) =>
+          i === forecastIdx - 1 ? { ...p, predicted: p.actual } : p,
+        );
+      }
+    } else if (predictedNextMonth && predictedNextMonth > 0 && mapped.length > 0) {
+      const lastIdx = mapped.length - 1;
+      mapped = mapped.map((p, i) =>
+        i === lastIdx ? { ...p, predicted: p.actual ?? p.predicted } : p,
+      );
+      const forecastLabel = (predictedMonthLabel ?? 'Next').split(' ')[0].slice(0, 3);
+      mapped.push({
+        label: forecastLabel,
+        date: undefined,
+        actual: null,
+        predicted: predictedNextMonth,
+        isForecast: true,
+      });
+    }
+
+    return mapped;
+  }, [chartData, predictedNextMonth, predictedMonthLabel]);
+
+  useEffect(() => {
+    if (!isChartVisible) {
+      setChartReady(false);
+      return;
+    }
+    const el = chartContainerRef.current;
+    if (!el) return;
+    const check = () => {
+      const { width, height } = el.getBoundingClientRect();
+      setChartReady(width > 0 && height > 0);
+    };
+    check();
+    const obs = new ResizeObserver(check);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [isChartVisible, chartData.length, points.length]);
 
   const hasSpend = points.some((p) => (p.actual ?? 0) > 0 || (p.predicted ?? 0) > 0);
   const periods: Array<{ id: '1m' | '3m' | '6m' | '1y' | 'all'; label: string }> = [
@@ -150,12 +195,13 @@ export const MonthlySpendTrend: React.FC<MonthlySpendTrendProps> = ({
           No expense data for this period.
         </p>
       ) : (
-        <div className="flex-1 w-full min-h-[240px] relative">
+        <div className="flex-1 w-full min-h-[240px] relative" ref={chartContainerRef}>
           {loading && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/40 backdrop-blur-[1px] rounded-xl">
               <RefreshCw className="w-6 h-6 animate-spin text-lumio-muted" />
             </div>
           )}
+          {isChartVisible && chartReady ? (
           <ResponsiveContainer width="100%" height={240}>
             <LineChart data={points} margin={{ top: 12, right: 12, left: 4, bottom: 4 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" vertical={false} />
@@ -225,18 +271,48 @@ export const MonthlySpendTrend: React.FC<MonthlySpendTrendProps> = ({
                 stroke="#64748b"
                 strokeWidth={2}
                 strokeDasharray="6 4"
-                dot={{ r: 4, fill: '#64748b', stroke: '#fff', strokeWidth: 2 }}
+                dot={(props) => {
+                  const { cx, cy, payload } = props;
+                  if (cx == null || cy == null || payload?.predicted == null) return null;
+                  return (
+                    <circle
+                      cx={cx}
+                      cy={cy}
+                      r={payload.isForecast ? 5 : 3}
+                      fill={payload.isForecast ? '#64748b' : '#fff'}
+                      stroke="#64748b"
+                      strokeWidth={2}
+                    />
+                  );
+                }}
                 activeDot={{ r: 6, fill: '#64748b' }}
                 connectNulls
+                isAnimationActive={false}
               />
             </LineChart>
           </ResponsiveContainer>
+          ) : (
+            <div className="h-[240px] flex items-center justify-center">
+              {!isChartVisible ? null : <RefreshCw className="w-5 h-5 animate-spin text-lumio-muted" />}
+            </div>
+          )}
           <div className="flex justify-center gap-6 mt-3 text-[10px] font-bold uppercase tracking-widest text-lumio-muted">
             <span className="flex items-center gap-2">
               <span className="w-6 h-0.5 bg-lumio-black rounded" /> Actual
             </span>
             <span className="flex items-center gap-2">
-              <span className="w-6 h-0.5 border-t-2 border-dashed border-lumio-muted rounded" /> Predicted
+              <svg width="24" height="8" aria-hidden="true" className="shrink-0">
+                <line
+                  x1="0"
+                  y1="4"
+                  x2="24"
+                  y2="4"
+                  stroke="#64748b"
+                  strokeWidth="2"
+                  strokeDasharray="4 3"
+                />
+              </svg>
+              Predicted
             </span>
           </div>
           {!hasSpend && (
@@ -256,6 +332,10 @@ interface FinancialHealthCardProps {
     debt_to_income_pct?: number;
     net_savings?: number;
     emergency_buffer_months?: number | null;
+    survival_buffer_months?: number | null;
+    lifestyle_buffer_months?: number | null;
+    survival_burn_monthly?: number | null;
+    lifestyle_burn_monthly?: number | null;
     avg_credit_utilization_pct?: number | null;
   } | null;
   summary?: {
@@ -273,6 +353,26 @@ interface FinancialHealthCardProps {
   insightsLlmLoading?: boolean;
 }
 
+function MetricInfoTip({ text }: { text: string }) {
+  return (
+    <span className="relative inline-flex group/info ml-1.5 align-middle shrink-0">
+      <button
+        type="button"
+        className="w-3.5 h-3.5 rounded-full border border-lumio-line/80 text-lumio-muted flex items-center justify-center hover:border-emerald-solid hover:text-emerald-solid transition-colors"
+        aria-label="What does this metric mean?"
+      >
+        <Info className="w-2.5 h-2.5" />
+      </button>
+      <span
+        role="tooltip"
+        className="absolute left-full ml-2 top-1/2 -translate-y-1/2 w-52 sm:w-60 px-3 py-2 text-[11px] font-normal normal-case tracking-normal leading-snug text-white bg-lumio-black rounded-lg opacity-0 invisible group-hover/info:opacity-100 group-hover/info:visible transition-opacity z-30 pointer-events-none shadow-lg"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
 export const FinancialHealthCard: React.FC<FinancialHealthCardProps> = ({
   health,
   summary,
@@ -284,32 +384,50 @@ export const FinancialHealthCard: React.FC<FinancialHealthCardProps> = ({
   const score = health?.score ?? 0;
   const label = health?.label ?? 'Needs Work';
   const debtToIncome = health?.debt_to_income_pct ?? 0;
-  const emergencyMonths = health?.emergency_buffer_months;
+  const survivalMonths = health?.survival_buffer_months;
+  const lifestyleMonths =
+    health?.lifestyle_buffer_months ?? health?.emergency_buffer_months;
+  const survivalBurn = health?.survival_burn_monthly;
+  const lifestyleBurn = health?.lifestyle_burn_monthly;
   const creditUtil = health?.avg_credit_utilization_pct;
   const circumference = 289;
   const offset = circumference - (score / 100) * circumference;
 
   const rows = [
-    { label: 'Savings Rate', value: `${savingsRate}%` },
-    { label: 'Debt-to-Income', value: `${debtToIncome}%` },
-    { label: 'Net Savings', value: formatCurrency(netSavings) },
     {
-      label: 'Emergency Buffer',
-      value:
-        emergencyMonths == null || emergencyMonths === undefined
-          ? '—'
-          : `${emergencyMonths} mo`,
+      label: 'Savings Rate',
+      value: `${savingsRate}%`,
+      description:
+        'Percentage of your monthly income left after average spending over the last 6 months. Aim for at least 20%.',
+    },
+    {
+      label: 'Monthly Commitments',
+      value: `${debtToIncome}%`,
+      description:
+        'Recurring costs (rent, EMIs, subscriptions, and other scheduled payments) as a share of income. Under 30% is healthy.',
+    },
+    {
+      label: 'Net Savings',
+      value: formatCurrency(netSavings),
+      description:
+        'Estimated monthly income minus your average monthly expenses over the last 6 months.',
     },
   ];
   if (creditUtil != null) {
-    rows.push({ label: 'Credit Utilization', value: `${creditUtil}%` });
+    rows.push({
+      label: 'Credit Utilization',
+      value: `${creditUtil}%`,
+      description:
+        'Average share of your credit card limits currently in use. Keeping this below 30% helps your credit health.',
+    });
   }
 
   return (
-    <div className="bento-card relative overflow-hidden flex flex-col min-h-[400px]">
+    <div className="bento-card relative flex flex-col min-h-[400px]">
       <div className="absolute -top-20 -right-20 w-64 h-64 bg-emerald-tint rounded-full opacity-30 pointer-events-none blur-3xl" />
-      <h2 className="font-label text-[12px] font-semibold uppercase tracking-widest text-lumio-muted mb-8 border-b border-lumio-line pb-4 relative z-10">
+      <h2 className="font-label text-[12px] font-semibold uppercase tracking-widest text-lumio-muted mb-8 border-b border-lumio-line pb-4 relative z-10 flex items-center gap-1">
         Financial Health
+        <MetricInfoTip text="A 0–100 score based on savings rate, monthly commitments, emergency buffer, and credit utilization. Higher is better." />
       </h2>
       <div className="flex flex-col items-center py-4 mb-8 relative z-10">
         <div className="w-40 h-40 rounded-full border border-lumio-line flex items-center justify-center relative bg-white/40 shadow-inner">
@@ -333,13 +451,64 @@ export const FinancialHealthCard: React.FC<FinancialHealthCardProps> = ({
           </div>
         </div>
       </div>
-      <div className="flex-1 flex flex-col gap-4 relative z-10 text-sm">
+      <div className="flex-1 flex flex-col gap-4 relative z-10 text-sm overflow-visible">
         {rows.map((row) => (
-          <div key={row.label} className="flex justify-between items-center border-b border-lumio-line/50 pb-3">
-            <span className="text-lumio-muted">{row.label}</span>
-            <span className="font-medium">{row.value}</span>
+          <div key={row.label} className="flex justify-between items-center border-b border-lumio-line/50 pb-3 gap-3">
+            <span className="text-lumio-muted flex items-center min-w-0">
+              {row.label}
+              <MetricInfoTip text={row.description} />
+            </span>
+            <span className="font-medium shrink-0">{row.value}</span>
           </div>
         ))}
+
+        <div className="border-b border-lumio-line/50 pb-3 space-y-3">
+          <div className="flex items-center gap-1 text-lumio-muted">
+            <span className="text-sm font-medium text-lumio-text">Emergency Buffer</span>
+            <MetricInfoTip text="Shows how many months your savings would last — once for bare essentials only, and once for how you usually spend." />
+          </div>
+
+          <div className="rounded-xl border border-lumio-line/40 bg-white/40 p-3 space-y-2">
+            <div className="flex justify-between items-start gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-lumio-text flex items-center">
+                  Survival Buffer
+                  <MetricInfoTip text="If you only paid must-haves — rent, EMIs, bills like electricity and internet, plus groceries and medicines — how many months could your savings last? This is your worst-case runway." />
+                </p>
+                {survivalBurn != null && survivalBurn > 0 && (
+                  <p className="text-[10px] text-lumio-muted mt-0.5">
+                    Burn {formatCurrency(survivalBurn)}/mo
+                  </p>
+                )}
+              </div>
+              <span className="font-medium shrink-0">
+                {survivalMonths == null ? '—' : `${survivalMonths} mo`}
+              </span>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-emerald-solid/25 bg-emerald-tint/20 p-3 space-y-2">
+            <div className="flex justify-between items-start gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-lumio-text flex items-center">
+                  Lifestyle Buffer
+                  <span className="ml-1.5 text-[9px] font-bold uppercase tracking-wider text-emerald-solid">
+                    Recommended
+                  </span>
+                  <MetricInfoTip text="Based on what you actually spend each month on average (last 6 months). This shows how long you could keep living the way you do today." />
+                </p>
+                {lifestyleBurn != null && lifestyleBurn > 0 && (
+                  <p className="text-[10px] text-lumio-muted mt-0.5">
+                    Burn {formatCurrency(lifestyleBurn)}/mo
+                  </p>
+                )}
+              </div>
+              <span className="font-medium shrink-0">
+                {lifestyleMonths == null ? '—' : `${lifestyleMonths} mo`}
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
 
       {(insightsLlmLoading || insights?.analysis || (insights?.recommendations?.length ?? 0) > 0) && (

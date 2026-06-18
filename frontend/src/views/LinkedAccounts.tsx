@@ -18,6 +18,7 @@ import {
 import { useAppContext } from '../context/AppContext';
 import { cn, formatCurrency, CURRENCY_SYMBOL } from '../lib/utils';
 import { AccountModal } from '../components/AccountModal';
+import { AppModal } from '../components/AppModal';
 import { PageHeader, PageShell, lumio } from '../components/PageShell';
 
 export const LinkedAccounts: React.FC = () => {
@@ -30,10 +31,10 @@ export const LinkedAccounts: React.FC = () => {
   const [editTarget, setEditTarget] = useState<any | null>(null);
 
   useEffect(() => {
-    if (user.isAuthenticated) {
+    if (user.isAuthenticated && accounts.length === 0) {
       loadAccounts();
     }
-  }, [user.userId, user.id, user.isAuthenticated, loadAccounts]);
+  }, [user.userId, user.id, user.isAuthenticated, accounts.length, loadAccounts]);
 
   const handleDelete = async (accountId: string) => {
     setIsDeleting(true);
@@ -174,9 +175,9 @@ export const LinkedAccounts: React.FC = () => {
       )}
 
       {/* Premium Centered Confirmation Modal Popup */}
-      {deleteTarget && createPortal(
-        <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4 backdrop-blur-sm transition-all duration-300">
-          <div className="bg-surface-container-lowest w-full max-w-md rounded-[28px] shadow-2xl overflow-hidden border border-outline-variant/30 flex flex-col transform transition-all scale-100 p-8 space-y-6">
+      {deleteTarget && (
+        <AppModal isOpen onClose={() => !isDeleting && setDeleteTarget(null)}>
+          <div className="bg-surface-container-lowest w-full rounded-[28px] shadow-2xl overflow-hidden border border-outline-variant/30 flex flex-col transform transition-all scale-100 p-8 space-y-6">
             <div className="flex flex-col items-center text-center space-y-4">
               <div className="w-16 h-16 bg-error/10 text-error rounded-full flex items-center justify-center animate-bounce">
                 <AlertTriangle className="w-8 h-8" />
@@ -215,14 +216,13 @@ export const LinkedAccounts: React.FC = () => {
               </button>
             </div>
           </div>
-        </div>,
-        document.body
+        </AppModal>
       )}
 
       {/* Account Details Modal */}
-      {selectedAccount && createPortal(
-        <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4 backdrop-blur-sm transition-all duration-300">
-          <div className="bg-surface-container-lowest w-full max-w-lg rounded-[28px] shadow-2xl overflow-hidden border border-outline-variant/30 flex flex-col transform transition-all scale-100">
+      {selectedAccount && (
+        <AppModal isOpen onClose={() => setSelectedAccount(null)}>
+          <div className="bg-surface-container-lowest w-full rounded-[28px] shadow-2xl overflow-hidden border border-outline-variant/30 flex flex-col transform transition-all scale-100">
             <div className="px-8 py-5 border-b border-outline-variant/20 flex justify-between items-center bg-surface-container-low">
               <div>
                 <h3 className="text-xl font-black text-on-surface tracking-tight">Account Details</h3>
@@ -297,11 +297,10 @@ export const LinkedAccounts: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>,
-        document.body
+        </AppModal>
       )}
 
-      <AccountModal 
+      <AccountModal
         isOpen={isModalOpen || !!editTarget} 
         onClose={() => {
           setIsModalOpen(false);

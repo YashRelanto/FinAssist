@@ -8,7 +8,6 @@ state.  It replaces the sessions.json file used by the old StateManager.
 
 Upgrade path:
   Development  → MemorySaver      (in-memory, lost on restart, zero setup)
-  Staging      → SqliteSaver      (persistent SQLite file, single-process)
   Production   → AsyncPostgresSaver (same Supabase PostgreSQL, fully persistent + multi-process)
 
 The active checkpointer is determined by the APP_ENV environment variable:
@@ -47,15 +46,6 @@ def get_checkpointer():
         else:
             logger.warning("[Checkpointer] APP_ENV=production but SUPABASE_DB_URL not set — using MemorySaver")
 
-    if env == "staging":
-        sqlite_path = os.getenv("SQLITE_CHECKPOINT_PATH", "checkpoints.db")
-        try:
-            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-            checkpointer = AsyncSqliteSaver.from_conn_string(sqlite_path)
-            logger.info("[Checkpointer] Using AsyncSqliteSaver at %s (staging)", sqlite_path)
-            return checkpointer
-        except Exception as exc:
-            logger.warning("[Checkpointer] AsyncSqliteSaver failed: %s — falling back to MemorySaver", exc)
 
     # Default: MemorySaver (development / fallback)
     from langgraph.checkpoint.memory import MemorySaver

@@ -3,6 +3,7 @@ import { X, Upload, FileText, AlertTriangle, CheckCircle2, ChevronRight, Trendin
 import { useAppContext } from '../context/AppContext';
 import { analyzeStatementFile, AnalysisResult } from '../lib/statementParser';
 import { PdfPasswordModal } from './PdfPasswordModal';
+import { AppModal } from './AppModal';
 import { apiFetch } from '../lib/api';
 import { cn, formatCurrency } from '../lib/utils';
 import { activeUserId } from '../lib/activeUserId';
@@ -138,10 +139,10 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
         />
       )}
 
-      <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm transition-all duration-300">
+      <AppModal isOpen={isOpen} onClose={handleClose} className={cn(analysisResult ? 'max-w-3xl' : 'max-w-md')}>
         <div className={cn(
           "bg-surface-container-lowest w-full rounded-[28px] shadow-2xl overflow-hidden border border-outline-variant/30 flex flex-col transform transition-all scale-100",
-          analysisResult ? "max-w-3xl max-h-[85vh]" : "max-w-md"
+          analysisResult ? "max-h-[85vh]" : ""
         )}>
           {/* Header */}
           <div className="px-8 py-5 border-b border-outline-variant/20 flex justify-between items-center bg-surface-container-low">
@@ -359,7 +360,7 @@ export const BulkUploadModal: React.FC<BulkUploadModalProps> = ({ isOpen, onClos
             )}
           </div>
         </div>
-      </div>
+      </AppModal>
     </>
   );
 };

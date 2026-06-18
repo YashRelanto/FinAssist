@@ -6,7 +6,6 @@ from app.core.auth import get_current_user
 from pydantic import BaseModel
 
 from app.utils.supabase_client import supabase
-from app.services.statement_processor.pipeline import StatementPipeline
 from app.services.statement_processor.pdf_ocr_extractor import PDFOCRExtractor, PasswordProtectedException, TextExtractionException
 from app.services.statement_processor.account_extractor import AccountExtractor
 from app.services.statement_processor.bank_detector import BankDetector

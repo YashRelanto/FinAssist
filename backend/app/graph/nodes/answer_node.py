@@ -29,8 +29,8 @@ from app.graph.state import AgentState
 from app.utils.prompts import (
     ANSWER_VIZ_SYSTEM,
     ANSWER_KNOWLEDGE_SYSTEM,
-    FINASSIST_SYSTEM_PROMPT,
     GOAL_PLAN_SYSTEM,
+    GOAL_PLAN_SUMMARY_SYSTEM,
     CHART_CAPTION_SYSTEM,
 )
 
@@ -173,6 +173,18 @@ def _spending_reduction_bar(g: Dict[str, Any]) -> List[Dict]:
     return []
 
 
+def _funding_sources_bar(g: Dict[str, Any]) -> List[Dict]:
+    """Bar of WHERE the deployable seed money comes from — bank cash / liquid funds / breakable FDs
+    (and the equity deliberately left invested) — so the user sees their idle assets at a glance."""
+    fs = g.get("funding_sources") or {}
+    pairs = [("Bank cash", fs.get("from_bank_savings")),
+             ("Liquid funds", fs.get("from_liquid_funds")),
+             ("Fixed deposits", fs.get("from_fixed_deposits")),
+             ("Equity (kept invested)", fs.get("equity_or_other_not_counted"))]
+    data = [{"label": lbl, "amount": round(float(v), 2)} for lbl, v in pairs if v and float(v) > 0]
+    return [_chart("bar", "Your Available Funds", "label", "amount", data)] if len(data) >= 2 else []
+
+
 def _goal_facts_for_captions(g: Dict[str, Any]) -> Dict[str, Any]:
     """Compact facts that let the caption model explain what each number means."""
     from app.graph.tools.goal_planner_tool import _attach_inr
@@ -202,10 +214,23 @@ def _attach_chart_captions(artifacts: List[Dict], g: Dict[str, Any]) -> None:
     """Generate a plain-English caption per chart via the cheap 8B model (grounded in numbers)."""
     if not artifacts:
         return
-    charts_for_prompt = [
-        {"index": i, "title": a.get("title"), "data": a.get("data")}
-        for i, a in enumerate(artifacts)
-    ]
+    from app.graph.tools.goal_planner_tool import _inr
+
+    # Pre-format every chart number as a ₹ string so the (cheap) caption model copies it verbatim
+    # and CANNOT rescale it (it was inflating ₹42,000 → "₹42,00,000"). Percentages stay as-is.
+    charts_for_prompt = []
+    for i, a in enumerate(artifacts):
+        is_pct = a.get("y_field") == "value"
+        pts = []
+        for d in (a.get("data") or []):
+            label = d.get("label") or d.get("period") or ""
+            amt = d.get("amount", d.get("value"))
+            if isinstance(amt, (int, float)) and not isinstance(amt, bool):
+                shown = f"{round(amt, 1)}%" if is_pct else _inr(amt)
+            else:
+                shown = amt
+            pts.append({"label": label, "value": shown})
+        charts_for_prompt.append({"index": i, "title": a.get("title"), "points": pts})
     payload = {"facts": _goal_facts_for_captions(g), "charts": charts_for_prompt}
     try:
         completion = graph_chat_completion(
@@ -223,36 +248,34 @@ def _attach_chart_captions(artifacts: List[Dict], g: Dict[str, Any]) -> None:
 
 
 def _select_goal_artifacts(goal_type: str, g: Dict[str, Any]) -> List[Dict]:
-    """Build up to 4 charts for a goal planning result — all from goal_planner data."""
+    """Build 2-3 charts for a goal planning result — all from goal_planner data."""
     charts: List[Dict] = []
     scenarios = g.get("scenarios") or []
 
     # Chart 1: Scenario comparison (universal — most important)
     charts += _scenarios_comparison_bar(scenarios)
-
     # Chart 2: Budget impact (universal)
     charts += _budget_impact_bar(g)
+    # Chart 3: Where the funds come from (bank / liquid / FDs / equity) — the funding context.
+    charts += _funding_sources_bar(g)
 
-    # Chart 3: Goal-type specific
-    if goal_type in ("retirement", "fire"):
-        charts += _fi_growth_line(g)
-    elif goal_type in ("car", "house", "education"):
-        emi_charts = _emi_comparison_bar(scenarios)
-        charts += emi_charts if emi_charts else _savings_progress_line(g)
-    elif goal_type == "multi_goal":
-        charts += _multi_goal_bar(g)
-    else:
-        charts += _savings_progress_line(g)
-
-    # Chart 4: Spending reduction opportunities
-    if len(charts) < 4:
+    # If we still have fewer than 3, fill with a goal-type-specific chart.
+    if len(charts) < 3:
+        if goal_type in ("retirement", "fire"):
+            charts += _fi_growth_line(g)
+        elif goal_type in ("car", "house", "education"):
+            charts += _emi_comparison_bar(scenarios) or _savings_progress_line(g)
+        elif goal_type == "multi_goal":
+            charts += _multi_goal_bar(g)
+        else:
+            charts += _savings_progress_line(g)
+    # Last-resort fillers to reach a minimum of 2 charts.
+    if len(charts) < 2:
         charts += _spending_reduction_bar(g)
-
-    # Portfolio pie if room remains and holdings are present
-    if len(charts) < 4 and g.get("portfolio_holdings"):
+    if len(charts) < 2 and g.get("portfolio_holdings"):
         charts += _portfolio_pie({"holdings": g["portfolio_holdings"]})
 
-    return charts[:4]
+    return charts[:3]
 
 
 # ── profile helpers ──────────────────────────────────────────────────────────
@@ -274,6 +297,23 @@ def _find(evidence: List[Dict], tool: str) -> Optional[Dict]:
         if e.get("tool") == tool:
             return e
     return None
+
+
+# Phrases that signal the user wants the full analyst-style breakdown rather than the
+# default concise advisor summary.
+_DETAIL_TRIGGERS = (
+    "detailed calculation", "detailed calc", "detailed breakdown", "detailed plan",
+    "detail", "breakdown", "break it down", "full breakdown", "full plan", "full report",
+    "step by step", "step-by-step", "month by month", "month-by-month", "all scenarios",
+    "every scenario", "scenario comparison", "show me the numbers", "show the numbers",
+    "show the math", "show me the math", "in depth", "in-depth", "elaborate",
+)
+
+
+def _wants_detail(user_query: str) -> bool:
+    """True when the user explicitly asks for the full calculations / breakdown."""
+    q = (user_query or "").lower()
+    return any(t in q for t in _DETAIL_TRIGGERS)
 
 
 # ── node ───────────────────────────────────────────────────────────────────
@@ -302,19 +342,30 @@ def answer_node(state: AgentState) -> dict:
             # goal_planner data already includes scenarios, spending reduction, and the
             # investment liquidity check (it fetches all of this directly from the DB).
             ctx = json.dumps(g, indent=2, default=str)
-
             fields = _profile_fields(profile)
-            system_prompt = GOAL_PLAN_SYSTEM.format(context_text=ctx, **fields)
+
+            # By DEFAULT, show a concise, decision-first advisor summary with a single
+            # budget chart. Only when the user explicitly asks ("detailed calculations",
+            # "month by month", "all scenarios"…) do we render the full analyst report.
+            detailed = _wants_detail(user_query)
+            goal_type = str(g.get("goal_type") or "generic").lower()
+
+            # Both views show 2-3 charts (scenario comparison + budget impact + funding sources).
+            artifacts = _select_goal_artifacts(goal_type, g)
+            if detailed:
+                system_prompt = GOAL_PLAN_SYSTEM.format(context_text=ctx, **fields)
+                max_tokens = 1400
+            else:
+                system_prompt = GOAL_PLAN_SUMMARY_SYSTEM.format(context_text=ctx, **fields)
+                max_tokens = 700
 
             completion = graph_chat_completion(
                 node="answer_node", purpose="goal_plan", model=settings.active_chat_model,
                 messages=[{"role": "system", "content": system_prompt},
                           {"role": "user", "content": user_query}],
-                max_tokens=1400, temperature=0.15,
+                max_tokens=max_tokens, temperature=0.15,
             )
             answer = completion.choices[0].message.content.strip()
-            goal_type = str(g.get("goal_type") or "generic").lower()
-            artifacts = _select_goal_artifacts(goal_type, g)
             _attach_chart_captions(artifacts, g)
 
         # ── Investment ──

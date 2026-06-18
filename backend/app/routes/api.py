@@ -66,7 +66,7 @@ def _login_payload(
     access_token: str | None = None,
     refresh_token: str | None = None,
 ) -> dict:
-    """Flat + nested shape so Login.tsx and other clients both work."""
+    """Flat + nested shape so auth clients receive both response shapes."""
     body = {**user, "email_confirmed": email_confirmed, "success": True}
     body["user"] = user
     if access_token:
@@ -306,18 +306,30 @@ async def get_dashboard_summary(
         period_key = normalize_period(period)
         accounts = fetch_user_accounts(user_id)
 
-        trans_response = (
-            supabase.table("transactions")
-            .select(
-                "transaction_id, amount, transaction_type, transaction_date, "
-                "merchant_name, description, "
-                "category_id, categories(main_category, sub_category)"
-            )
-            .eq("user_id", user_id)
-            .order("transaction_date")
-            .execute()
+        transactions: list = []
+        tx_select = (
+            "transaction_id, amount, transaction_type, transaction_date, "
+            "merchant_name, description, is_recurring, recurrence_period, recurrence_skips, "
+            "category_id, categories(main_category, sub_category)"
         )
-        transactions = trans_response.data or []
+        page_size = 1000
+        offset = 0
+        while True:
+            trans_response = (
+                supabase.table("transactions")
+                .select(tx_select)
+                .eq("user_id", user_id)
+                .order("transaction_date")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            batch = trans_response.data or []
+            if not batch:
+                break
+            transactions.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
 
         recent_res = (
             supabase.table("transactions")
@@ -551,7 +563,7 @@ async def get_financial_health_insights(user_id: str, llm: str | None = None):
             supabase.table("transactions")
             .select(
                 "transaction_id, amount, transaction_type, transaction_date, "
-                "merchant_name, description, "
+                "merchant_name, description, is_recurring, recurrence_period, recurrence_skips, "
                 "category_id, categories(main_category, sub_category)"
             )
             .eq("user_id", user_id)
@@ -574,6 +586,7 @@ async def get_financial_health_insights(user_id: str, llm: str | None = None):
             profile_income=float(profile.get("income") or 0),
             profile_fixed_rent=float(profile.get("fixed_rent") or 0),
             profile_fixed_emi=float(profile.get("fixed_emi") or 0),
+            user_id=user_id,
         )
 
         build_kwargs = dict(health=health, profile=profile, include_llm=include_llm)
@@ -666,7 +679,7 @@ async def get_transactions(
             supabase.table("transactions")
             .select(
                 "transaction_id,transaction_date,amount,transaction_type,merchant_name,description,"
-                "account_id,category_id,"
+                "account_id,category_id,is_recurring,recurrence_period,recurrence_skips,"
                 "running_balance,"
                 "categories(main_category,sub_category),"
                 "accounts(account_name)"
@@ -769,9 +782,9 @@ async def get_upcoming_payments(current_user: dict = Depends(get_current_user)):
             step = skips + 1
             current = base_date
             
-            # Find first occurrence that is >= today
+            # Advance past dates on or before today so the next charge is in the future.
             iterations = 0
-            while current < today and iterations < 100:
+            while current <= today and iterations < 100:
                 iterations += 1
                 if period == "daily":
                     current += timedelta(days=step)
@@ -783,10 +796,7 @@ async def get_upcoming_payments(current_user: dict = Depends(get_current_user)):
                     current = add_years(current, step)
                 else:
                     break
-                    
-            if base_date >= today:
-                current = base_date
-                
+
             categories_info = row.get("categories") or {}
             accounts_info = row.get("accounts") or {}
             
@@ -1012,6 +1022,27 @@ async def get_budget_goals_summary(current_user: dict = Depends(get_current_user
             .order("transaction_date")
             .execute()
         )
+        goal_tx_select = "amount, transaction_type"
+        goal_transactions: list = []
+        page_size = 1000
+        offset = 0
+        while True:
+            goal_tx_res = (
+                supabase.table("transactions")
+                .select(goal_tx_select)
+                .eq("user_id", uid)
+                .order("transaction_date")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            batch = goal_tx_res.data or []
+            if not batch:
+                break
+            goal_transactions.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+
         goals_res = (
             supabase.table("goals").select("*").eq("user_id", uid).execute()
         )
@@ -1019,6 +1050,7 @@ async def get_budget_goals_summary(current_user: dict = Depends(get_current_user
             budgets=budgets,
             transactions=trans_response.data or [],
             goals=goals_res.data or [],
+            goal_transactions=goal_transactions,
         )
     except Exception as e:
         print(f"Error fetching budget-goals summary: {e}")
@@ -1611,5 +1643,90 @@ async def get_user_investments(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         print(f"Error fetching user investments: {e}")
         return {"success": False, "detail": str(e)}
+
+
+# ============================================================
+# FIXED DEPOSIT ENDPOINTS
+# ============================================================
+
+class FixedDepositCreate(BaseModel):
+    user_id: str
+    bank_name: Optional[str] = None
+    label: Optional[str] = None
+    principal_amount: float
+    interest_rate_pct: float
+    start_date: str        # YYYY-MM-DD
+    maturity_date: str     # YYYY-MM-DD
+    compounding_frequency: str = "quarterly"   # monthly | quarterly | half-yearly | annually | simple
+    payout_type: str = "cumulative"            # cumulative | payout
+    premature_penalty_pct: float = 1.0
+
+
+@router.get("/fixed-deposits")
+async def list_fixed_deposits(user_id: str):
+    """All active FDs for the user, each enriched with current / maturity / break values."""
+    from app.graph.tools.goal_planner_tool import _fd_metrics
+    try:
+        res = (supabase.table("fixed_deposits").select("*")
+               .eq("user_id", user_id).eq("is_active", True)
+               .order("maturity_date").execute())
+        rows = res.data or []
+        out = []
+        total_principal = total_current = total_maturity = 0.0
+        for r in rows:
+            m = _fd_metrics(r)
+            total_principal += m["principal_amount"]
+            total_current += m["current_value"]
+            total_maturity += m["maturity_value"]
+            out.append({**r, **m})
+        return {
+            "success": True,
+            "fixed_deposits": out,
+            "summary": {
+                "count": len(out),
+                "total_principal": round(total_principal, 2),
+                "total_current_value": round(total_current, 2),
+                "total_maturity_value": round(total_maturity, 2),
+            },
+        }
+    except Exception as e:
+        print(f"Error listing fixed deposits: {e}")
+        return {"success": False, "detail": str(e)}
+
+
+@router.post("/fixed-deposits")
+async def create_fixed_deposit(req: FixedDepositCreate):
+    try:
+        insert_data = {
+            "user_id": req.user_id,
+            "bank_name": req.bank_name,
+            "label": req.label,
+            "principal_amount": req.principal_amount,
+            "interest_rate_pct": req.interest_rate_pct,
+            "start_date": req.start_date,
+            "maturity_date": req.maturity_date,
+            "compounding_frequency": req.compounding_frequency,
+            "payout_type": req.payout_type,
+            "premature_penalty_pct": req.premature_penalty_pct,
+        }
+        res = supabase.table("fixed_deposits").insert(insert_data).execute()
+        if not res.data:
+            raise HTTPException(status_code=500, detail="Failed to create fixed deposit")
+        return {"success": True, "data": res.data[0]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error creating fixed deposit: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/fixed-deposits/{fd_id}")
+async def delete_fixed_deposit(fd_id: str):
+    try:
+        supabase.table("fixed_deposits").delete().eq("fd_id", fd_id).execute()
+        return {"success": True, "message": "Fixed deposit deleted successfully"}
+    except Exception as e:
+        print(f"Error deleting fixed deposit: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 

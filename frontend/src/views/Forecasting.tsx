@@ -268,13 +268,13 @@ export const Forecasting: React.FC = () => {
               <motion.div
                 className={cn(
                   'flex items-center justify-end gap-1 font-black',
-                  changeDown ? 'text-secondary' : 'text-error',
+                  changeDown ? 'text-emerald-700' : 'text-red-600',
                 )}
               >
                 {changeDown ? <TrendingDown className="w-5 h-5" /> : <TrendingUp className="w-5 h-5" />}
                 <motion.span className="text-xl">{changeAbs}%</motion.span>
               </motion.div>
-              <motion.p className="text-[10px] font-bold text-outline uppercase tracking-widest mt-1">
+              <motion.p className="text-[10px] font-bold text-lumio-muted uppercase tracking-widest mt-1">
                 {changeDown ? 'lower' : 'higher'} than comparison
               </motion.p>
             </motion.div>

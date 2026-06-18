@@ -1,5 +1,4 @@
-import re
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 BANK_CONFIGS: Dict[str, Dict[str, Any]] = {
     "HDFC": {
