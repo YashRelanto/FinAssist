@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { RefreshCw } from 'lucide-react';
 import {
   LineChart,
@@ -10,6 +10,7 @@ import {
   CartesianGrid,
 } from 'recharts';
 import { formatCurrency } from '../../lib/utils';
+import { useAppContext } from '../../context/AppContext';
 
 interface DashboardHeroProps {
   onRefresh: () => void;
@@ -68,24 +69,68 @@ export const MonthlySpendTrend: React.FC<MonthlySpendTrendProps> = ({
   loading = false,
   onPeriodChange,
 }) => {
+  const { currentPage } = useAppContext();
+  const isChartVisible = currentPage === 'dashboard';
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const [chartReady, setChartReady] = useState(false);
   const isDaily = chartGranularity === 'daily' || analysisPeriod === '1m';
 
-  const points = useMemo(
-    () =>
-      chartData.map((item) => ({
-        label: item.name || item.month || '',
-        date: item.date,
-        actual:
-          item.actual_expense != null
-            ? item.actual_expense
-            : item.is_forecast
-              ? null
-              : (item.expense ?? 0),
-        predicted: item.predicted_expense ?? null,
-        isForecast: Boolean(item.is_forecast),
-      })),
-    [chartData],
-  );
+  const points = useMemo(() => {
+    let mapped = chartData.map((item) => ({
+      label: item.name || item.month || '',
+      date: item.date,
+      actual:
+        item.actual_expense != null
+          ? item.actual_expense
+          : item.is_forecast
+            ? null
+            : (item.expense ?? 0),
+      predicted: item.predicted_expense ?? null,
+      isForecast: Boolean(item.is_forecast),
+    }));
+
+    const forecastIdx = mapped.findIndex((p) => p.isForecast);
+    if (forecastIdx > 0) {
+      const bridge = mapped[forecastIdx - 1];
+      if (bridge.predicted == null && bridge.actual != null) {
+        mapped = mapped.map((p, i) =>
+          i === forecastIdx - 1 ? { ...p, predicted: p.actual } : p,
+        );
+      }
+    } else if (predictedNextMonth && predictedNextMonth > 0 && mapped.length > 0) {
+      const lastIdx = mapped.length - 1;
+      mapped = mapped.map((p, i) =>
+        i === lastIdx ? { ...p, predicted: p.actual ?? p.predicted } : p,
+      );
+      const forecastLabel = (predictedMonthLabel ?? 'Next').split(' ')[0].slice(0, 3);
+      mapped.push({
+        label: forecastLabel,
+        date: undefined,
+        actual: null,
+        predicted: predictedNextMonth,
+        isForecast: true,
+      });
+    }
+
+    return mapped;
+  }, [chartData, predictedNextMonth, predictedMonthLabel]);
+
+  useEffect(() => {
+    if (!isChartVisible) {
+      setChartReady(false);
+      return;
+    }
+    const el = chartContainerRef.current;
+    if (!el) return;
+    const check = () => {
+      const { width, height } = el.getBoundingClientRect();
+      setChartReady(width > 0 && height > 0);
+    };
+    check();
+    const obs = new ResizeObserver(check);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [isChartVisible, chartData.length, points.length]);
 
   const hasSpend = points.some((p) => (p.actual ?? 0) > 0 || (p.predicted ?? 0) > 0);
   const periods: Array<{ id: '1m' | '3m' | '6m' | '1y' | 'all'; label: string }> = [
@@ -150,12 +195,13 @@ export const MonthlySpendTrend: React.FC<MonthlySpendTrendProps> = ({
           No expense data for this period.
         </p>
       ) : (
-        <div className="flex-1 w-full min-h-[240px] relative">
+        <div className="flex-1 w-full min-h-[240px] relative" ref={chartContainerRef}>
           {loading && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/40 backdrop-blur-[1px] rounded-xl">
               <RefreshCw className="w-6 h-6 animate-spin text-lumio-muted" />
             </div>
           )}
+          {isChartVisible && chartReady ? (
           <ResponsiveContainer width="100%" height={240}>
             <LineChart data={points} margin={{ top: 12, right: 12, left: 4, bottom: 4 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" vertical={false} />
@@ -225,12 +271,31 @@ export const MonthlySpendTrend: React.FC<MonthlySpendTrendProps> = ({
                 stroke="#64748b"
                 strokeWidth={2}
                 strokeDasharray="6 4"
-                dot={{ r: 4, fill: '#64748b', stroke: '#fff', strokeWidth: 2 }}
+                dot={(props) => {
+                  const { cx, cy, payload } = props;
+                  if (cx == null || cy == null || payload?.predicted == null) return null;
+                  return (
+                    <circle
+                      cx={cx}
+                      cy={cy}
+                      r={payload.isForecast ? 5 : 3}
+                      fill={payload.isForecast ? '#64748b' : '#fff'}
+                      stroke="#64748b"
+                      strokeWidth={2}
+                    />
+                  );
+                }}
                 activeDot={{ r: 6, fill: '#64748b' }}
                 connectNulls
+                isAnimationActive={false}
               />
             </LineChart>
           </ResponsiveContainer>
+          ) : (
+            <div className="h-[240px] flex items-center justify-center">
+              {!isChartVisible ? null : <RefreshCw className="w-5 h-5 animate-spin text-lumio-muted" />}
+            </div>
+          )}
           <div className="flex justify-center gap-6 mt-3 text-[10px] font-bold uppercase tracking-widest text-lumio-muted">
             <span className="flex items-center gap-2">
               <span className="w-6 h-0.5 bg-lumio-black rounded" /> Actual

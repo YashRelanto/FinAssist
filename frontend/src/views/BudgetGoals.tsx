@@ -24,7 +24,7 @@ import { GoalModal } from '../components/GoalModal';
 import { BudgetModal } from '../components/BudgetModal';
 import { Budget } from '../types';
 import { GoalWithProgress, SavingsTrajectory } from '../lib/budgetGoalsApi';
-import type { BudgetUtilizationItem } from '../components/Dashboard/BudgetUtilization';
+import type { BudgetUtilizationItem } from '../types';
 import { PageHeader, PageLoading, PageShell, lumio } from '../components/PageShell';
 
 const getCategoryIcon = (category: string) => {
@@ -91,6 +91,10 @@ export const BudgetGoals: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const refreshSummary = useCallback(
     async (options?: { force?: boolean }) => {
+      if (!options?.force && budgetGoalsSummary) {
+        setLoading(false);
+        return;
+      }
       try {
         setLoading(true);
         await loadBudgetGoalsSummary({ force: options?.force });
@@ -98,7 +102,7 @@ export const BudgetGoals: React.FC = () => {
         setLoading(false);
       }
     },
-    [loadBudgetGoalsSummary],
+    [loadBudgetGoalsSummary, budgetGoalsSummary],
   );
 
   useEffect(() => {

@@ -44,14 +44,18 @@ export const Transactions: React.FC = () => {
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   React.useEffect(() => {
-    if (authReady && user?.isAuthenticated && activeUserId(user)) {
-      setIsLoading(true);
-      loadTransactions().finally(() => {
-        setIsLoading(false);
-      });
-      loadDbCategories();
+    if (!authReady || !user?.isAuthenticated || !activeUserId(user)) return;
+    if (transactions.length > 0) {
+      setIsLoading(false);
+      if (dbCategories.length === 0) loadDbCategories();
+      return;
     }
-  }, [authReady, user?.isAuthenticated, user?.userId, user?.id, loadTransactions, loadDbCategories]);
+    setIsLoading(true);
+    loadTransactions().finally(() => {
+      setIsLoading(false);
+    });
+    loadDbCategories();
+  }, [authReady, user?.isAuthenticated, user?.userId, user?.id, transactions.length, dbCategories.length, loadTransactions, loadDbCategories]);
 
   const handleUpdateCategory = async (trans: any, newMainCat: string) => {
     try {
@@ -256,7 +260,7 @@ export const Transactions: React.FC = () => {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search merchant, category..."
-                className={lumio.input}
+                className={cn(lumio.input, 'pl-10')}
               />
             </div>
           </div>

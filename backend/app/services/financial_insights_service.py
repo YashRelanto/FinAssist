@@ -348,6 +348,68 @@ def _narrate_from_facts(facts: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _parse_llm_json(raw: str) -> dict[str, Any]:
+    """Parse LLM JSON output with repair for truncated responses."""
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("Empty LLM response")
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            return json.loads(text[start : end + 1])
+        except json.JSONDecodeError:
+            pass
+
+    # Close truncated string + braces (common when max_tokens cuts off mid-field)
+    repaired = text
+    if repaired.count('"') % 2 == 1:
+        repaired += '"'
+    open_braces = repaired.count("{") - repaired.count("}")
+    open_brackets = repaired.count("[") - repaired.count("]")
+    repaired += "]" * max(0, open_brackets)
+    repaired += "}" * max(0, open_braces)
+    return json.loads(repaired)
+
+
+def _normalize_merchant_insights(
+    merchant_insights: dict[str, Any] | None,
+    facts: dict[str, Any],
+) -> dict[str, str]:
+    """Ensure merchant insight fields are strings (LLM may echo raw fact objects)."""
+    mi = merchant_insights or {}
+    fastest = facts["merchants"].get("fastest_growing")
+    conc = facts["merchants"].get("concentration") or {}
+
+    fastest_growing = mi.get("fastest_growing")
+    if not isinstance(fastest_growing, str):
+        fastest_growing = (
+            f"{fastest['name']} is your fastest growing merchant (+{fastest['growth_pct']}%)."
+            if fastest
+            else "No merchant growth data for the comparison window."
+        )
+
+    concentration = mi.get("concentration")
+    if not isinstance(concentration, str):
+        concentration = (
+            f"Top {conc.get('top_n', 5)} merchants account for "
+            f"{conc.get('pct_of_total', 0)}% of total spending."
+            if conc.get("pct_of_total")
+            else ""
+        )
+
+    return {
+        "fastest_growing": fastest_growing,
+        "concentration": concentration,
+    }
+
+
 def _llm_narrate_facts(facts: dict[str, Any]) -> dict[str, Any] | None:
     if not settings.NVIDIA_API_KEY or not settings.analytics_chat_model:
         return None
@@ -388,12 +450,17 @@ def _llm_narrate_facts(facts: dict[str, Any]) -> dict[str, Any] | None:
                 },
             ],
             temperature=0.2,
-            max_tokens=1200,
+            max_tokens=2500,
             response_format={"type": "json_object"},
         )
         raw = (response.choices[0].message.content or "").strip()
-        parsed = json.loads(raw)
+        parsed = _parse_llm_json(raw)
         parsed["source"] = "llm"
+        if parsed.get("merchant_insights"):
+            parsed["merchant_insights"] = _normalize_merchant_insights(
+                parsed.get("merchant_insights"),
+                facts,
+            )
         tab_info(
             "analytics",
             "LLM narration done elapsed_ms=%.0f recommendations=%d",

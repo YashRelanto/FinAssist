@@ -960,6 +960,31 @@ def build_period_dashboard_slice(
     }
 
 
+def resolve_dashboard_forecast_meta(
+    user_id: str,
+    transactions: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Resolve next-month forecast for dashboard charts (aligned with /api/forecast)."""
+    from app.services.prophet.inference import get_next_month_prediction
+
+    try:
+        meta = get_next_month_prediction(user_id, transactions)
+        if meta:
+            return meta
+
+        lookback = (date.today() - timedelta(days=730)).isoformat()
+        recent = [
+            t
+            for t in transactions
+            if str(t.get("transaction_date") or "")[:10] >= lookback
+        ]
+        if recent:
+            return get_next_month_prediction(user_id, recent)
+        return None
+    except Exception:
+        return None
+
+
 def build_dashboard_payload(
     *,
     user_id: str,
@@ -977,13 +1002,7 @@ def build_dashboard_payload(
     period_key = normalize_period(period)
     monthly_stats = aggregate_monthly_stats(transactions)
 
-    forecast_meta: dict[str, Any] | None = None
-    try:
-        from app.services.prophet.inference import get_next_month_prediction
-
-        forecast_meta = get_next_month_prediction(user_id, transactions)
-    except Exception:
-        forecast_meta = None
+    forecast_meta = resolve_dashboard_forecast_meta(user_id, transactions)
 
     period_data = {
         p: build_period_dashboard_slice(

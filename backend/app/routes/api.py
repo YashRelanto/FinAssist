@@ -44,7 +44,7 @@ def _login_payload(
     access_token: str | None = None,
     refresh_token: str | None = None,
 ) -> dict:
-    """Flat + nested shape so Login.tsx and other clients both work."""
+    """Flat + nested shape so auth clients receive both response shapes."""
     body = {**user, "email_confirmed": email_confirmed, "success": True}
     body["user"] = user
     if access_token:
@@ -259,18 +259,30 @@ async def get_dashboard_summary(
         period_key = normalize_period(period)
         accounts = fetch_user_accounts(user_id)
 
-        trans_response = (
-            supabase.table("transactions")
-            .select(
-                "transaction_id, amount, transaction_type, transaction_date, "
-                "merchant_name, description, "
-                "category_id, categories(main_category, sub_category)"
-            )
-            .eq("user_id", user_id)
-            .order("transaction_date")
-            .execute()
+        transactions: list = []
+        tx_select = (
+            "transaction_id, amount, transaction_type, transaction_date, "
+            "merchant_name, description, "
+            "category_id, categories(main_category, sub_category)"
         )
-        transactions = trans_response.data or []
+        page_size = 1000
+        offset = 0
+        while True:
+            trans_response = (
+                supabase.table("transactions")
+                .select(tx_select)
+                .eq("user_id", user_id)
+                .order("transaction_date")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            batch = trans_response.data or []
+            if not batch:
+                break
+            transactions.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
 
         recent_res = (
             supabase.table("transactions")

@@ -351,6 +351,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     Map<string, { ts: number; data: any }>
   >(new Map());
 
+  const invalidateDerivedCaches = useCallback(() => {
+    forecastCacheRef.current.clear();
+    spendingAnalyticsCacheRef.current.clear();
+    financialInsightsCacheRef.current.clear();
+    financialHealthInsightsCacheRef.current.clear();
+    inflightRef.current.forecast?.clear();
+    inflightRef.current.spendingAnalytics?.clear();
+    inflightRef.current.financialInsights?.clear();
+    inflightRef.current.financialHealthInsights?.clear();
+  }, []);
+
   const setAnalysisPeriod = useCallback((period: AnalysisPeriod) => {
     setAnalysisPeriodState(period);
     storeAnalysisPeriod(period);
@@ -974,6 +985,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           void loadDashboardSummary({ force: true });
           lastLoadedRef.current.budgetGoalsSummary = 0;
           void loadBudgetGoalsSummary({ force: true });
+          invalidateDerivedCaches();
         })
         .catch((err) => {
           console.error('Database save failed:', err);
@@ -1025,6 +1037,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .then(({ ok, data }) => {
         if (ok && data.success) {
           loadTransactions();
+          lastLoadedRef.current.dashboardSummary = 0;
+          void loadDashboardSummary({ force: true });
+          invalidateDerivedCaches();
           onComplete?.(true);
         } else {
           console.error('Failed to update transaction:', data.detail ?? data);
@@ -1051,6 +1066,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           void loadDashboardSummary({ force: true });
           lastLoadedRef.current.budgetGoalsSummary = 0;
           void loadBudgetGoalsSummary({ force: true });
+          invalidateDerivedCaches();
         }
       })
       .catch(err => console.error('Failed to delete transaction:', err));

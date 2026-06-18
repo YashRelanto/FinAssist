@@ -8,6 +8,7 @@ import {
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGrid } from 'recharts';
 import { cn, formatCurrency } from '../lib/utils';
 import { PageHeader, PageLoading, PageShell, lumio } from '../components/PageShell';
+import { AppModal } from '../components/AppModal';
 
 interface Holding {
   ticker: string;
@@ -360,6 +361,32 @@ export const Investments: React.FC = () => {
     }
   };
 
+  const formatYAxis = (value: number) => {
+    if (value >= 100000) return `₹${(value / 100000).toFixed(1)}L`;
+    if (value >= 1000) return `₹${(value / 1000).toFixed(0)}k`;
+    return `₹${value}`;
+  };
+
+  const monthChangePct = React.useMemo(() => {
+    if (displayChartData.length < 2) return null;
+    const latest = displayChartData[displayChartData.length - 1];
+    const monthAgo = new Date(latest.dateStr);
+    monthAgo.setMonth(monthAgo.getMonth() - 1);
+    const prior = [...displayChartData]
+      .slice(0, -1)
+      .reverse()
+      .find((pt) => new Date(pt.dateStr) <= monthAgo);
+    if (!prior || prior.current <= 0) return null;
+    return ((latest.current - prior.current) / prior.current) * 100;
+  }, [displayChartData]);
+
+  const currentValueSub =
+    holdings.length === 0
+      ? 'Awaiting portfolio data'
+      : monthChangePct != null
+        ? `${monthChangePct >= 0 ? '+' : ''}${monthChangePct.toFixed(1)}% this month`
+        : 'Portfolio value tracked';
+
   return (
     <PageShell>
       <PageHeader
@@ -376,15 +403,18 @@ export const Investments: React.FC = () => {
       {/* METRIC CARDS */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         {[
-          { label: 'Total Invested', val: formatCurrency(summary.total_invested), icon: History, sub: 'Lifetime contributions', trend: null },
-          { label: 'Current Value', val: formatCurrency(summary.current_value), icon: TrendingUp, sub: holdings.length > 0 ? '+2.4% this month' : 'Awaiting portfolio data', trend: holdings.length > 0 ? 'up' : null },
+          { label: 'Total Invested', val: formatCurrency(summary.total_invested), icon: History, sub: 'Lifetime contributions', trend: null as string | null },
+          { label: 'Current Value', val: formatCurrency(summary.current_value), icon: TrendingUp, sub: currentValueSub, trend: holdings.length > 0 && monthChangePct != null ? (monthChangePct >= 0 ? 'up' : 'down') : null },
           { label: 'Total Gain', val: summary.total_gain >= 0 ? `+${formatCurrency(summary.total_gain)}` : `-${formatCurrency(Math.abs(summary.total_gain))}`, sub: holdings.length > 0 ? `${summary.total_gain_percentage.toFixed(1)}% Overall` : '0% gain tracked', trend: holdings.length > 0 && summary.total_gain >= 0 ? 'up' : holdings.length > 0 ? 'down' : null, secondary: holdings.length > 0 && summary.total_gain >= 0 },
-          { label: 'Portfolio CAGR', val: summary.portfolio_cagr, icon: Verified, sub: 'Annualized benchmark', trend: holdings.length > 0 ? 'up' : null },
+          { label: 'Portfolio CAGR', val: summary.portfolio_cagr, icon: Verified, sub: 'Annualized return', trend: null },
         ].map((card, i) => (
           <div key={i} className="bg-surface-container-lowest p-6 rounded-[28px] soft-shadow border border-outline-variant/30 hover:scale-[1.01] transition-transform duration-200">
-            <p className="text-[10px] font-black text-outline uppercase tracking-[0.2em] mb-2">{card.label}</p>
-            <h3 className={cn("text-2.5xl font-black font-display tracking-tight", card.secondary ? "text-secondary" : "text-on-surface")}>{card.val}</h3>
-            <div className={cn("flex items-center gap-1.5 mt-4 text-[10px] font-black uppercase tracking-widest", card.trend === 'up' ? "text-secondary" : card.trend === 'down' ? "text-error" : "text-outline")}>
+            <p className="text-[10px] font-black text-lumio-muted uppercase tracking-[0.2em] mb-2">{card.label}</p>
+            <h3 className={cn("text-2.5xl font-black font-display tracking-tight", card.secondary ? "text-emerald-700" : "text-on-surface")}>{card.val}</h3>
+            <div className={cn(
+              "flex items-center gap-1.5 mt-4 text-[10px] font-black uppercase tracking-widest",
+              card.trend === 'up' ? "text-emerald-700" : card.trend === 'down' ? "text-red-600" : "text-lumio-muted",
+            )}>
               {card.icon && <card.icon className="w-3.5 h-3.5" />}
               <span>{card.sub}</span>
             </div>
@@ -394,44 +424,33 @@ export const Investments: React.FC = () => {
 
       {/* LINE CHART & SUMMARY */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-12 bg-surface-container-lowest p-8 rounded-[32px] soft-shadow border border-outline-variant/30">
-          <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-8">
+        <div className="lg:col-span-12 bento-card flex flex-col min-h-[400px]">
+          <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
             <div>
-              <h4 className="text-xl font-bold text-on-surface">Portfolio Value Over Time</h4>
-              <div className="flex items-center gap-4 mt-2">
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-0.5 border-t border-dashed border-outline/70" />
-                  <span className="text-[10px] font-bold text-outline uppercase tracking-wider">Invested</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <div className="w-3 h-0.5 bg-secondary" />
-                  <span className="text-[10px] font-bold text-secondary uppercase tracking-wider">Current</span>
-                </div>
-              </div>
+              <h4 className="font-label text-[12px] font-semibold uppercase tracking-widest text-lumio-muted mb-2">
+                Portfolio Value Over Time
+              </h4>
             </div>
-            
-            {/* Dynamic filter ranges */}
+
             {rawChartData.length > 0 && (
-              <div className="flex bg-surface-container-low p-1 rounded-xl border border-outline-variant/10 self-start">
+              <div className="flex bg-white/50 backdrop-blur-sm rounded-full p-1 border border-white shadow-sm self-start">
                 {availableFilters.map(p => (
-                  <button 
-                    key={p} 
+                  <button
+                    key={p}
                     onClick={() => setActiveFilter(p)}
                     className={cn(
-                      "px-4 py-2 rounded-lg text-[10px] font-black tracking-widest uppercase transition-all", 
-                      p === activeFilter 
-                        ? "bg-white shadow text-primary font-black" 
-                        : "text-outline hover:text-on-surface"
+                      'px-3 sm:px-4 py-1.5 rounded-full text-xs font-bold transition-colors',
+                      p === activeFilter ? 'bg-lumio-black text-white shadow-md' : 'text-lumio-muted hover:bg-white',
                     )}
                   >
-                    {p === 'ALL' ? 'ALL TIME' : p}
+                    {p === 'ALL' ? 'All' : p}
                   </button>
                 ))}
               </div>
             )}
           </div>
 
-          <div className="h-[360px] w-full">
+          <div className="h-[280px] w-full">
             {loading ? (
               <div className="h-full flex flex-col items-center justify-center gap-3">
                 <Loader2 className="w-10 h-10 animate-spin text-primary" />
@@ -443,72 +462,74 @@ export const Investments: React.FC = () => {
                 <p className="text-sm font-medium">No investment activity logged. Click the button above to add your first mutual fund transaction.</p>
               </div>
             ) : (
+              <>
               <ResponsiveContainer width="100%" height="100%">
-                 <LineChart data={displayChartData} margin={{ left: 10, right: 10, top: 10, bottom: 10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
-                    <XAxis 
-                      dataKey="dateStr" 
-                      axisLine={false} 
-                      tickLine={false} 
-                      tick={{ fontSize: 9, fill: '#64748B', fontWeight: 800 }} 
-                      dy={10} 
+                 <LineChart data={displayChartData} margin={{ top: 12, right: 12, left: 4, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" vertical={false} />
+                    <XAxis
+                      dataKey="dateStr"
+                      tick={{ fontSize: 10, fill: '#6b7280' }}
+                      tickLine={false}
+                      axisLine={{ stroke: 'rgba(0,0,0,0.08)' }}
                       tickFormatter={formatXAxisTick}
                     />
-                    <YAxis 
-                      axisLine={false} 
-                      tickLine={false} 
-                      tick={{ fontSize: 9, fill: '#64748B', fontWeight: 800 }} 
-                      dx={-10}
-                      tickFormatter={(val) => `₹${(val / 1000).toFixed(0)}k`}
+                    <YAxis
+                      tick={{ fontSize: 10, fill: '#6b7280' }}
+                      tickLine={false}
+                      axisLine={false}
+                      width={52}
+                      tickFormatter={formatYAxis}
                     />
-                    <Tooltip 
+                    <Tooltip
                       content={({ active, payload }) => {
                         if (active && payload && payload.length >= 2) {
                           const invested = payload[0].value as number;
                           const current = payload[1].value as number;
                           const diff = current - invested;
-                          const gainPercent = (diff / invested) * 100;
+                          const gainPercent = invested > 0 ? (diff / invested) * 100 : 0;
                           return (
-                            <div className="bg-surface-container-lowest p-4 rounded-2xl border border-outline-variant/30 shadow-xl z-50 space-y-2">
-                              <p className="text-[9px] font-black text-outline uppercase tracking-widest">{payload[0].payload.dateStr}</p>
-                              <div className="flex items-center justify-between gap-6">
-                                <span className="text-xs font-bold text-outline">Invested Value:</span>
-                                <span className="text-xs font-black text-on-surface">{formatCurrency(invested)}</span>
-                              </div>
-                              <div className="flex items-center justify-between gap-6">
-                                <span className="text-xs font-bold text-secondary">Current Value:</span>
-                                <span className="text-xs font-black text-secondary">{formatCurrency(current)}</span>
-                              </div>
-                              <div className="pt-1.5 border-t border-outline-variant/30 flex items-center justify-between gap-6">
-                                <span className="text-[10px] font-black uppercase tracking-widest text-outline">Net Return:</span>
-                                <span className={cn("text-xs font-black", diff >= 0 ? "text-secondary" : "text-error")}>
-                                  {diff >= 0 ? '+' : ''}{formatCurrency(diff)} ({gainPercent.toFixed(1)}%)
-                                </span>
-                              </div>
+                            <div className="bg-lumio-black text-white font-label text-[11px] py-2 px-3 rounded-xl shadow-xl space-y-1">
+                              <p className="text-white/70 uppercase tracking-wider">{payload[0].payload.dateStr}</p>
+                              <p>Invested: <span className="font-bold">{formatCurrency(invested)}</span></p>
+                              <p>Current: <span className="font-bold">{formatCurrency(current)}</span></p>
+                              <p className={diff >= 0 ? 'text-emerald-300' : 'text-red-300'}>
+                                Net: {diff >= 0 ? '+' : ''}{formatCurrency(diff)} ({gainPercent.toFixed(1)}%)
+                              </p>
                             </div>
                           );
                         }
                         return null;
                       }}
                     />
-                    <Line 
-                      type="monotone" 
-                      dataKey="invested" 
-                      stroke="#94A3B8" 
-                      strokeWidth={2} 
-                      strokeDasharray="5 5" 
+                    <Line
+                      type="monotone"
+                      dataKey="invested"
+                      stroke="#64748b"
+                      strokeWidth={2}
+                      strokeDasharray="6 4"
                       dot={false}
+                      connectNulls
                     />
-                    <Line 
-                      type="monotone" 
-                      dataKey="current" 
-                      stroke="#10AC84" 
-                      strokeWidth={3} 
-                      dot={{ r: 3, stroke: '#10AC84', strokeWidth: 1, fill: '#fff' }}
-                      activeDot={{ r: 6, fill: '#10AC84' }}
+                    <Line
+                      type="monotone"
+                      dataKey="current"
+                      stroke="#0a0a0a"
+                      strokeWidth={2.5}
+                      dot={{ r: 4, fill: '#0a0a0a', stroke: '#fff', strokeWidth: 2 }}
+                      activeDot={{ r: 6, fill: '#0a0a0a' }}
+                      connectNulls
                     />
                  </LineChart>
               </ResponsiveContainer>
+              <div className="flex justify-center gap-6 mt-3 text-[10px] font-bold uppercase tracking-widest text-lumio-muted">
+                <span className="flex items-center gap-2">
+                  <span className="w-6 h-0.5 border-t-2 border-dashed border-lumio-muted rounded" /> Invested
+                </span>
+                <span className="flex items-center gap-2">
+                  <span className="w-6 h-0.5 bg-lumio-black rounded" /> Current Value
+                </span>
+              </div>
+              </>
             )}
           </div>
         </div>
@@ -847,8 +868,8 @@ export const Investments: React.FC = () => {
 
       {/* ADD MUTUAL FUND TRANSACTION MODAL */}
       {modalOpen && (
-        <div className="fixed inset-0 bg-on-surface/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-surface-container-lowest w-full max-w-[540px] rounded-[32px] border border-outline-variant/30 soft-shadow overflow-hidden flex flex-col max-h-[90vh]">
+        <AppModal isOpen={modalOpen} onClose={() => setModalOpen(false)} className="max-w-[540px]">
+          <div className="bg-surface-container-lowest w-full rounded-[32px] border border-outline-variant/30 soft-shadow overflow-hidden flex flex-col max-h-[90vh]">
             {/* Modal Header */}
             <div className="p-6 border-b border-outline-variant/20 flex justify-between items-center bg-surface-container-low/40">
               <div>
@@ -1006,7 +1027,7 @@ export const Investments: React.FC = () => {
               </div>
             </form>
           </div>
-        </div>
+        </AppModal>
       )}
     </PageShell>
   );

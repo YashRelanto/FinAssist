@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { X, Building2, CreditCard, DollarSign, Wallet, ShieldCheck } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { CURRENCY_SYMBOL } from '../lib/utils';
 import { activeUserId } from '../lib/activeUserId';
+import { AppModal } from './AppModal';
 import { apiFetch } from '../lib/api';
 
 interface AccountModalProps {
@@ -120,9 +120,9 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
     }
   };
 
-  return createPortal(
-    <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4 backdrop-blur-sm transition-all duration-300">
-      <div className="bg-surface-container-lowest w-full max-w-lg rounded-[28px] shadow-2xl overflow-hidden border border-outline-variant/30 flex flex-col transform transition-all scale-100">
+  return (
+    <AppModal isOpen={isOpen} onClose={onClose}>
+      <div className="bg-surface-container-lowest w-full rounded-[28px] shadow-2xl overflow-hidden border border-outline-variant/30 flex flex-col transform transition-all scale-100">
         <div className="px-8 py-5 border-b border-outline-variant/20 flex justify-between items-center bg-surface-container-low">
           <div>
             <h3 className="text-xl font-black text-on-surface tracking-tight">
@@ -316,7 +316,6 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
           </div>
         </form>
       </div>
-    </div>,
-    document.body
+    </AppModal>
   );
 };

@@ -78,3 +78,15 @@ export interface Budget {
   alertThreshold: number;
 }
 
+export interface BudgetUtilizationItem {
+  id: string;
+  budget_name: string;
+  category: string;
+  limit: number;
+  spent: number;
+  utilization_pct: number;
+  alert_threshold: number;
+  over_budget: boolean;
+  alert: boolean;
+}
+

@@ -4,6 +4,7 @@ from app.services.financial_insights_service import (
     build_financial_insights_payload,
     build_precomputed_insight_facts,
     _narrate_from_facts,
+    _normalize_merchant_insights,
 )
 
 
@@ -91,6 +92,21 @@ def test_narrate_from_facts_fields():
     assert result["merchant_insights"]["fastest_growing"]
     assert result["behavior_insights"]["weekend"]
     assert result["source"] == "rule_based"
+
+
+def test_normalize_merchant_insights_coerces_objects_to_strings():
+    facts = build_precomputed_insight_facts(_sample_analytics())
+    normalized = _normalize_merchant_insights(
+        {
+            "fastest_growing": facts["merchants"]["fastest_growing"],
+            "concentration": facts["merchants"]["concentration"],
+        },
+        facts,
+    )
+    assert isinstance(normalized["fastest_growing"], str)
+    assert isinstance(normalized["concentration"], str)
+    assert "Swiggy" in normalized["fastest_growing"]
+    assert "47%" in normalized["concentration"]
 
 
 def test_build_financial_insights_payload_fallback():
