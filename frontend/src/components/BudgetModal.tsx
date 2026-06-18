@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { X, PiggyBank, Calendar, Info, ShieldAlert } from 'lucide-react';
 import { Budget } from '../types';
 import { useAppContext } from '../context/AppContext';
 import { CURRENCY_SYMBOL } from '../lib/utils';
 import { defaultBudgetPeriodDates } from '../lib/budgetPeriod';
+import { AppModal } from './AppModal';
 
 interface BudgetModalProps {
   isOpen: boolean;
@@ -86,9 +86,9 @@ export const BudgetModal: React.FC<BudgetModalProps> = ({ isOpen, onClose, editi
     onClose();
   };
 
-  return createPortal(
-    <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4 backdrop-blur-sm">
-      <div className="bg-surface-container-lowest w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden border border-outline-variant/30 flex flex-col">
+  return (
+    <AppModal isOpen={isOpen} onClose={onClose}>
+      <div className="bg-surface-container-lowest w-full rounded-2xl shadow-2xl overflow-hidden border border-outline-variant/30 flex flex-col">
         <div className="px-6 py-4 border-b border-outline-variant/30 flex justify-between items-center bg-surface-container-low">
           <h3 className="text-xl font-bold">{editingBudget ? 'Edit Category Budget' : 'Create New Category Budget'}</h3>
           <button onClick={onClose} className="p-2 hover:bg-surface-container-high rounded-full transition-colors">
@@ -208,7 +208,6 @@ export const BudgetModal: React.FC<BudgetModalProps> = ({ isOpen, onClose, editi
           </div>
         </form>
       </div>
-    </div>,
-    document.body
+    </AppModal>
   );
 };

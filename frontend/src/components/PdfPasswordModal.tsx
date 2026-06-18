@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Lock, Eye, EyeOff, X, ShieldAlert } from 'lucide-react';
+import { AppModal } from './AppModal';
 
 interface PdfPasswordModalProps {
   fileName: string;
@@ -28,8 +29,8 @@ export const PdfPasswordModal: React.FC<PdfPasswordModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-md bg-surface-container-lowest rounded-3xl border border-outline-variant/30 shadow-2xl overflow-hidden">
+    <AppModal isOpen onClose={onCancel} overlayClassName="bg-black/60">
+      <div className="w-full bg-surface-container-lowest rounded-3xl border border-outline-variant/30 shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="bg-primary/5 border-b border-outline-variant/20 p-6 flex items-start justify-between gap-4">
           <div className="flex items-center gap-4">
@@ -106,6 +107,6 @@ export const PdfPasswordModal: React.FC<PdfPasswordModalProps> = ({
           </div>
         </form>
       </div>
-    </div>
+    </AppModal>
   );
 };

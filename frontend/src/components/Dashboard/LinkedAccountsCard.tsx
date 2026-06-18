@@ -2,7 +2,7 @@ import React from 'react';
 import { Building2, CreditCard, History, Plus, Wallet, ShieldCheck, DollarSign } from 'lucide-react';
 import { cn, formatCurrency } from '../../lib/utils';
 
-interface LinkedAccountsProps {
+interface LinkedAccountsCardProps {
   accounts?: any[];
   onAddAccount: () => void;
   variant?: 'default' | 'bento';
@@ -50,7 +50,11 @@ function formatAccountBalance(acc: any) {
   return formatCurrency(acc.current_balance);
 }
 
-export const LinkedAccounts: React.FC<LinkedAccountsProps> = ({ accounts, onAddAccount, variant = 'default' }) => {
+export const LinkedAccountsCard: React.FC<LinkedAccountsCardProps> = ({
+  accounts,
+  onAddAccount,
+  variant = 'default',
+}) => {
   const cardClass = variant === 'bento'
     ? 'bento-card'
     : 'bg-surface-container-lowest rounded-[24px] border border-outline-variant/30';
@@ -128,7 +132,7 @@ export const LinkedAccounts: React.FC<LinkedAccountsProps> = ({ accounts, onAddA
             <div>
               <div className="flex justify-between items-start mb-4">
                 <div className={cn(
-                  "p-2.5 rounded-xl", 
+                  "p-2.5 rounded-xl",
                   isCredit ? "bg-teal-50 text-teal-600" : "bg-blue-50 text-blue-600"
                 )}>
                   <Icon className="w-5 h-5" />
@@ -149,7 +153,7 @@ export const LinkedAccounts: React.FC<LinkedAccountsProps> = ({ accounts, onAddA
         );
       })}
 
-      <button 
+      <button
         onClick={onAddAccount}
         className="bg-surface-container-lowest/30 p-6 rounded-[24px] border-2 border-dashed border-outline-variant/60 hover:border-primary/60 hover:bg-surface-container-lowest hover:text-primary transition-all duration-300 cursor-pointer flex flex-col items-center justify-center min-h-[160px] group hover:-translate-y-0.5"
       >

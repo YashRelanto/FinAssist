@@ -4,7 +4,7 @@ import { useAppContext } from '../context/AppContext';
 import { ExpenseBreakdown } from '../components/Dashboard/ExpenseBreakdown';
 import { RecentTransactions } from '../components/Dashboard/RecentTransactions';
 import { QuickAddModal } from '../components/Dashboard/QuickAddModal';
-import { LinkedAccounts } from '../components/Dashboard/LinkedAccounts';
+import { LinkedAccountsCard } from '../components/Dashboard/LinkedAccountsCard';
 import { AccountModal } from '../components/AccountModal';
 import {
   DashboardHero,
@@ -12,6 +12,7 @@ import {
   FinancialHealthCard,
   AnomaliesCard,
 } from '../components/Dashboard/DashboardHero';
+import { SubscriptionsCard } from '../components/Dashboard/SubscriptionsCard';
 import { PageShell } from '../components/PageShell';
 import { formatCurrency } from '../lib/utils';
 import {
@@ -19,12 +20,72 @@ import {
   getDashboardPeriodSlice,
 } from '../lib/analysisPeriod';
 
+type ChartPoint = {
+  name?: string;
+  month?: string;
+  date?: string;
+  expense?: number;
+  actual_expense?: number | null;
+  predicted_expense?: number | null;
+  is_forecast?: boolean;
+};
+
+function enrichChartWithForecast(
+  chartData: ChartPoint[],
+  predictedNextMonth: number | null | undefined,
+  predictedMonthLabel: string | null | undefined,
+  predictedMonth: string | null | undefined,
+  period: AnalysisPeriod,
+): ChartPoint[] {
+  if (!predictedNextMonth || predictedNextMonth <= 0 || chartData.length === 0) {
+    return chartData;
+  }
+  if (chartData.some((d) => d.is_forecast)) {
+    return chartData;
+  }
+
+  const enriched = chartData.map((point) => ({
+    ...point,
+    actual_expense: point.actual_expense ?? point.expense ?? 0,
+    predicted_expense: point.predicted_expense ?? null,
+  }));
+
+  const last = enriched[enriched.length - 1];
+  enriched[enriched.length - 1] = {
+    ...last,
+    predicted_expense: last.actual_expense ?? last.expense ?? 0,
+  };
+
+  const label = predictedMonthLabel || 'Next month';
+  const shortName =
+    period === '1m'
+      ? (label.split(' ')[0]?.slice(0, 3) ?? 'Nxt')
+      : label.length > 7
+        ? label.slice(0, 7)
+        : label;
+
+  enriched.push({
+    name: shortName,
+    month: predictedMonth ?? undefined,
+    date: predictedMonth ? `${predictedMonth}-01` : undefined,
+    is_forecast: true,
+    expense: undefined,
+    actual_expense: null,
+    predicted_expense: predictedNextMonth,
+  });
+
+  return enriched;
+}
+
 export const Dashboard: React.FC = () => {
   const {
     user,
     dashboardSummary,
     loadDashboardSummary,
     loadFinancialHealthInsights,
+    loadForecast,
+    loadTransactions,
+    refreshAfterTransactionChange,
     dashboardSummaryLoading,
     analysisPeriod,
     setAnalysisPeriod,
@@ -33,6 +94,12 @@ export const Dashboard: React.FC = () => {
   const [isQuickAddOpen, setIsQuickAddOpen] = React.useState(false);
   const [healthInsights, setHealthInsights] = React.useState<any | null>(null);
   const [healthInsightsLlmLoading, setHealthInsightsLlmLoading] = React.useState(false);
+  const [forecastOverlay, setForecastOverlay] = React.useState<{
+    predicted_next_month?: number;
+    predicted_month_label?: string;
+    predicted_month?: string;
+  } | null>(null);
+  const healthLoadedRef = React.useRef(false);
 
   const periodData = useMemo(
     () => getDashboardPeriodSlice(dashboardSummary, analysisPeriod),
@@ -41,6 +108,8 @@ export const Dashboard: React.FC = () => {
 
   const loadHealthInsightsPipeline = React.useCallback(
     (force?: boolean) => {
+      if (!force && healthLoadedRef.current && healthInsights) return;
+      healthLoadedRef.current = true;
       void loadFinancialHealthInsights({ force, llm: false }).then((data) => {
         if (data) setHealthInsights(data);
       });
@@ -50,11 +119,12 @@ export const Dashboard: React.FC = () => {
         setHealthInsightsLlmLoading(false);
       });
     },
-    [loadFinancialHealthInsights],
+    [loadFinancialHealthInsights, healthInsights],
   );
 
   const refreshDashboard = React.useCallback(
     async (options?: { force?: boolean }) => {
+      if (options?.force) healthLoadedRef.current = false;
       await loadDashboardSummary({ force: options?.force });
       loadHealthInsightsPipeline(options?.force);
     },
@@ -63,8 +133,61 @@ export const Dashboard: React.FC = () => {
 
   React.useEffect(() => {
     if (!user?.isAuthenticated) return;
+    void loadTransactions();
+  }, [user?.isAuthenticated, loadTransactions]);
+
+  React.useEffect(() => {
+    if (!user?.isAuthenticated) return;
     loadHealthInsightsPipeline();
   }, [user?.isAuthenticated, loadHealthInsightsPipeline]);
+
+  React.useEffect(() => {
+    if (!user?.isAuthenticated) return;
+    const sliceHasForecast =
+      periodData?.predicted_next_month != null && periodData.predicted_next_month > 0;
+    const chartHasForecast = (periodData?.chart_data ?? []).some(
+      (d: { is_forecast?: boolean }) => d.is_forecast,
+    );
+    if (sliceHasForecast && chartHasForecast) {
+      setForecastOverlay(null);
+      return;
+    }
+    void loadForecast({ period: analysisPeriod }).then((data) => {
+      if (data?.predicted_next_month) {
+        setForecastOverlay(data);
+      }
+    });
+  }, [user?.isAuthenticated, periodData, analysisPeriod, loadForecast]);
+
+  const predictedNextMonth =
+    periodData?.predicted_next_month ??
+    forecastOverlay?.predicted_next_month ??
+    dashboardSummary?.forecast?.predicted_next_month ??
+    null;
+  const predictedMonthLabel =
+    periodData?.predicted_month_label ??
+    forecastOverlay?.predicted_month_label ??
+    dashboardSummary?.forecast?.predicted_month_label ??
+    null;
+  const predictedMonth =
+    forecastOverlay?.predicted_month ??
+    forecastOverlay?.predicted_months?.[0]?.month ??
+    (forecastOverlay?.predicted_month_start
+      ? String(forecastOverlay.predicted_month_start).slice(0, 7)
+      : null) ??
+    dashboardSummary?.forecast?.predicted_month ??
+    null;
+
+  const chartData = useMemo(() => {
+    const raw = periodData?.chart_data ?? [];
+    return enrichChartWithForecast(
+      raw,
+      predictedNextMonth,
+      predictedMonthLabel,
+      predictedMonth,
+      analysisPeriod,
+    );
+  }, [periodData, predictedNextMonth, predictedMonthLabel, predictedMonth, analysisPeriod]);
 
   const handleAccountCreated = () => {
     void refreshDashboard({ force: true });
@@ -79,7 +202,6 @@ export const Dashboard: React.FC = () => {
   }
 
   const summary = periodData?.summary;
-  const chartData = periodData?.chart_data ?? [];
   const recentTx = dashboardSummary?.recent_transactions ?? [];
   const topSpending = periodData?.top_spending ?? [];
   const anomalies = periodData?.spending_anomalies ?? [];
@@ -108,8 +230,8 @@ export const Dashboard: React.FC = () => {
           <MonthlySpendTrend
             chartData={chartData}
             totalExpense={totalExpense}
-            predictedNextMonth={periodData?.predicted_next_month ?? dashboardSummary?.forecast?.predicted_next_month}
-            predictedMonthLabel={periodData?.predicted_month_label ?? dashboardSummary?.forecast?.predicted_month_label}
+            predictedNextMonth={predictedNextMonth}
+            predictedMonthLabel={predictedMonthLabel}
             changePct={changePct}
             analysisPeriod={analysisPeriod}
             chartGranularity={periodData?.chart_granularity}
@@ -162,7 +284,7 @@ export const Dashboard: React.FC = () => {
             </div>
           </div>
 
-          <LinkedAccounts
+          <LinkedAccountsCard
             accounts={dashboardSummary?.accounts}
             onAddAccount={() => setIsAccountModalOpen(true)}
             variant="bento"
@@ -183,6 +305,7 @@ export const Dashboard: React.FC = () => {
             insightsLlmLoading={healthInsightsLlmLoading}
           />
           <AnomaliesCard anomalies={anomalies} />
+          <SubscriptionsCard />
         </div>
       </div>
 
@@ -195,7 +318,10 @@ export const Dashboard: React.FC = () => {
       <QuickAddModal
         isOpen={isQuickAddOpen}
         onClose={() => setIsQuickAddOpen(false)}
-        onSuccess={() => void refreshDashboard({ force: true })}
+        onSuccess={() => {
+          refreshAfterTransactionChange();
+          void refreshDashboard({ force: true });
+        }}
         accounts={dashboardSummary?.accounts}
       />
     </PageShell>

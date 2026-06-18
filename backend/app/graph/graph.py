@@ -14,30 +14,30 @@ from __future__ import annotations
 
 import logging
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 
-from app.graph.state import AgentState
+from app.graph.brain import brain_node
+from app.graph.checkpointer import get_checkpointer
+from app.graph.edges import (
+    route_after_brain,
+    route_after_input_guardrail,
+    route_after_sql_validator,
+)
+from app.graph.logging_utils import wrap_graph_node
 from app.graph.nodes import (
-    input_guardrail_node,
-    output_guardrail_node,
     analytics_node,
     answer_node,
+    input_guardrail_node,
+    output_guardrail_node,
 )
-from app.graph.brain import brain_node
+from app.graph.sql import sql_executor, sql_planner, sql_validator
+from app.graph.state import AgentState
 from app.graph.tools import (
-    nl2sql_agent,
     goal_planner_tool,
     investment_tool,
     knowledge_tool,
+    nl2sql_agent,
 )
-from app.graph.sql import sql_planner, sql_validator, sql_executor
-from app.graph.edges import (
-    route_after_input_guardrail,
-    route_after_brain,
-    route_after_sql_validator,
-)
-from app.graph.checkpointer import get_checkpointer
-from app.graph.logging_utils import wrap_graph_node
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ def build_graph():
     builder.add_edge("nl2sql_agent", "sql_planner")
     builder.add_edge("sql_planner", "sql_validator")
     builder.add_edge("sql_executor", "analytics_node")
-    builder.add_edge("analytics_node", "brain")     # evidence collected → back to Brain
+    builder.add_edge("analytics_node", "brain")
 
     # ── 5. Other tools return to the Brain ───────────────────────────────
     builder.add_edge("goal_planner_tool", "brain")

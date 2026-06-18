@@ -1,12 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, User, Bot, Paperclip, Loader2 } from 'lucide-react';
-import { cn, formatCurrency, APP_NAME, APP_ADVISOR_GREETING } from '../lib/utils';
+import { cn, formatCurrency, APP_NAME } from '../lib/utils';
 import { useAppContext } from '../context/AppContext';
 import { ChatChart } from '../components/ChatChart';
 import { PageHeader, PageShell } from '../components/PageShell';
 import { Markdown } from '../components/Markdown';
-import { ClarificationCard } from '../components/ClarificationCard';
-import type { ClarificationQuestion } from '../components/ClarificationCard';
+import { ClarificationCard, type ClarificationQuestion } from '../components/ClarificationCard';
 
 interface Message {
   id: number;
@@ -14,21 +13,11 @@ interface Message {
   time: string;
   text: string;
   type: 'text' | 'clarification' | 'card';
-  artifacts?: any[];
+  artifacts?: unknown[];
   clarificationQuestions?: ClarificationQuestion[];
   clarificationAnswered?: boolean;
-  data?: any[];
+  data?: { label: string; value: number; color: string; percent: number }[];
 }
-
-const initialMessages = [
-  { 
-    id: 1, 
-    role: 'ai', 
-    time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 
-    text: APP_ADVISOR_GREETING,
-    type: 'text' 
-  }
-];
 
 export const AIAssistant: React.FC = () => {
   const { user, chatMessages: messages, setChatMessages: setMessages } = useAppContext();

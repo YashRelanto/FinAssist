@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../../context/AppContext';
 import { activeUserId } from '../../lib/activeUserId';
+import { apiFetch } from '../../lib/api';
 import { cn, formatCurrency } from '../../lib/utils';
 import { Plus, Check, Loader2, ArrowUpRight, ArrowDownLeft, Calendar } from 'lucide-react';
+import { Transaction } from '../../types';
 
 interface QuickAddFormProps {
   onSuccess?: () => void;
@@ -11,7 +13,7 @@ interface QuickAddFormProps {
 }
 
 export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts, variant = 'default' }) => {
-  const { categories, user } = useAppContext();
+  const { categories, user, prependTransaction, refreshAfterTransactionChange } = useAppContext();
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [activeTab, setActiveTab] = useState<'add' | 'upcoming'>('add');
@@ -39,7 +41,7 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts,
     if (!uid) return;
     setLoadingUpcoming(true);
     try {
-      const res = await fetch(`http://localhost:8000/api/upcoming-payments?user_id=${uid}`);
+      const res = await apiFetch(`/api/upcoming-payments?user_id=${encodeURIComponent(uid)}`);
       const data = await res.json();
       if (res.ok && data.success) {
         setUpcomingPayments(data.data || []);
@@ -71,7 +73,7 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts,
         alert('Please sign in again.');
         return;
       }
-      const response = await fetch('http://localhost:8000/api/transactions', {
+      const response = await apiFetch('/api/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -94,6 +96,28 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts,
 
       const data = await response.json();
       if (response.ok || data.success) {
+        const wasRecurring = formData.isRecurring;
+        const accountName =
+          accounts?.find((acc) => acc.account_id === formData.accountId)?.account_name ?? 'Unknown Account';
+        const optimistic: Transaction = {
+          id: data.transaction_id || `optimistic-${Date.now()}`,
+          date: formData.date,
+          merchant: formData.description || 'Quick Add',
+          category: formData.mainCategory,
+          subCategory: formData.subCategory || 'General',
+          amount: Math.abs(parseFloat(formData.amount)),
+          account: accountName,
+          type: formData.type as 'income' | 'expense',
+          notes: formData.description || 'Quick Add',
+          is_recurring: formData.isRecurring,
+          recurrence_period: formData.isRecurring ? formData.recurrencePeriod : null,
+          recurrence_skips: formData.isRecurring ? parseInt(formData.recurrenceSkips || '0') : 0,
+        };
+        prependTransaction(optimistic);
+        refreshAfterTransactionChange();
+        if (wasRecurring) {
+          void fetchUpcomingPayments();
+        }
         setSuccess(true);
         setFormData({
           description: '',
@@ -131,16 +155,29 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts,
         ? 'bento-card flex flex-col h-full'
         : 'lg:col-span-5 bg-surface-container-lowest p-6 rounded-[24px] border border-outline-variant/30 soft-shadow flex flex-col h-full',
     )}>
-      <div className="flex items-center justify-between mb-6 border-b border-outline-variant/20 pb-3">
-        {variant === 'modal' && (
-          <h3 className="text-lg font-black uppercase tracking-widest text-on-surface">Quick Add</h3>
+      <div className="mb-6 border-b border-outline-variant/20 pb-3 space-y-3">
+        {(variant === 'modal' || variant === 'bento' || variant === 'default') && (
+          <div className="flex items-center justify-between gap-3">
+            <h3 className={cn(
+              'font-black uppercase tracking-widest text-on-surface',
+              variant === 'modal' ? 'text-lg' : 'text-[12px] font-semibold text-lumio-muted',
+            )}>
+              Quick Add
+            </h3>
+            {success && activeTab === 'add' && (
+              <div className="flex items-center gap-2 text-secondary bg-secondary/10 px-3 py-1 rounded-full animate-in fade-in zoom-in duration-300">
+                <Check className="w-3 h-3" />
+                <span className="text-[10px] font-black uppercase tracking-wider">Added!</span>
+              </div>
+            )}
+          </div>
         )}
-        <div className={cn('flex gap-4', variant === 'modal' && 'ml-auto')}>
+        <div className="flex gap-4">
           <button
             type="button"
             onClick={() => setActiveTab('add')}
             className={cn(
-              "text-lg font-black uppercase tracking-widest pb-1 transition-all",
+              "text-sm font-black uppercase tracking-widest pb-1 transition-all",
               activeTab === 'add'
                 ? "text-primary border-b-2 border-primary"
                 : "text-outline hover:text-on-surface"
@@ -152,7 +189,7 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts,
             type="button"
             onClick={() => setActiveTab('upcoming')}
             className={cn(
-              "text-lg font-black uppercase tracking-widest pb-1 transition-all",
+              "text-sm font-black uppercase tracking-widest pb-1 transition-all",
               activeTab === 'upcoming'
                 ? "text-primary border-b-2 border-primary"
                 : "text-outline hover:text-on-surface"
@@ -161,12 +198,6 @@ export const QuickAddForm: React.FC<QuickAddFormProps> = ({ onSuccess, accounts,
             Upcoming
           </button>
         </div>
-        {success && activeTab === 'add' && (
-          <div className="flex items-center gap-2 text-secondary bg-secondary/10 px-3 py-1 rounded-full animate-in fade-in zoom-in duration-300">
-            <Check className="w-3 h-3" />
-            <span className="text-[10px] font-black uppercase tracking-wider">Added!</span>
-          </div>
-        )}
       </div>
 
       {activeTab === 'add' ? (

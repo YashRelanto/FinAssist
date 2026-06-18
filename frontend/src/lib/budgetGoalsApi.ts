@@ -1,4 +1,4 @@
-import type { BudgetUtilizationItem } from '../components/Dashboard/BudgetUtilization';
+import type { BudgetUtilizationItem } from '../types';
 import type { Goal } from '../types';
 
 export interface SavingsTrajectory {

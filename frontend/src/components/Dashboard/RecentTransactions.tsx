@@ -77,10 +77,9 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
             <button
               type="button"
               onClick={onAddTransaction}
-              className="w-9 h-9 rounded-full border border-lumio-line bg-white/60 flex items-center justify-center hover:bg-lumio-black hover:text-white transition-colors"
-              aria-label="Add transaction"
+              className="text-[10px] font-bold uppercase tracking-widest hover:underline"
             >
-              <Plus className="w-4 h-4" />
+              + Add
             </button>
           )}
           <button 
