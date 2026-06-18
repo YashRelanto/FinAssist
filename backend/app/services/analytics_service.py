@@ -212,24 +212,45 @@ def build_category_share(
     end_date: str | None,
 ) -> list[dict[str, Any]]:
     totals: dict[str, float] = defaultdict(float)
+    sub_totals: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+
     for row in filter_rows_by_date(rows, start_date=start_date, end_date=end_date):
         if (row.get("transaction_type") or "").lower() != EXPENSE_TYPE:
             continue
         cat = _category_from_row(row)
-        totals[cat] += transaction_amount_value(row.get("amount"), EXPENSE_TYPE)
+        amt = transaction_amount_value(row.get("amount"), EXPENSE_TYPE)
+        totals[cat] += amt
+
+        # Extract sub_category
+        cats_obj = row.get("categories") or {}
+        sub_cat = str(cats_obj.get("sub_category") or "General").strip() or "General"
+        sub_totals[cat][sub_cat] += amt
 
     grand = sum(totals.values())
     if grand <= 0:
         return []
 
-    return [
-        {
+    result: list[dict[str, Any]] = []
+    for name, amount in sorted(totals.items(), key=lambda x: x[1], reverse=True):
+        # Build subcategory breakdown
+        subs = sub_totals.get(name, {})
+        sub_list = [
+            {
+                "sub_category": sub_name,
+                "amount": round(sub_amount, 2),
+                "pct": round((sub_amount / amount) * 100, 1) if amount > 0 else 0,
+            }
+            for sub_name, sub_amount in sorted(subs.items(), key=lambda x: x[1], reverse=True)
+        ]
+
+        result.append({
             "category": name,
             "amount": round(amount, 2),
             "pct": round((amount / grand) * 100, 1),
-        }
-        for name, amount in sorted(totals.items(), key=lambda x: x[1], reverse=True)
-    ]
+            "subcategories": sub_list,
+        })
+
+    return result
 
 
 def build_merchant_analytics(

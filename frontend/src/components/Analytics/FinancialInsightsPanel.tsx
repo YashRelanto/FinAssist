@@ -1,7 +1,7 @@
 import React from 'react';
 
 interface FinancialInsightsPanelProps {
-  executiveSummary?: string;
+  executiveSummary?: string | string[];
   recommendations?: string[];
   loading?: boolean;
   aiLoading?: boolean;
@@ -19,7 +19,13 @@ export const FinancialInsightsPanel: React.FC<FinancialInsightsPanelProps> = ({
     );
   }
 
-  if (!executiveSummary && !recommendations.length && !aiLoading) {
+  const summaryBullets: string[] = Array.isArray(executiveSummary)
+    ? executiveSummary
+    : executiveSummary
+      ? [executiveSummary]
+      : [];
+
+  if (!summaryBullets.length && !recommendations.length && !aiLoading) {
     return null;
   }
 
@@ -32,8 +38,15 @@ export const FinancialInsightsPanel: React.FC<FinancialInsightsPanelProps> = ({
         )}
       </div>
 
-      {executiveSummary && (
-        <p className="text-sm font-medium text-on-surface/90 leading-relaxed">{executiveSummary}</p>
+      {summaryBullets.length > 0 && (
+        <ul className="space-y-2">
+          {summaryBullets.map((bullet, i) => (
+            <li key={i} className="text-sm font-medium text-on-surface/90 flex gap-2.5 leading-relaxed">
+              <span className="text-primary shrink-0 mt-0.5">•</span>
+              <span>{bullet}</span>
+            </li>
+          ))}
+        </ul>
       )}
 
       {recommendations.length > 0 && (

@@ -258,16 +258,47 @@ def _narrate_from_facts(facts: dict[str, Any]) -> dict[str, Any]:
     summary = facts["spending_summary"]
     forecast = facts["forecast"]
 
-    exec_parts = [
-        f"You spent ₹{summary['total_spend_inr']:,.0f} across "
-        f"{summary['transaction_count']} transactions."
+    exec_bullets: list[str] = [
+        f"Total spend: ₹{summary['total_spend_inr']:,.0f} across {summary['transaction_count']} transactions."
     ]
     if summary.get("top_category_pct"):
-        exec_parts.append(
-            f"{summary['top_category']} leads at {summary['top_category_pct']}% of total spend."
+        exec_bullets.append(
+            f"{summary['top_category']} is your biggest expense at {summary['top_category_pct']}% of total spend."
         )
+
+    # Highlight rising categories
+    growing_cats = [
+        t for t in facts.get("category_trends", [])
+        if t.get("is_growing_streak")
+    ]
+    if growing_cats:
+        g = growing_cats[0]
+        exec_bullets.append(
+            f"{g['category']} has been rising for {g['consecutive_growth_months']} consecutive months — review this trend."
+        )
+
+    # MoM insight for top category
+    top_trend = next(
+        (t for t in facts.get("category_trends", []) if t["category"] == summary.get("top_category")),
+        None,
+    )
+    if top_trend and top_trend.get("mom_change_pct") is not None:
+        mom = top_trend["mom_change_pct"]
+        direction = "up" if mom > 0 else "down"
+        exec_bullets.append(
+            f"{top_trend['category']} is {direction} {abs(mom)}% month-over-month."
+        )
+
+    # Merchant concentration
+    conc = facts.get("merchants", {}).get("concentration", {})
+    if conc.get("pct_of_total", 0) >= 40:
+        exec_bullets.append(
+            f"Top {conc.get('top_n', 5)} merchants account for {conc['pct_of_total']}% of spend — consider diversifying."
+        )
+
+    # Forecast
     if forecast.get("predicted_next_month_inr"):
-        exec_parts.append(
+        exec_bullets.append(
             f"Predicted spend for {forecast.get('predicted_month_label') or 'next month'}: "
             f"₹{forecast['predicted_next_month_inr']:,.0f}."
         )
@@ -323,7 +354,7 @@ def _narrate_from_facts(facts: dict[str, Any]) -> dict[str, Any]:
         recommendations = ["Keep monitoring category trends weekly."]
 
     return {
-        "executive_summary": " ".join(exec_parts),
+        "executive_summary": exec_bullets,
         "recommendations": recommendations,
         "category_trends": category_trends_out,
         "category_analysis": [
@@ -415,20 +446,23 @@ def _llm_narrate_facts(facts: dict[str, Any]) -> dict[str, Any] | None:
         return None
 
     system = (
-        "You are a financial narrator. All numbers, percentages, rankings, and "
+        "You are a concise financial analyst. All numbers, percentages, rankings, and "
         "classifications are already computed in pre_computed_facts. "
-        "Your ONLY job is to explain these facts in clear, concise prose. "
+        "Your ONLY job is to turn these pre-computed facts into short, actionable insights. "
         "Do NOT calculate, derive, estimate, or invent any numbers or categories. "
         "For behavior_insights.weekend, use pre_computed_facts.behavior.weekend_insight verbatim. "
         "Do NOT recalculate weekday/weekend comparisons. "
-        "Use ONLY values present in pre_computed_facts. "
-        "Return valid JSON with keys: executive_summary (string), recommendations (string[]), "
-        "category_trends ([{category, insight}]), category_analysis "
-        "([{category, headline, analysis, suggestion}]), "
-        "merchant_insights ({fastest_growing, concentration}), "
-        "behavior_insights ({weekend, time_of_day, frequency}). "
-        "For category_trends and category_analysis, cover every category listed in "
-        "pre_computed_facts.category_trends and category_analysis_facts."
+        "Use ONLY values present in pre_computed_facts.\n\n"
+        "Return valid JSON with these keys:\n"
+        "- executive_summary: a JSON ARRAY of 4-6 short bullet-point strings (each ≤25 words). "
+        "Each bullet must deliver ONE specific, actionable insight — not just restate a number. "
+        "Focus on: biggest expense category and its trend, any rising spending streaks, "
+        "notable anomalies, merchant concentration risks, and one concrete saving opportunity.\n"
+        "- recommendations: string[] — 3-4 specific, actionable recommendations.\n"
+        "- category_trends: [{category, insight}] — cover every category in pre_computed_facts.category_trends.\n"
+        "- category_analysis: [{category, headline, analysis, suggestion}] — cover every category in category_analysis_facts.\n"
+        "- merchant_insights: {fastest_growing, concentration} — strings.\n"
+        "- behavior_insights: {weekend, time_of_day, frequency} — strings."
     )
 
     try:
