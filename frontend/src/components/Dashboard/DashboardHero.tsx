@@ -165,9 +165,9 @@ export const MonthlySpendTrend: React.FC<MonthlySpendTrendProps> = ({
                 </span>
                 {Math.abs(changePct).toFixed(0)}% vs {
                   analysisPeriod === '1m' ? 'last month' :
-                  analysisPeriod === '3m' ? 'last 3 months' :
-                  analysisPeriod === '6m' ? 'last 6 months' :
-                  analysisPeriod === '1y' ? 'last year' : 'prior'
+                    analysisPeriod === '3m' ? 'last 3 months' :
+                      analysisPeriod === '6m' ? 'last 6 months' :
+                        analysisPeriod === '1y' ? 'last year' : 'prior'
                 }
               </span>
             )}
@@ -185,9 +185,8 @@ export const MonthlySpendTrend: React.FC<MonthlySpendTrendProps> = ({
               type="button"
               disabled={loading}
               onClick={() => onPeriodChange(p.id)}
-              className={`px-3 sm:px-4 py-1.5 rounded-full text-xs font-bold transition-colors disabled:opacity-50 ${
-                analysisPeriod === p.id ? 'bg-lumio-black text-white shadow-md' : 'text-lumio-muted hover:bg-white'
-              }`}
+              className={`px-3 sm:px-4 py-1.5 rounded-full text-xs font-bold transition-colors disabled:opacity-50 ${analysisPeriod === p.id ? 'bg-lumio-black text-white shadow-md' : 'text-lumio-muted hover:bg-white'
+                }`}
             >
               {p.label}
             </button>
@@ -207,95 +206,95 @@ export const MonthlySpendTrend: React.FC<MonthlySpendTrendProps> = ({
             </div>
           )}
           {isChartVisible && chartReady ? (
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={points} margin={{ top: 12, right: 12, left: 4, bottom: 4 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" vertical={false} />
-              <XAxis
-                dataKey="label"
-                tick={{ fontSize: 10, fill: '#6b7280' }}
-                tickLine={false}
-                axisLine={{ stroke: 'rgba(0,0,0,0.08)' }}
-                interval="preserveStartEnd"
-              />
-              <YAxis
-                tick={{ fontSize: 10, fill: '#6b7280' }}
-                tickLine={false}
-                axisLine={false}
-                width={52}
-                tickFormatter={formatYAxis}
-              />
-              <Tooltip
-                content={({ active, payload }) => {
-                  if (!active || !payload?.length) return null;
-                  const row = payload[0].payload as {
-                    label: string;
-                    date?: string;
-                    actual: number | null;
-                    predicted: number | null;
-                    isForecast?: boolean;
-                  };
-                  const displayLabel = row.date
-                    ? new Date(`${row.date}T00:00:00`).toLocaleDateString('en', {
+            <ResponsiveContainer width="100%" height={240}>
+              <LineChart data={points} margin={{ top: 12, right: 12, left: 4, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" vertical={false} />
+                <XAxis
+                  dataKey="label"
+                  tick={{ fontSize: 10, fill: '#6b7280' }}
+                  tickLine={false}
+                  axisLine={{ stroke: 'rgba(0,0,0,0.08)' }}
+                  interval="preserveStartEnd"
+                />
+                <YAxis
+                  tick={{ fontSize: 10, fill: '#6b7280' }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={52}
+                  tickFormatter={formatYAxis}
+                />
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const row = payload[0].payload as {
+                      label: string;
+                      date?: string;
+                      actual: number | null;
+                      predicted: number | null;
+                      isForecast?: boolean;
+                    };
+                    const displayLabel = row.date
+                      ? new Date(`${row.date}T00:00:00`).toLocaleDateString('en', {
                         month: 'short',
                         day: 'numeric',
                       })
-                    : row.label;
-                  const value = row.isForecast ? row.predicted : row.actual;
-                  return (
-                    <div className="bg-lumio-black text-white font-label text-[11px] py-2 px-3 rounded-xl shadow-xl">
-                      <p className="text-white/70 uppercase tracking-wider mb-1">{displayLabel}</p>
-                      <p className="font-bold">
-                        {value != null ? formatCurrency(value) : '—'}
-                        {row.isForecast ? ' (predicted)' : ''}
-                      </p>
-                    </div>
-                  );
-                }}
-              />
-              <Line
-                type="monotone"
-                dataKey="actual"
-                stroke="#0a0a0a"
-                strokeWidth={2.5}
-                dot={
-                  isDaily
-                    ? false
-                    : {
+                      : row.label;
+                    const value = row.isForecast ? row.predicted : row.actual;
+                    return (
+                      <div className="bg-lumio-black text-white font-label text-[11px] py-2 px-3 rounded-xl shadow-xl">
+                        <p className="text-white/70 uppercase tracking-wider mb-1">{displayLabel}</p>
+                        <p className="font-bold">
+                          {value != null ? formatCurrency(value) : '—'}
+                          {row.isForecast ? ' (predicted)' : ''}
+                        </p>
+                      </div>
+                    );
+                  }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="actual"
+                  stroke="#0a0a0a"
+                  strokeWidth={2.5}
+                  dot={
+                    isDaily
+                      ? false
+                      : {
                         r: 4,
                         fill: '#0a0a0a',
                         stroke: '#fff',
                         strokeWidth: 2,
                       }
-                }
-                activeDot={{ r: 6, fill: '#0a0a0a' }}
-                connectNulls={false}
-              />
-              <Line
-                type="monotone"
-                dataKey="predicted"
-                stroke="#64748b"
-                strokeWidth={2}
-                strokeDasharray="6 4"
-                dot={(props) => {
-                  const { cx, cy, payload } = props;
-                  if (cx == null || cy == null || payload?.predicted == null) return null;
-                  return (
-                    <circle
-                      cx={cx}
-                      cy={cy}
-                      r={payload.isForecast ? 5 : 3}
-                      fill={payload.isForecast ? '#64748b' : '#fff'}
-                      stroke="#64748b"
-                      strokeWidth={2}
-                    />
-                  );
-                }}
-                activeDot={{ r: 6, fill: '#64748b' }}
-                connectNulls
-                isAnimationActive={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+                  }
+                  activeDot={{ r: 6, fill: '#0a0a0a' }}
+                  connectNulls={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="predicted"
+                  stroke="#64748b"
+                  strokeWidth={2}
+                  strokeDasharray="6 4"
+                  dot={(props) => {
+                    const { cx, cy, payload } = props;
+                    if (cx == null || cy == null || payload?.predicted == null) return null;
+                    return (
+                      <circle
+                        cx={cx}
+                        cy={cy}
+                        r={payload.isForecast ? 5 : 3}
+                        fill={payload.isForecast ? '#64748b' : '#fff'}
+                        stroke="#64748b"
+                        strokeWidth={2}
+                      />
+                    );
+                  }}
+                  activeDot={{ r: 6, fill: '#64748b' }}
+                  connectNulls
+                  isAnimationActive={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
           ) : (
             <div className="h-[240px] flex items-center justify-center">
               {!isChartVisible ? null : <RefreshCw className="w-5 h-5 animate-spin text-lumio-muted" />}
@@ -410,7 +409,7 @@ export const FinancialHealthCard: React.FC<FinancialHealthCardProps> = ({
       label: 'Monthly Commitments',
       value: `${monthlyCommitmentsPct}%`,
       description:
-        'Profile rent and EMIs plus other recurring payments (subscriptions, etc.) as a share of income. Under 30% is healthy.',
+        'Rent and EMIs plus other recurring payments (subscriptions, etc.) as a share of income. Under 30% is healthy.',
     },
     {
       label: 'Net Savings',
@@ -592,19 +591,19 @@ export const AnomaliesCard: React.FC<AnomaliesCardProps> = ({ anomalies }) => {
         {anomalies.slice(0, 3).map((a) => {
           const pctAbove = a.pct_above_avg ?? a.pctAboveAvg ?? 0;
           return (
-          <div
-            key={`${a.merchant}-${a.amount}`}
-            className="bg-white/60 backdrop-blur-md border border-error/20 rounded-2xl p-4 flex justify-between items-center shadow-sm"
-          >
-            <div>
-              <p className="font-medium text-lumio-text">{a.merchant}</p>
-              <p className="font-label text-[10px] text-error uppercase tracking-wider mt-1">
-                {pctAbove}% higher than average
-              </p>
+            <div
+              key={`${a.merchant}-${a.amount}`}
+              className="bg-white/60 backdrop-blur-md border border-error/20 rounded-2xl p-4 flex justify-between items-center shadow-sm"
+            >
+              <div>
+                <p className="font-medium text-lumio-text">{a.merchant}</p>
+                <p className="font-label text-[10px] text-error uppercase tracking-wider mt-1">
+                  {pctAbove}% higher than average
+                </p>
+              </div>
+              <span className="font-bold text-error text-lg">{formatCurrency(a.amount)}</span>
             </div>
-            <span className="font-bold text-error text-lg">{formatCurrency(a.amount)}</span>
-          </div>
-        );
+          );
         })}
       </div>
     </div>

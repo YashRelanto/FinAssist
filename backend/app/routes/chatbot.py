@@ -109,30 +109,77 @@ class ChatResponse(BaseModel):
     )
 
 
-# ─── Default Mock User Profile ────────────────────────────────────────────────
+# ─── Default User Profile ────────────────────────────────────────────────
 
-def _get_default_user_profile() -> dict:
+def _get_user_profile(user_id: str) -> Dict[str, Any]:
     """
-    Returns a mock user profile dictionary that simulates variables sourced
-    from the Supabase users / profiles table.
+    Fetch the user's financial profile from Supabase.
+
+    Combines data from:
+        - user_profiles
+        - investments
+        - fixed_deposits
     """
-    return {
-        "income": 55000,                         # Monthly net income in INR
-        "annual_income": 660000,                 # Annual (12 × monthly)
-        "segment": "High Income Low Spender",    # Customer segment from analytics
-        "city": "Tier 1",                        # City tier classification
-        "age": 32,                               # Estimated age
-        "risk_profile": "Moderate",              # Risk tolerance: Conservative / Moderate / Aggressive
-        "primary_bank": "HDFC Bank",             # Primary bank name
-        "existing_investments": [                # Known investment vehicles
-            "Mutual Funds (SIP ₹10,000/mo)",
-            "PPF (₹1.5L/year)",
-            "EPF (employer + employee)",
-        ],
-        "outstanding_loans": [],                 # Active loan facilities
-        "credit_score": 780,                     # CIBIL / Experian score
-        "preferred_language": "English",
-    }
+
+    profile: Dict[str, Any] = {}
+
+    # ------------------------------------------------------------------
+    # User Profile
+    # ------------------------------------------------------------------
+    try:
+        res = (
+            supabase.table("user_profiles")
+            .select(
+                """
+                income
+                """
+            )
+            .eq("user_id", user_id)
+            .single()
+            .execute()
+        )
+
+        if res.data:
+            profile['monthly_income'] = float(res.data.get("income", 0))
+
+    except Exception as e:
+        logger.error("Failed to fetch user profile: %s", e)
+
+    # ------------------------------------------------------------------
+    # Investments
+    # ------------------------------------------------------------------
+    try:
+        res = (
+            supabase.table("investments")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+        profile["investments"] = res.data or []
+
+    except Exception as e:
+        logger.error("Failed to fetch investments: %s", e)
+        profile["investments"] = []
+
+    # ------------------------------------------------------------------
+    # Fixed Deposits
+    # ------------------------------------------------------------------
+    try:
+        res = (
+            supabase.table("fixed_deposits")
+            .select("*")
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+        profile["fixed_deposits"] = res.data or []
+
+    except Exception as e:
+        logger.error("Failed to fetch fixed deposits: %s", e)
+        profile["fixed_deposits"] = []
+
+    return profile
 
 
 # ─── Local Helpers for User Profile Context ───────────────────────────────
@@ -290,7 +337,7 @@ async def post_chat_message(
     request = request.model_copy(update={"user_id": current_user["user_id"]})
 
     # 1. Build user profile
-    user_profile = _get_default_user_profile()
+    user_profile = _get_user_profile(user_id=request.user_id)
 
     # 1b. Fetch real-time transaction summary for live balances
     try:
