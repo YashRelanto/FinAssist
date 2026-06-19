@@ -33,7 +33,7 @@ def input_guardrail_node(state: AgentState) -> dict:
     session_id = state["session_id"]
     message = state["user_query"]
 
-    is_safe, error_message = InputGuard.validate(message, user_id)
+    is_safe, error_message, masked_message = InputGuard.validate(message, user_id)
 
     if not is_safe:
         log_security_event(
@@ -53,7 +53,10 @@ def input_guardrail_node(state: AgentState) -> dict:
         }
 
     logger.info("[Node:input_guardrail] PASSED | user=%s", user_id)
-    return {"input_blocked": False}
+    return {
+        "input_blocked": False,
+        "user_query": masked_message,
+    }
 
 
 def output_guardrail_node(state: AgentState) -> dict:

@@ -2,6 +2,7 @@ import re
 from typing import Tuple
 import logging
 from better_profanity import profanity
+from .pii_masking import PIIMasker
 
 logger = logging.getLogger(__name__)
 
@@ -110,31 +111,38 @@ class InputGuard:
     """
     Validates user input before it reaches the LLM
     """
-    
+
     @staticmethod
-    def validate(message: str, user_id: str) -> Tuple[bool, str]:
+    def validate(message: str, user_id: str) -> Tuple[bool, str, str]:
         """
-        Run all input validation checks
-        Returns (is_safe, error_message)
+        Run all input validation checks and mask PII from passing messages.
+        Returns (is_safe, error_message, masked_message)
+        - On block: masked_message is ""
+        - On pass:  masked_message is the PII-masked version of the input
         """
         # 1. Check for prompt injection
         is_safe, reason = detect_prompt_injection(message)
         if not is_safe:
-            return False, "Your message was flagged by our security system. Please rephrase your question."
-        
+            return False, "Your message was flagged by our security system. Please rephrase your question.", ""
+
         # 2. Check message length
         is_safe, reason = detect_excessive_length(message, max_length=2000)
         if not is_safe:
-            return False, reason
-        
+            return False, reason, ""
+
         # 3. Check for special character flooding
         is_safe, reason = detect_special_characters_flood(message)
         if not is_safe:
-            return False, reason
-        
+            return False, reason, ""
+
         # 4. Check for profanity
         is_safe, reason = contains_profanity(message)
         if not is_safe:
-            return False, reason
-        
-        return True, ""
+            return False, reason, ""
+
+        # 5. Mask PII before the message reaches the LLM
+        masked = PIIMasker.mask_all(message)
+        if masked != message:
+            logger.info("[InputGuard] PII masked in user input | user=%s", user_id)
+
+        return True, "", masked

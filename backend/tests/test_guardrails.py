@@ -16,7 +16,7 @@ class TestGuardrails(unittest.TestCase):
             "Select * from transactions where 1=1"
         ]
         for query in malicious_queries:
-            is_safe, error_msg = InputGuard.validate(query, "user123")
+            is_safe, error_msg, _ = InputGuard.validate(query, "user123")
             self.assertFalse(is_safe, f"Failed to block prompt injection: {query}")
             
     def test_safe_inputs(self):
@@ -27,7 +27,7 @@ class TestGuardrails(unittest.TestCase):
             "Can you give me advice on retirement planning?"
         ]
         for query in safe_queries:
-            is_safe, error_msg = InputGuard.validate(query, "user123")
+            is_safe, error_msg, _ = InputGuard.validate(query, "user123")
             self.assertTrue(is_safe, f"Blocked a safe query: {query}")
             
     def test_excessive_length(self):
@@ -47,6 +47,15 @@ class TestGuardrails(unittest.TestCase):
         abusive_query = "This website is a scam and you are shit"
         is_safe, error_msg = InputGuard.validate(abusive_query, "user123")
         self.assertFalse(is_safe, "Failed to block profane query")
+
+    def test_input_pii_masking(self):
+        """Test that PII is masked in the returned masked_message on safe inputs."""
+        query = "My phone is 9876543210 and my PAN is ABCDE1234F"
+        is_safe, error_msg, masked = InputGuard.validate(query, "user123")
+        self.assertTrue(is_safe)
+        self.assertNotIn("9876543210", masked)
+        self.assertNotIn("ABCDE1234F", masked)
+        self.assertIn("******3210", masked)
 
     def test_pii_masking(self):
         """Test masking of sensitive Indian financial and contact details."""
@@ -82,7 +91,7 @@ class TestGuardrails(unittest.TestCase):
             "Get transactions where user_id IN ('user1', 'user2')"
         ]
         for query in forbidden_queries:
-            is_safe, error_msg = InputGuard.validate(query, "user123")
+            is_safe, error_msg, _ = InputGuard.validate(query, "user123")
             self.assertFalse(is_safe, f"Failed to block cross-user/bypass attempt: {query}")
 
     def test_internal_prompt_leakage(self):
