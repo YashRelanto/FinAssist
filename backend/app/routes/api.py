@@ -204,6 +204,7 @@ async def update_user_profile(
     current_user: dict = Depends(get_current_user),
 ):
     _assert_owner(user_id, current_user)
+    db = supabase_db or supabase
     try:
         response = db.table("users").update({
             "full_name": req.full_name,
