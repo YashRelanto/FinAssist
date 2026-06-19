@@ -1732,7 +1732,7 @@ async def get_user_investments(current_user: dict = Depends(get_current_user)):
 # ============================================================
 
 class FixedDepositCreate(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None  # ignored — identity comes from JWT
     bank_name: Optional[str] = None
     label: Optional[str] = None
     principal_amount: float
@@ -1745,8 +1745,9 @@ class FixedDepositCreate(BaseModel):
 
 
 @router.get("/fixed-deposits")
-async def list_fixed_deposits(user_id: str):
+async def list_fixed_deposits(current_user: dict = Depends(get_current_user)):
     """All active FDs for the user, each enriched with current / maturity / break values."""
+    user_id = current_user["user_id"]
     from app.graph.tools.goal_planner_tool import _fd_metrics
     try:
         res = (supabase.table("fixed_deposits").select("*")
@@ -1777,10 +1778,13 @@ async def list_fixed_deposits(user_id: str):
 
 
 @router.post("/fixed-deposits")
-async def create_fixed_deposit(req: FixedDepositCreate):
+async def create_fixed_deposit(
+    req: FixedDepositCreate,
+    current_user: dict = Depends(get_current_user),
+):
     try:
         insert_data = {
-            "user_id": req.user_id,
+            "user_id": current_user["user_id"],
             "bank_name": req.bank_name,
             "label": req.label,
             "principal_amount": req.principal_amount,
@@ -1803,7 +1807,11 @@ async def create_fixed_deposit(req: FixedDepositCreate):
 
 
 @router.delete("/fixed-deposits/{fd_id}")
-async def delete_fixed_deposit(fd_id: str):
+async def delete_fixed_deposit(
+    fd_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    _assert_owner(_fetch_owner("fixed_deposits", "fd_id", fd_id), current_user)
     try:
         supabase.table("fixed_deposits").delete().eq("fd_id", fd_id).execute()
         return {"success": True, "message": "Fixed deposit deleted successfully"}

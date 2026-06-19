@@ -116,7 +116,7 @@ export const Investments: React.FC = () => {
   const fetchFDs = async () => {
     if (!user?.id) return;
     try {
-      const response = await fetch(`http://localhost:8000/api/fixed-deposits?user_id=${user.id}`);
+      const response = await apiFetch(`/api/fixed-deposits`);
       const data = await response.json();
       if (data.success) {
         setFds(data.fixed_deposits || []);
@@ -132,11 +132,10 @@ export const Investments: React.FC = () => {
     if (!fdForm.principal_amount || !fdForm.interest_rate_pct || !fdForm.maturity_date) return;
     setFdSubmitLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/api/fixed-deposits', {
+      const response = await apiFetch('/api/fixed-deposits', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: user.id,
           bank_name: fdForm.bank_name || null,
           label: fdForm.label || null,
           principal_amount: parseFloat(fdForm.principal_amount),
@@ -168,7 +167,7 @@ export const Investments: React.FC = () => {
   const handleDeleteFD = async (fdId: string) => {
     if (!confirm('Delete this fixed deposit?')) return;
     try {
-      const response = await fetch(`http://localhost:8000/api/fixed-deposits/${fdId}`, { method: 'DELETE' });
+      const response = await apiFetch(`/api/fixed-deposits/${fdId}`, { method: 'DELETE' });
       const data = await response.json();
       if (data.success) fetchFDs();
     } catch (error) {
