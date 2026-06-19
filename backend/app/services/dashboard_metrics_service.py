@@ -1303,7 +1303,7 @@ def compute_overall_financial_health(
     )
     survival_burn = survival_breakdown["total"]
     lifestyle_burn = lifestyle_breakdown["total"]
-    liquid_balance = round(
+    bank_balance = round(
         sum(
             float(acc.get("current_balance") or 0)
             for acc in accounts
@@ -1311,6 +1311,9 @@ def compute_overall_financial_health(
         ),
         2,
     )
+    # Liquid balance for the emergency-buffer pillar combines spendable bank cash
+    # with near-cash investments (liquid/debt funds + accessible-now FD value).
+    liquid_balance = round(bank_balance + liquid_funds_value + fixed_deposits_value, 2)
     net_savings, savings_rate = compute_savings_metrics(
         monthly_income=monthly_income,
         transactions=transactions,
@@ -1329,6 +1332,11 @@ def compute_overall_financial_health(
     }
     score_breakdown: dict[str, float] = {}
     health = compute_financial_health(summary, accounts, score_breakdown_out=score_breakdown)
+    health["liquid_breakdown"] = {
+        "bank_balance": bank_balance,
+        "liquid_funds": round(liquid_funds_value, 2),
+        "fixed_deposits": round(fixed_deposits_value, 2),
+    }
 
     _log_burn_breakdowns(
         user_id=user_id,
