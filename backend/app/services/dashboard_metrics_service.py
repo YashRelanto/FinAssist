@@ -77,66 +77,6 @@ def aggregate_monthly_stats(transactions: list[dict[str, Any]]) -> dict[str, dic
     return dict(monthly)
 
 
-def compute_summary(
-    accounts: list[dict[str, Any]],
-    monthly_stats: dict[str, dict[str, float]],
-    *,
-    reference: datetime | None = None,
-    profile_income: float = 0.0,
-) -> dict[str, float]:
-    ref = reference or datetime.now()
-    current_month = ref.strftime("%Y-%m")
-    curr = monthly_stats.get(current_month, {"income": 0.0, "expense": 0.0})
-    income = profile_income if profile_income > 0.0 else curr["income"]
-    expense = curr["expense"]
-    net = income - expense
-    savings_rate = round((net / income) * 100, 1) if income > 0 else 0.0
-    # Do not include credit card borrowed amount in "current balance".
-    # Credit cards represent outstanding borrowed (often stored as negative balance).
-    total_balance = 0.0
-    for acc in accounts:
-        if (acc.get("account_type") or "").lower() == "credit_card":
-            continue
-        total_balance += float(acc.get("current_balance") or 0)
-    return {
-        "total_balance": total_balance,
-        "monthly_income": income,
-        "monthly_expenses": expense,
-        "net_savings": net,
-        "savings_rate": savings_rate,
-    }
-
-
-
-def build_chart_data(
-    monthly_stats: dict[str, dict[str, float]],
-    *,
-    last_n_months: int = 7,
-    reference: datetime | None = None,
-) -> list[dict[str, Any]]:
-    ref = reference or datetime.now()
-    current_month = ref.strftime("%Y-%m")
-    months = sorted(monthly_stats.keys())
-    if current_month not in months and current_month:
-        months.append(current_month)
-    months = sorted(set(months))[-last_n_months:]
-    chart: list[dict[str, Any]] = []
-    for month in months:
-        stats = monthly_stats.get(month, {"income": 0.0, "expense": 0.0})
-        income = stats["income"]
-        expense = stats["expense"]
-        chart.append(
-            {
-                "name": datetime.strptime(month, "%Y-%m").strftime("%b"),
-                "month": month,
-                "income": income,
-                "expense": expense,
-                "net": income - expense,
-            }
-        )
-    return chart
-
-
 def format_recent_transactions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     recent: list[dict[str, Any]] = []
     for row in rows:
@@ -756,15 +696,21 @@ def compute_monthly_recurring_obligations(
     profile_fixed_rent: float = 0.0,
     profile_fixed_emi: float = 0.0,
 ) -> float:
-    """Sum profile rent/EMI plus recurring expense transactions (monthly-normalized)."""
+    """Sum profile rent/EMI plus recurring expense transactions (monthly-normalized).
+
+    Rent and EMI always come from the user profile — they are never read from
+    transactions, even if marked recurring.
+    """
+    profile_rent = float(profile_fixed_rent or 0)
+    profile_emi = float(profile_fixed_emi or 0)
     recurring_monthly = 0.0
-    has_recurring_rent = False
-    has_recurring_emi = False
 
     for row in transactions:
         if not row.get("is_recurring"):
             continue
         if (row.get("transaction_type") or "").lower() != EXPENSE_TYPE:
+            continue
+        if _is_fixed_obligation_row(row):
             continue
 
         amount = abs(float(row.get("amount") or 0))
@@ -775,16 +721,6 @@ def compute_monthly_recurring_obligations(
         skips = int(row.get("recurrence_skips") or 0)
         recurring_monthly += _recurring_amount_to_monthly(amount, period, skips)
 
-        main_cat = _transaction_main_category(row)
-        merchant = str(row.get("merchant_name") or row.get("description") or "").lower()
-        sub_cat = str((row.get("categories") or {}).get("sub_category") or "").lower()
-        if "housing" in main_cat or "rent" in merchant or "rent" in sub_cat:
-            has_recurring_rent = True
-        if "financial" in main_cat or "emi" in merchant or "loan" in merchant or "emi" in sub_cat:
-            has_recurring_emi = True
-
-    profile_rent = float(profile_fixed_rent or 0) if not has_recurring_rent else 0.0
-    profile_emi = float(profile_fixed_emi or 0) if not has_recurring_emi else 0.0
     return round(profile_rent + profile_emi + recurring_monthly, 2)
 
 
@@ -809,10 +745,53 @@ def _is_fixed_obligation_row(row: dict[str, Any]) -> bool:
     return False
 
 
+def _is_luxury_recurring_row(row: dict[str, Any]) -> bool:
+    """OTT, gym, and other discretionary recurring spend — excluded from survival burn."""
+    if not row.get("is_recurring"):
+        return False
+    main_cat = _transaction_main_category(row)
+    merchant = _merchant_text(row)
+    sub_cat = _sub_category_text(row)
+    if "entertainment" in main_cat:
+        return True
+    luxury_kw = (
+        "netflix",
+        "spotify",
+        "prime video",
+        "amazon prime",
+        "hotstar",
+        "disney",
+        "youtube premium",
+        "apple music",
+        "apple tv",
+        "icloud",
+        "xbox",
+        "playstation",
+        "steam",
+        "gym",
+        "fitness",
+        "cult.fit",
+        "gold gym",
+        "membership",
+        "zee5",
+        "sonyliv",
+        "hbo",
+        "crunchyroll",
+        "swiggy one",
+        "zomato gold",
+        "zomato pro",
+        "adobe",
+        "linkedin",
+        "subscription",
+        "ott",
+    )
+    return any(k in merchant or k in sub_cat for k in luxury_kw)
+
+
 def _is_essential_recurring_row(row: dict[str, Any]) -> bool:
     if not row.get("is_recurring"):
         return False
-    if _is_fixed_obligation_row(row):
+    if _is_fixed_obligation_row(row) or _is_luxury_recurring_row(row):
         return False
     main_cat = _transaction_main_category(row)
     merchant = _merchant_text(row)
@@ -832,8 +811,71 @@ def _is_essential_recurring_row(row: dict[str, Any]) -> bool:
         "phone",
         "mobile",
         "recharge",
+        "petrol",
+        "diesel",
+        "fuel",
+        "gas station",
+        "hp petrol",
+        "indian oil",
+        "bharat petroleum",
+        "shell",
+        "car service",
+        "vehicle service",
+        "bike service",
+        "servicing",
+        "maintenance",
+        "grocery",
+        "groceries",
+        "kirana",
+        "bigbasket",
+        "blinkit",
+        "zepto",
+        "dmart",
+        "supermarket",
+        "insurance",
     )
-    return any(k in merchant or k in sub_cat for k in essential_kw)
+    if any(k in merchant or k in sub_cat for k in essential_kw):
+        return True
+    if "transport" in main_cat:
+        return True
+    return False
+
+
+def _recurring_row_monthly_amount(row: dict[str, Any]) -> float:
+    amount = abs(float(row.get("amount") or 0))
+    if amount <= 0:
+        return 0.0
+    period = row.get("recurrence_period") or "monthly"
+    skips = int(row.get("recurrence_skips") or 0)
+    return round(_recurring_amount_to_monthly(amount, period, skips), 2)
+
+
+def _recurring_row_label(row: dict[str, Any]) -> str:
+    return str(row.get("merchant_name") or row.get("description") or "Recurring expense").strip()
+
+
+def _essential_living_keywords() -> tuple[str, ...]:
+    return (
+        "grocery",
+        "groceries",
+        "medicine",
+        "medical",
+        "pharmacy",
+        "hospital",
+        "clinic",
+        "kirana",
+        "supermarket",
+        "bigbasket",
+        "blinkit",
+        "zepto",
+        "dmart",
+    )
+
+
+def _row_matches_keywords(row: dict[str, Any], keywords: tuple[str, ...]) -> bool:
+    merchant = _merchant_text(row)
+    sub_cat = _sub_category_text(row)
+    return any(k in merchant or k in sub_cat for k in keywords)
 
 
 def _is_essential_living_row(row: dict[str, Any]) -> bool:
@@ -848,26 +890,17 @@ def _is_essential_living_row(row: dict[str, Any]) -> bool:
     main_lower = main_cat.lower()
     merchant = _merchant_text(row)
     sub_cat = _sub_category_text(row)
+    living_kw = _essential_living_keywords()
 
-    if main_cat in ("Food & Drinks",) or "food" in main_lower:
+    if _row_matches_keywords(row, living_kw):
         return True
     if "health" in main_lower:
         return True
-    living_kw = (
-        "grocery",
-        "groceries",
-        "medicine",
-        "medical",
-        "pharmacy",
-        "hospital",
-        "clinic",
-        "kirana",
-        "supermarket",
-        "bigbasket",
-        "blinkit",
-        "zepto",
-    )
-    return any(k in merchant or k in sub_cat for k in living_kw)
+    if "food" in main_lower and _row_matches_keywords(
+        row, ("grocery", "groceries", "kirana", "supermarket")
+    ):
+        return True
+    return False
 
 
 def _recent_month_keys(reference: datetime, count: int = 6) -> list[str]:
@@ -881,31 +914,39 @@ def _recent_month_keys(reference: datetime, count: int = 6) -> list[str]:
     return months
 
 
-def compute_avg_monthly_essential_living(
+def _essential_living_monthly_totals(
     transactions: list[dict[str, Any]],
     *,
     reference: datetime | None = None,
     months: int = 6,
-) -> float:
-    """Trailing average of groceries, medicines, and similar essential living spend."""
+) -> dict[str, Any]:
     ref = reference or datetime.now()
     recent_months = _recent_month_keys(ref, months)
-    if not recent_months:
-        return 0.0
-
     monthly_totals = {month: 0.0 for month in recent_months}
+    merchant_totals: dict[str, float] = defaultdict(float)
+
     for row in transactions:
         if not _is_essential_living_row(row):
             continue
         month = month_key_from_date(row.get("transaction_date"))
         if month not in monthly_totals:
             continue
-        monthly_totals[month] += transaction_amount_value(
-            row.get("amount"), EXPENSE_TYPE
-        )
+        amount = transaction_amount_value(row.get("amount"), EXPENSE_TYPE)
+        monthly_totals[month] += amount
+        merchant = str(row.get("merchant_name") or row.get("description") or "Unknown").strip()
+        merchant_totals[merchant] += amount
 
-    values = list(monthly_totals.values())
-    return round(sum(values) / len(values), 2) if values else 0.0
+    top_merchants = [
+        {"merchant": name, "total_6m": round(total, 2)}
+        for name, total in sorted(
+            merchant_totals.items(), key=lambda item: item[1], reverse=True
+        )[:12]
+    ]
+    return {
+        "recent_months": recent_months,
+        "by_month": {month: round(amount, 2) for month, amount in monthly_totals.items()},
+        "top_merchants_6m": top_merchants,
+    }
 
 
 def compute_avg_monthly_expense(
@@ -914,11 +955,7 @@ def compute_avg_monthly_expense(
     reference: datetime | None = None,
     months: int = 6,
 ) -> float:
-    """Trailing average of total monthly expenses over the last N calendar months.
-
-    This is the "lifestyle burn": everything the user actually spends, used to
-    estimate how long liquid savings would last at their current lifestyle.
-    """
+    """Trailing average of total monthly expenses from transactions only."""
     ref = reference or datetime.now()
     recent_months = _recent_month_keys(ref, months)
     if not recent_months:
@@ -932,56 +969,174 @@ def compute_avg_monthly_expense(
     return round(sum(monthly_expenses) / len(monthly_expenses), 2)
 
 
-def compute_survival_burn(
+def compute_lifestyle_burn_breakdown(
     transactions: list[dict[str, Any]],
     *,
     profile_fixed_rent: float = 0.0,
     profile_fixed_emi: float = 0.0,
     reference: datetime | None = None,
-) -> float:
+    months: int = 6,
+) -> dict[str, Any]:
+    """Line-item breakdown for lifestyle burn (profile housing + logged spending)."""
+    ref = reference or datetime.now()
+    recent_months = _recent_month_keys(ref, months)
+    monthly_stats = aggregate_monthly_stats(transactions)
+    expense_by_month = {
+        month: round(float(monthly_stats.get(month, {}).get("expense", 0.0)), 2)
+        for month in recent_months
+    }
+    expense_values = list(expense_by_month.values())
+    tx_avg = (
+        round(sum(expense_values) / len(expense_values), 2) if expense_values else 0.0
+    )
+    profile_rent = round(float(profile_fixed_rent or 0), 2)
+    profile_emi = round(float(profile_fixed_emi or 0), 2)
+    total = round(profile_rent + profile_emi + tx_avg, 2)
+    return {
+        "total": total,
+        "formula": "profile_rent + profile_emi + avg_transaction_expense_6m",
+        "profile_rent_inr": profile_rent,
+        "profile_emi_inr": profile_emi,
+        "avg_transaction_spend_inr": tx_avg,
+        "transaction_expense_by_month": expense_by_month,
+        "recent_months": recent_months,
+    }
+
+
+def compute_savings_metrics(
+    *,
+    monthly_income: float,
+    transactions: list[dict[str, Any]],
+    reference: datetime | None = None,
+    months: int = 6,
+) -> tuple[float, float]:
+    """Net savings and savings rate from profile income vs tracked spending.
+
+    Uses the 6-month average of expense transactions only. Rent and EMI live in
+    the user profile and are not logged as transactions, so they are not
+    subtracted here — they are reflected in the Monthly Commitments metric.
     """
-    Absolute minimum monthly spend: fixed obligations + essential recurring bills
-    + average essential living costs (groceries, medicines, etc.).
-    """
-    has_recurring_rent = False
-    has_recurring_emi = False
-    fixed_recurring = 0.0
+    avg_tx_spend = compute_avg_monthly_expense(
+        transactions, reference=reference, months=months
+    )
+    net_savings = round(monthly_income - avg_tx_spend, 2)
+    savings_rate = (
+        round((net_savings / monthly_income) * 100, 1) if monthly_income > 0 else 0.0
+    )
+    return net_savings, savings_rate
+
+
+def compute_survival_burn_breakdown(
+    transactions: list[dict[str, Any]],
+    *,
+    profile_fixed_rent: float = 0.0,
+    profile_fixed_emi: float = 0.0,
+    reference: datetime | None = None,
+    months: int = 6,
+) -> dict[str, Any]:
+    """Line-item breakdown for survival burn (bare-essential monthly spend)."""
+    profile_rent = round(float(profile_fixed_rent or 0), 2)
+    profile_emi = round(float(profile_fixed_emi or 0), 2)
+    fixed_obligations = round(profile_rent + profile_emi, 2)
     essential_recurring = 0.0
+    essential_recurring_components: list[dict[str, Any]] = []
+    excluded_luxury_recurring: list[dict[str, Any]] = []
 
     for row in transactions:
         if not row.get("is_recurring"):
             continue
         if (row.get("transaction_type") or "").lower() != EXPENSE_TYPE:
             continue
-
-        amount = abs(float(row.get("amount") or 0))
-        if amount <= 0:
+        if _is_fixed_obligation_row(row):
             continue
 
-        period = row.get("recurrence_period") or "monthly"
-        skips = int(row.get("recurrence_skips") or 0)
-        monthly = _recurring_amount_to_monthly(amount, period, skips)
+        monthly = _recurring_row_monthly_amount(row)
+        if monthly <= 0:
+            continue
 
-        if _is_fixed_obligation_row(row):
-            fixed_recurring += monthly
-            main_cat = _transaction_main_category(row)
-            merchant = _merchant_text(row)
-            sub_cat = _sub_category_text(row)
-            if "housing" in main_cat or "rent" in merchant or "rent" in sub_cat:
-                has_recurring_rent = True
-            if "financial" in main_cat or "emi" in merchant or "loan" in merchant or "emi" in sub_cat:
-                has_recurring_emi = True
-        elif _is_essential_recurring_row(row):
+        label = _recurring_row_label(row)
+        if _is_luxury_recurring_row(row):
+            excluded_luxury_recurring.append(
+                {"label": label, "monthly_amount": monthly, "reason": "luxury_recurring"}
+            )
+            continue
+        if _is_essential_recurring_row(row):
             essential_recurring += monthly
+            essential_recurring_components.append(
+                {
+                    "label": label,
+                    "monthly_amount": monthly,
+                    "recurrence_period": row.get("recurrence_period") or "monthly",
+                }
+            )
 
-    profile_rent = float(profile_fixed_rent or 0) if not has_recurring_rent else 0.0
-    profile_emi = float(profile_fixed_emi or 0) if not has_recurring_emi else 0.0
-    fixed_obligations = profile_rent + profile_emi + fixed_recurring
-    essential_living = compute_avg_monthly_essential_living(
-        transactions, reference=reference
+    essential_living = _essential_living_monthly_totals(
+        transactions, reference=reference, months=months
     )
+    essential_living_values = list(essential_living["by_month"].values())
+    essential_living_avg = (
+        round(sum(essential_living_values) / len(essential_living_values), 2)
+        if essential_living_values
+        else 0.0
+    )
+    essential_recurring = round(essential_recurring, 2)
+    total = round(fixed_obligations + essential_recurring + essential_living_avg, 2)
 
-    return round(fixed_obligations + essential_recurring + essential_living, 2)
+    return {
+        "total": total,
+        "formula": "profile_rent + profile_emi + essential_recurring + essential_living_avg",
+        "profile_rent_inr": profile_rent,
+        "profile_emi_inr": profile_emi,
+        "fixed_obligations_inr": fixed_obligations,
+        "essential_recurring_inr": essential_recurring,
+        "essential_recurring_components": essential_recurring_components,
+        "excluded_luxury_recurring": excluded_luxury_recurring,
+        "essential_living": {
+            "monthly_average_inr": essential_living_avg,
+            "by_month": essential_living["by_month"],
+            "top_merchants_6m": essential_living["top_merchants_6m"],
+        },
+    }
+
+
+def _log_burn_breakdowns(
+    *,
+    user_id: str | None,
+    lifestyle: dict[str, Any],
+    survival: dict[str, Any],
+) -> None:
+    uid = mask_user_id(user_id)
+    tab_info(
+        "dashboard",
+        "lifestyle_burn user=%s total=%.2f formula=%s profile_rent=%.2f profile_emi=%.2f "
+        "avg_transaction_spend=%.2f expense_by_month=%s",
+        uid,
+        lifestyle["total"],
+        lifestyle["formula"],
+        lifestyle["profile_rent_inr"],
+        lifestyle["profile_emi_inr"],
+        lifestyle["avg_transaction_spend_inr"],
+        lifestyle["transaction_expense_by_month"],
+    )
+    essential = survival["essential_living"]
+    tab_info(
+        "dashboard",
+        "survival_burn user=%s total=%.2f formula=%s profile_rent=%.2f profile_emi=%.2f "
+        "essential_recurring=%.2f essential_living_avg=%.2f "
+        "essential_recurring_components=%s excluded_luxury_recurring=%s "
+        "essential_living_by_month=%s essential_living_top_merchants=%s",
+        uid,
+        survival["total"],
+        survival["formula"],
+        survival["profile_rent_inr"],
+        survival["profile_emi_inr"],
+        survival["essential_recurring_inr"],
+        essential["monthly_average_inr"],
+        survival["essential_recurring_components"],
+        survival["excluded_luxury_recurring"],
+        essential["by_month"],
+        essential["top_merchants_6m"],
+    )
 
 
 def _health_label(score: int) -> str:
@@ -1094,8 +1249,8 @@ def compute_financial_health(
         "score": score,
         "label": _health_label(score),
         "savings_rate": savings_rate,
-        "debt_to_income_pct": commitments_to_income_pct,
         "monthly_commitments_pct": commitments_to_income_pct,
+        "monthly_commitments_inr": round(monthly_commitments, 2),
         "net_savings": round(net_savings, 2),
         "emergency_buffer_months": emergency_buffer_months,
         "survival_buffer_months": survival_buffer_months,
@@ -1134,14 +1289,21 @@ def compute_overall_financial_health(
         profile_fixed_rent=profile_fixed_rent,
         profile_fixed_emi=profile_fixed_emi,
     )
-    survival_burn = compute_survival_burn(
+    lifestyle_breakdown = compute_lifestyle_burn_breakdown(
         transactions,
         profile_fixed_rent=profile_fixed_rent,
         profile_fixed_emi=profile_fixed_emi,
         reference=ref,
     )
-    lifestyle_burn = compute_avg_monthly_expense(transactions, reference=ref)
-    bank_balance = round(
+    survival_breakdown = compute_survival_burn_breakdown(
+        transactions,
+        profile_fixed_rent=profile_fixed_rent,
+        profile_fixed_emi=profile_fixed_emi,
+        reference=ref,
+    )
+    survival_burn = survival_breakdown["total"]
+    lifestyle_burn = lifestyle_breakdown["total"]
+    liquid_balance = round(
         sum(
             float(acc.get("current_balance") or 0)
             for acc in accounts
@@ -1149,13 +1311,10 @@ def compute_overall_financial_health(
         ),
         2,
     )
-    # Near-cash investments extend the emergency runway alongside bank cash.
-    liquid_funds_value = round(max(0.0, float(liquid_funds_value or 0)), 2)
-    fixed_deposits_value = round(max(0.0, float(fixed_deposits_value or 0)), 2)
-    liquid_balance = round(bank_balance + liquid_funds_value + fixed_deposits_value, 2)
-    net_savings = round(monthly_income - lifestyle_burn, 2)
-    savings_rate = (
-        round((net_savings / monthly_income) * 100, 1) if monthly_income > 0 else 0.0
+    net_savings, savings_rate = compute_savings_metrics(
+        monthly_income=monthly_income,
+        transactions=transactions,
+        reference=ref,
     )
 
     summary = {
@@ -1171,12 +1330,11 @@ def compute_overall_financial_health(
     score_breakdown: dict[str, float] = {}
     health = compute_financial_health(summary, accounts, score_breakdown_out=score_breakdown)
 
-    # Surface what the liquid balance is composed of, so the UI / insights can explain the runway.
-    health["liquid_breakdown"] = {
-        "bank_balance": bank_balance,
-        "liquid_funds": liquid_funds_value,
-        "fixed_deposits": fixed_deposits_value,
-    }
+    _log_burn_breakdowns(
+        user_id=user_id,
+        lifestyle=lifestyle_breakdown,
+        survival=survival_breakdown,
+    )
 
     tab_info(
         "dashboard",

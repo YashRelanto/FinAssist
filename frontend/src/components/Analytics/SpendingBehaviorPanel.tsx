@@ -35,9 +35,9 @@ interface SpendingBehaviorPanelProps {
     total_days_with_txns: number;
     total_txns: number;
   };
-  weekendInsight?: string;
-  timeOfDayInsight?: string;
-  frequencyInsight?: string;
+  weekendInsight?: string | string[];
+  timeOfDayInsight?: string | string[];
+  frequencyInsight?: string | string[];
   loading?: boolean;
 }
 
@@ -102,9 +102,15 @@ export const SpendingBehaviorPanel: React.FC<SpendingBehaviorPanelProps> = ({
             )}
           </div>
           {weekendInsight && (
-            <p className="text-xs text-primary font-medium bg-primary/5 rounded-xl px-3 py-2 mt-3">
-              {weekendInsight}
-            </p>
+            <div className="text-xs text-primary font-medium bg-primary/5 rounded-xl px-3 py-2 mt-3">
+              {Array.isArray(weekendInsight) ? (
+                <ul className="list-disc pl-4 space-y-1">
+                  {weekendInsight.map((item, i) => <li key={i}>{item}</li>)}
+                </ul>
+              ) : (
+                <p>{weekendInsight}</p>
+              )}
+            </div>
           )}
         </div>
 
@@ -130,9 +136,15 @@ export const SpendingBehaviorPanel: React.FC<SpendingBehaviorPanelProps> = ({
             ))}
           </div>
           {timeOfDayInsight && (
-            <p className="text-xs text-primary font-medium bg-primary/5 rounded-xl px-3 py-2 mt-3">
-              {timeOfDayInsight}
-            </p>
+            <div className="text-xs text-primary font-medium bg-primary/5 rounded-xl px-3 py-2 mt-3">
+              {Array.isArray(timeOfDayInsight) ? (
+                <ul className="list-disc pl-4 space-y-1">
+                  {timeOfDayInsight.map((item, i) => <li key={i}>{item}</li>)}
+                </ul>
+              ) : (
+                <p>{timeOfDayInsight}</p>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -144,7 +156,15 @@ export const SpendingBehaviorPanel: React.FC<SpendingBehaviorPanelProps> = ({
             {transactionFrequency.total_txns} across {transactionFrequency.total_days_with_txns} days).
           </p>
           {frequencyInsight && (
-            <p className="text-xs text-outline mt-2">{frequencyInsight}</p>
+            <div className="text-xs text-outline mt-2">
+              {Array.isArray(frequencyInsight) ? (
+                <ul className="list-disc pl-4 space-y-1">
+                  {frequencyInsight.map((item, i) => <li key={i}>{item}</li>)}
+                </ul>
+              ) : (
+                <p>{frequencyInsight}</p>
+              )}
+            </div>
           )}
         </div>
       )}

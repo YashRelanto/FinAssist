@@ -275,7 +275,12 @@ export const Forecasting: React.FC = () => {
                 <motion.span className="text-xl">{changeAbs}%</motion.span>
               </motion.div>
               <motion.p className="text-[10px] font-bold text-lumio-muted uppercase tracking-widest mt-1">
-                {changeDown ? 'lower' : 'higher'} than comparison
+                {changeDown ? 'lower' : 'higher'} than {
+                  analyticsPeriod === '1m' ? 'last month' :
+                  analyticsPeriod === '3m' ? 'last 3 months' :
+                  analyticsPeriod === '6m' ? 'last 6 months' :
+                  analyticsPeriod === '1y' ? 'last year' : 'previous period'
+                }
               </motion.p>
             </motion.div>
           )}

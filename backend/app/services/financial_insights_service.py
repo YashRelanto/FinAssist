@@ -227,6 +227,8 @@ def build_precomputed_insight_facts(
             "weekend_elevated": bool(wknd.get("weekend_elevated")),
             "weekend_insight": behavior.get("weekend_insight")
             or build_weekend_behavior_insight(wknd, heatmap),
+            "weekday_categories": wknd.get("weekday_categories", []),
+            "weekend_categories": wknd.get("weekend_categories", []),
             "peak_spending_day": behavior_peak_day or (peak_day.get("day") if peak_day else None),
             "peak_spending_day_amount_inr": (
                 behavior_peak_amount
@@ -450,8 +452,8 @@ def _llm_narrate_facts(facts: dict[str, Any]) -> dict[str, Any] | None:
         "classifications are already computed in pre_computed_facts. "
         "Your ONLY job is to turn these pre-computed facts into short, actionable insights. "
         "Do NOT calculate, derive, estimate, or invent any numbers or categories. "
-        "For behavior_insights.weekend, use pre_computed_facts.behavior.weekend_insight verbatim. "
-        "Do NOT recalculate weekday/weekend comparisons. "
+        "For behavior_insights.weekend, provide a detailed category analysis of spending behavior on weekends vs weekdays. "
+        "Use pre_computed_facts.behavior.weekday_categories and pre_computed_facts.behavior.weekend_categories to compare which categories dominate on weekends versus weekdays. "
         "Use ONLY values present in pre_computed_facts.\n\n"
         "Return valid JSON with these keys:\n"
         "- executive_summary: a JSON ARRAY of 4-6 short bullet-point strings (each ≤25 words). "
@@ -462,7 +464,7 @@ def _llm_narrate_facts(facts: dict[str, Any]) -> dict[str, Any] | None:
         "- category_trends: [{category, insight}] — cover every category in pre_computed_facts.category_trends.\n"
         "- category_analysis: [{category, headline, analysis, suggestion}] — cover every category in category_analysis_facts.\n"
         "- merchant_insights: {fastest_growing, concentration} — strings.\n"
-        "- behavior_insights: {weekend, time_of_day, frequency} — strings."
+        "- behavior_insights: {weekend, time_of_day, frequency} — each must be a JSON ARRAY of 2-3 short bullet-point strings."
     )
 
     try:

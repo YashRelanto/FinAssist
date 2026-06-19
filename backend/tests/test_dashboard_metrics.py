@@ -4,10 +4,8 @@ from datetime import datetime
 
 from app.services.dashboard_metrics_service import (
     aggregate_monthly_stats,
-    build_chart_data,
     compute_budget_utilization,
     compute_savings_trajectory,
-    compute_summary,
     format_recent_transactions,
     transaction_amount_value,
 )
@@ -29,28 +27,28 @@ def test_aggregate_monthly_stats_excludes_transfers():
     assert stats["2026-05"]["expense"] == 200
 
 
-def test_compute_summary_current_calendar_month():
+def test_compute_summary_for_window():
+    from app.services.dashboard_metrics_service import compute_summary_for_window
+    from app.utils.analysis_period import resolve_analysis_window
+
     accounts = [{"current_balance": 1500}, {"current_balance": 500}]
-    stats = {
-        "2026-05": {"income": 4000, "expense": 2500},
-        "2026-04": {"income": 3000, "expense": 1000},
-    }
-    summary = compute_summary(
-        accounts, stats, reference=datetime(2026, 5, 30)
+    transactions = [
+        {"transaction_date": "2026-05-10", "amount": 1000, "transaction_type": "income"},
+        {"transaction_date": "2026-05-12", "amount": 2500, "transaction_type": "expense"},
+    ]
+    window = resolve_analysis_window("1m", reference=datetime(2026, 5, 30).date())
+    summary = compute_summary_for_window(
+        accounts,
+        transactions,
+        window=window,
+        profile_income=4000,
+        profile_fixed_rent=0,
+        profile_fixed_emi=0,
     )
     assert summary["total_balance"] == 2000
     assert summary["monthly_income"] == 4000
-    assert summary["monthly_expenses"] == 2500
-    assert summary["net_savings"] == 1500
-    assert summary["savings_rate"] == 37.5
-
-
-def test_build_chart_data_includes_current_month():
-    stats = {"2026-03": {"income": 1, "expense": 2}}
-    chart = build_chart_data(stats, reference=datetime(2026, 5, 1))
-    months = [point["month"] for point in chart]
-    assert "2026-05" in months
-    assert chart[-1]["net"] == -0.0 or chart[-1]["income"] == 0
+    assert summary["net_outflow"] == 2500
+    assert summary["net_savings"] == -1500
 
 
 def test_build_daily_chart_data_for_one_month_window():
@@ -356,8 +354,8 @@ def test_compute_financial_health_score():
     ]
     health = compute_financial_health(summary, accounts)
     assert 0 <= health["score"] <= 100
-    assert health["debt_to_income_pct"] == 25.0
     assert health["monthly_commitments_pct"] == 25.0
+    assert health["monthly_commitments_inr"] == 25000.0
 
 
 def test_overall_financial_health_includes_liquid_funds_and_fds():
@@ -445,7 +443,7 @@ def test_compute_monthly_recurring_obligations():
 
 
 def test_compute_survival_burn():
-    from app.services.dashboard_metrics_service import compute_survival_burn
+    from app.services.dashboard_metrics_service import compute_survival_burn_breakdown
 
     transactions = [
         {
@@ -483,6 +481,189 @@ def test_compute_survival_burn():
             "transaction_date": "2026-05-10",
         },
     ]
-    burn = compute_survival_burn(transactions, profile_fixed_rent=0, profile_fixed_emi=0)
-    # Essential living averages across 6 calendar months (most months are zero).
+    burn = compute_survival_burn_breakdown(
+        transactions,
+        profile_fixed_rent=20000,
+        profile_fixed_emi=0,
+    )["total"]
+    # Rent comes from profile; recurring rent transactions are ignored.
     assert burn == round(20000 + 1200 + (2500 + 3000) / 6, 2)
+
+
+def test_monthly_commitments_ignores_rent_emi_transactions():
+    from app.services.dashboard_metrics_service import compute_monthly_recurring_obligations
+
+    transactions = [
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 25000,
+            "recurrence_period": "monthly",
+            "recurrence_skips": 0,
+            "merchant_name": "Rent",
+            "categories": {"main_category": "Housing", "sub_category": "Rent"},
+        },
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 9000,
+            "recurrence_period": "monthly",
+            "recurrence_skips": 0,
+            "merchant_name": "Home Loan EMI",
+            "categories": {"main_category": "Financial", "sub_category": "EMI"},
+        },
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 499,
+            "recurrence_period": "monthly",
+            "recurrence_skips": 0,
+            "merchant_name": "Netflix",
+            "categories": {"main_category": "Life & Entertainment"},
+        },
+    ]
+    total = compute_monthly_recurring_obligations(
+        transactions,
+        profile_fixed_rent=21000,
+        profile_fixed_emi=8000,
+    )
+    assert total == round(21000 + 8000 + 499, 2)
+
+
+def test_compute_lifestyle_burn_includes_profile_rent_emi_and_transactions():
+    from app.services.dashboard_metrics_service import compute_lifestyle_burn_breakdown
+
+    transactions = [
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 499,
+            "recurrence_period": "monthly",
+            "recurrence_skips": 0,
+            "merchant_name": "Netflix",
+            "categories": {"main_category": "Life & Entertainment"},
+            "transaction_date": "2026-06-01",
+        },
+        {
+            "transaction_type": "expense",
+            "amount": 6000,
+            "merchant_name": "Restaurant",
+            "categories": {"main_category": "Food & Drinks"},
+            "transaction_date": "2026-06-10",
+        },
+    ]
+    burn = compute_lifestyle_burn_breakdown(
+        transactions,
+        profile_fixed_rent=21000,
+        profile_fixed_emi=8000,
+    )["total"]
+    # Profile housing + 6-month average of logged expenses (499 Netflix + 6000 restaurant).
+    assert burn == round(21000 + 8000 + (499 + 6000) / 6, 2)
+
+
+def test_savings_rate_from_tracked_spending_only():
+    from app.services.dashboard_metrics_service import compute_overall_financial_health
+
+    transactions = [
+        {
+            "transaction_type": "expense",
+            "amount": 31542,
+            "merchant_name": "Mixed spending",
+            "categories": {"main_category": "Shopping"},
+            "transaction_date": "2026-06-10",
+        },
+    ]
+    health = compute_overall_financial_health(
+        accounts=[{"account_type": "savings", "current_balance": 150000}],
+        transactions=transactions,
+        profile_income=42000,
+        profile_fixed_rent=21000,
+        profile_fixed_emi=8000,
+    )
+    assert health["net_savings"] == round(42000 - 31542 / 6, 2)
+    assert health["savings_rate"] == round((42000 - 31542 / 6) / 42000 * 100, 1)
+    assert health["lifestyle_burn_monthly"] == round(21000 + 8000 + 31542 / 6, 2)
+
+
+def test_burn_breakdown_totals():
+    from app.services.dashboard_metrics_service import (
+        compute_lifestyle_burn_breakdown,
+        compute_survival_burn_breakdown,
+    )
+
+    transactions = [
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 1200,
+            "recurrence_period": "monthly",
+            "recurrence_skips": 0,
+            "merchant_name": "Airtel Broadband",
+            "categories": {"main_category": "Communication/PC"},
+            "transaction_date": "2026-06-05",
+        },
+        {
+            "transaction_type": "expense",
+            "amount": 2500,
+            "merchant_name": "BigBasket Groceries",
+            "categories": {"main_category": "Food & Drinks"},
+            "transaction_date": "2026-06-10",
+        },
+    ]
+    lifestyle_bd = compute_lifestyle_burn_breakdown(
+        transactions, profile_fixed_rent=21000, profile_fixed_emi=8000
+    )
+    survival_bd = compute_survival_burn_breakdown(
+        transactions, profile_fixed_rent=21000, profile_fixed_emi=8000
+    )
+    assert lifestyle_bd["profile_rent_inr"] == 21000
+    assert survival_bd["essential_recurring_inr"] == 1200
+    assert lifestyle_bd["total"] == round(
+        lifestyle_bd["profile_rent_inr"]
+        + lifestyle_bd["profile_emi_inr"]
+        + lifestyle_bd["avg_transaction_spend_inr"],
+        2,
+    )
+
+
+def test_survival_burn_excludes_luxury_recurring():
+    from app.services.dashboard_metrics_service import compute_survival_burn_breakdown
+
+    transactions = [
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 499,
+            "recurrence_period": "monthly",
+            "recurrence_skips": 0,
+            "merchant_name": "Netflix",
+            "categories": {"main_category": "Life & Entertainment"},
+            "transaction_date": "2026-06-01",
+        },
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 1200,
+            "recurrence_period": "monthly",
+            "recurrence_skips": 0,
+            "merchant_name": "Airtel Broadband",
+            "categories": {"main_category": "Communication/PC"},
+            "transaction_date": "2026-06-05",
+        },
+        {
+            "is_recurring": True,
+            "transaction_type": "expense",
+            "amount": 3500,
+            "recurrence_period": "monthly",
+            "recurrence_skips": 0,
+            "merchant_name": "HP Petrol Pump",
+            "categories": {"main_category": "Transportation"},
+            "transaction_date": "2026-06-08",
+        },
+    ]
+    burn = compute_survival_burn_breakdown(
+        transactions,
+        profile_fixed_rent=20000,
+        profile_fixed_emi=5000,
+    )["total"]
+    assert burn == round(20000 + 5000 + 1200 + 3500, 2)

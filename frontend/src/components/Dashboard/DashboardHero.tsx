@@ -163,7 +163,12 @@ export const MonthlySpendTrend: React.FC<MonthlySpendTrendProps> = ({
                 <span className="material-symbols-outlined text-[14px]">
                   {changePct <= 0 ? 'arrow_downward' : 'arrow_upward'}
                 </span>
-                {Math.abs(changePct).toFixed(0)}% vs prior
+                {Math.abs(changePct).toFixed(0)}% vs {
+                  analysisPeriod === '1m' ? 'last month' :
+                  analysisPeriod === '3m' ? 'last 3 months' :
+                  analysisPeriod === '6m' ? 'last 6 months' :
+                  analysisPeriod === '1y' ? 'last year' : 'prior'
+                }
               </span>
             )}
             {predictedNextMonth != null && predictedNextMonth > 0 && (
@@ -329,7 +334,8 @@ interface FinancialHealthCardProps {
     score?: number;
     label?: string;
     savings_rate?: number;
-    debt_to_income_pct?: number;
+    monthly_commitments_pct?: number;
+    monthly_commitments_inr?: number;
     net_savings?: number;
     emergency_buffer_months?: number | null;
     survival_buffer_months?: number | null;
@@ -345,7 +351,7 @@ interface FinancialHealthCardProps {
     fixed_expense?: number;
   };
   insights?: {
-    analysis?: string;
+    analysis?: string | string[];
     recommendations?: string[];
     pillar_insights?: Array<{ pillar: string; status: string; insight: string }>;
     source?: string;
@@ -383,7 +389,7 @@ export const FinancialHealthCard: React.FC<FinancialHealthCardProps> = ({
   const netSavings = health?.net_savings ?? summary?.net_savings ?? 0;
   const score = health?.score ?? 0;
   const label = health?.label ?? 'Needs Work';
-  const debtToIncome = health?.debt_to_income_pct ?? 0;
+  const monthlyCommitmentsPct = health?.monthly_commitments_pct ?? 0;
   const survivalMonths = health?.survival_buffer_months;
   const lifestyleMonths =
     health?.lifestyle_buffer_months ?? health?.emergency_buffer_months;
@@ -398,19 +404,19 @@ export const FinancialHealthCard: React.FC<FinancialHealthCardProps> = ({
       label: 'Savings Rate',
       value: `${savingsRate}%`,
       description:
-        'Percentage of your monthly income left after average spending over the last 6 months. Aim for at least 20%.',
+        'Share of income left after your average monthly tracked spending (last 6 months).',
     },
     {
       label: 'Monthly Commitments',
-      value: `${debtToIncome}%`,
+      value: `${monthlyCommitmentsPct}%`,
       description:
-        'Recurring costs (rent, EMIs, subscriptions, and other scheduled payments) as a share of income. Under 30% is healthy.',
+        'Profile rent and EMIs plus other recurring payments (subscriptions, etc.) as a share of income. Under 30% is healthy.',
     },
     {
       label: 'Net Savings',
       value: formatCurrency(netSavings),
       description:
-        'Estimated monthly income minus your average monthly expenses over the last 6 months.',
+        'Monthly income minus your average tracked spending over the last 6 months.',
     },
   ];
   if (creditUtil != null) {
@@ -473,7 +479,7 @@ export const FinancialHealthCard: React.FC<FinancialHealthCardProps> = ({
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-lumio-text flex items-center">
                   Survival Buffer
-                  <MetricInfoTip text="If you only paid must-haves — rent, EMIs, bills like electricity and internet, plus groceries and medicines — how many months could your savings last? This is your worst-case runway." />
+                  <MetricInfoTip text="Rent and EMIs, plus essential recurring bills (utilities, petrol, groceries) and average essential living spend." />
                 </p>
                 {survivalBurn != null && survivalBurn > 0 && (
                   <p className="text-[10px] text-lumio-muted mt-0.5">
@@ -492,7 +498,7 @@ export const FinancialHealthCard: React.FC<FinancialHealthCardProps> = ({
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-lumio-text flex items-center">
                   Lifestyle Buffer
-                  <MetricInfoTip text="Based on what you actually spend each month on average (last 6 months). This shows how long you could keep living the way you do today." />
+                  <MetricInfoTip text="Rent and EMIs plus your average logged spending over the last 6 months." />
                 </p>
                 {lifestyleBurn != null && lifestyleBurn > 0 && (
                   <p className="text-[10px] text-lumio-muted mt-0.5">
@@ -520,7 +526,18 @@ export const FinancialHealthCard: React.FC<FinancialHealthCardProps> = ({
           </div>
 
           {insights?.analysis ? (
-            <p className="text-xs text-lumio-text/85 leading-relaxed">{insights.analysis}</p>
+            Array.isArray(insights.analysis) ? (
+              <ul className="space-y-2">
+                {insights.analysis.map((point, i) => (
+                  <li key={i} className="text-xs text-lumio-text/85 flex gap-2 leading-relaxed">
+                    <span className="text-emerald-solid shrink-0">•</span>
+                    <span>{point}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-lumio-text/85 leading-relaxed">{insights.analysis}</p>
+            )
           ) : insightsLlmLoading ? (
             <div className="space-y-2 animate-pulse">
               <div className="h-3 bg-lumio-line/40 rounded w-full" />

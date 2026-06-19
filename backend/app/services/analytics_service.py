@@ -254,10 +254,11 @@ def build_category_share(
 
 
 def build_merchant_analytics(
-    rows: list[dict[str, Any]],
+    transactions: list[dict[str, Any]],
     *,
-    start_date: str | None,
-    end_date: str | None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    top_n: int = 5,
     comparison_start: str | None,
     comparison_end: str | None,
 ) -> dict[str, Any]:
@@ -266,7 +267,7 @@ def build_merchant_analytics(
     )
     prior: dict[str, float] = defaultdict(float)
 
-    for row in filter_rows_by_date(rows, start_date=start_date, end_date=end_date):
+    for row in filter_rows_by_date(transactions, start_date=start_date, end_date=end_date):
         if (row.get("transaction_type") or "").lower() != EXPENSE_TYPE:
             continue
         name = _merchant_from_row(row)
@@ -275,7 +276,7 @@ def build_merchant_analytics(
         current[name]["txn_count"] += 1
 
     for row in filter_rows_by_date(
-        rows, start_date=comparison_start, end_date=comparison_end
+        transactions, start_date=comparison_start, end_date=comparison_end
     ):
         if (row.get("transaction_type") or "").lower() != EXPENSE_TYPE:
             continue
@@ -332,6 +333,8 @@ def build_spending_behavior(
     weekday_total = 0.0
     weekend_total = 0.0
     day_totals: dict[int, float] = defaultdict(float)
+    weekday_category_totals: dict[str, float] = defaultdict(float)
+    weekend_category_totals: dict[str, float] = defaultdict(float)
     days_with_txns: set[str] = set()
     txn_count = 0
 
@@ -350,10 +353,13 @@ def build_spending_behavior(
         days_with_txns.add(d_str)
         wd = d.weekday()
         day_totals[wd] += amt
+        cat_name = (row.get("categories") or {}).get("main_category") or row.get("main_category") or "Uncategorized"
         if wd >= 5:
             weekend_total += amt
+            weekend_category_totals[cat_name] += amt
         else:
             weekday_total += amt
+            weekday_category_totals[cat_name] += amt
 
     weekday_days, weekend_days = _calendar_weekday_weekend_counts(start_date, end_date)
     weekday_avg_per_day = (
@@ -399,7 +405,9 @@ def build_spending_behavior(
         "weekday_days_in_period": weekday_days,
         "weekend_days_in_period": weekend_days,
         "weekend_multiplier": weekend_multiplier,
-        "weekend_elevated": weekend_multiplier >= 1.1,
+        "weekend_elevated": weekend_multiplier >= 1.5,
+        "weekday_categories": [{"category": k, "amount": round(v, 2)} for k, v in sorted(weekday_category_totals.items(), key=lambda x: x[1], reverse=True)[:5]],
+        "weekend_categories": [{"category": k, "amount": round(v, 2)} for k, v in sorted(weekend_category_totals.items(), key=lambda x: x[1], reverse=True)[:5]],
     }
 
     return {

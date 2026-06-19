@@ -20,12 +20,22 @@ logger = logging.getLogger(__name__)
 _BENCHMARKS = {
     "savings_rate_good": 20.0,
     "savings_rate_fair": 10.0,
-    "debt_to_income_good": 30.0,
-    "debt_to_income_fair": 50.0,
+    "monthly_commitments_good": 30.0,
+    "monthly_commitments_fair": 50.0,
     "emergency_months_good": 6.0,
     "emergency_months_fair": 3.0,
     "credit_util_good": 30.0,
     "credit_util_fair": 50.0,
+}
+
+_TERMINOLOGY = {
+    "monthly_commitments_label": "Monthly Commitments",
+    "monthly_commitments_definition": (
+        "Profile rent and EMI plus other recurring expenses (subscriptions, utilities, etc.) "
+        "normalized to a monthly total, expressed as a share of income. "
+        "Rent and EMI always come from the user profile, never from transactions."
+    ),
+    "forbidden_terms": ["debt-to-income", "debt to income", "DTI"],
 }
 
 
@@ -45,6 +55,19 @@ def _pillar_status(value: float | None, good_max: float, fair_max: float, *, hig
     return "needs_improvement"
 
 
+def _analysis_to_bullets(text: str) -> list[str]:
+    """Split prose analysis into bullet points for consistent UI rendering."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+    parts = [part.strip() for part in cleaned.replace("\n", " ").split(". ") if part.strip()]
+    bullets: list[str] = []
+    for part in parts:
+        sentence = part if part.endswith(".") else f"{part}."
+        bullets.append(sentence)
+    return bullets
+
+
 def build_health_insight_facts(
     health: dict[str, Any],
     *,
@@ -54,15 +77,18 @@ def build_health_insight_facts(
     score = int(health.get("score") or 0)
     label = health.get("label") or "Needs Work"
     savings_rate = float(health.get("savings_rate") or 0)
-    debt_to_income = float(health.get("debt_to_income_pct") or 0)
+    monthly_commitments_pct = float(health.get("monthly_commitments_pct") or 0)
+    monthly_commitments_inr = float(health.get("monthly_commitments_inr") or 0)
     net_savings = float(health.get("net_savings") or 0)
     emergency_months = health.get("emergency_buffer_months")
+    lifestyle_buffer_months = health.get("lifestyle_buffer_months")
+    survival_buffer_months = health.get("survival_buffer_months")
     credit_util = health.get("avg_credit_utilization_pct")
     liquid_balance = float(health.get("total_liquid_balance") or 0)
 
     profile_income = float((profile or {}).get("income") or 0)
-    fixed_rent = float((profile or {}).get("fixed_rent") or 0)
-    fixed_emi = float((profile or {}).get("fixed_emi") or 0)
+    profile_rent = float((profile or {}).get("fixed_rent") or 0)
+    profile_emi = float((profile or {}).get("fixed_emi") or 0)
     primary_goal = (profile or {}).get("primary_goal")
 
     pillars = [
@@ -76,11 +102,16 @@ def build_health_insight_facts(
         },
         {
             "pillar": "Monthly Commitments",
-            "value": debt_to_income,
+            "value": monthly_commitments_pct,
             "unit": "percent",
-            "status": _pillar_status(debt_to_income, _BENCHMARKS["debt_to_income_good"], _BENCHMARKS["debt_to_income_fair"], higher_is_better=False),
-            "benchmark_good": _BENCHMARKS["debt_to_income_good"],
-            "benchmark_fair": _BENCHMARKS["debt_to_income_fair"],
+            "status": _pillar_status(
+                monthly_commitments_pct,
+                _BENCHMARKS["monthly_commitments_good"],
+                _BENCHMARKS["monthly_commitments_fair"],
+                higher_is_better=False,
+            ),
+            "benchmark_good": _BENCHMARKS["monthly_commitments_good"],
+            "benchmark_fair": _BENCHMARKS["monthly_commitments_fair"],
         },
         {
             "pillar": "Emergency Buffer",
@@ -115,9 +146,11 @@ def build_health_insight_facts(
         improvement_triggers.append(
             f"Raise savings rate by {gap:.1f} percentage points to reach the 20% healthy target."
         )
-    if debt_to_income > _BENCHMARKS["debt_to_income_good"]:
+    if monthly_commitments_pct > _BENCHMARKS["monthly_commitments_good"]:
         improvement_triggers.append(
-            f"Monthly commitments are {debt_to_income}% of income — aim below 30% by reducing recurring obligations or increasing income."
+            f"Monthly commitments are {monthly_commitments_pct}% of income "
+            f"(₹{monthly_commitments_inr:,.0f}/month) — aim below 30% by reducing recurring "
+            "obligations or increasing income."
         )
     if emergency_months is None or float(emergency_months) < _BENCHMARKS["emergency_months_good"]:
         target = _BENCHMARKS["emergency_months_good"]
@@ -133,12 +166,6 @@ def build_health_insight_facts(
         improvement_triggers.append(
             f"Monthly spending exceeds income by ₹{abs(net_savings):,.0f} — trim discretionary spend first."
         )
-    if fixed_rent + fixed_emi > 0 and profile_income > 0:
-        fixed_ratio = (fixed_rent + fixed_emi) / profile_income * 100
-        if fixed_ratio > 40:
-            improvement_triggers.append(
-                f"Fixed rent and EMIs are {fixed_ratio:.0f}% of income — high fixed costs limit flexibility."
-            )
 
     points_to_excellent = max(0, 80 - score)
     points_to_good = max(0, 60 - score)
@@ -152,19 +179,32 @@ def build_health_insight_facts(
         },
         "metrics": {
             "savings_rate_pct": savings_rate,
-            "debt_to_income_pct": debt_to_income,
+            "monthly_commitments_pct": monthly_commitments_pct,
+            "monthly_commitments_inr": round(monthly_commitments_inr, 2),
             "net_savings_inr": round(net_savings, 2),
             "emergency_buffer_months": emergency_months,
+            "lifestyle_buffer_months": lifestyle_buffer_months,
+            "survival_buffer_months": survival_buffer_months,
             "avg_credit_utilization_pct": credit_util,
             "total_liquid_balance_inr": round(liquid_balance, 2),
         },
+        "monthly_commitments": {
+            "label": _TERMINOLOGY["monthly_commitments_label"],
+            "pct_of_income": monthly_commitments_pct,
+            "monthly_inr": round(monthly_commitments_inr, 2),
+            "definition": _TERMINOLOGY["monthly_commitments_definition"],
+            "profile_rent_inr": profile_rent or None,
+            "profile_emi_inr": profile_emi or None,
+            "other_recurring_inr": round(
+                max(0.0, monthly_commitments_inr - profile_rent - profile_emi), 2
+            ),
+        },
+        "terminology": _TERMINOLOGY,
         "pillars": pillars,
         "weak_pillars": weak_pillars,
         "improvement_triggers": improvement_triggers,
         "profile": {
             "income_inr": profile_income or None,
-            "fixed_rent_inr": fixed_rent or None,
-            "fixed_emi_inr": fixed_emi or None,
             "primary_goal": primary_goal,
         },
         "benchmarks": _BENCHMARKS,
@@ -175,16 +215,24 @@ def _rule_based_health_insights(facts: dict[str, Any]) -> dict[str, Any]:
     score_info = facts["health_score"]
     score = score_info["score"]
     label = score_info["label"]
+    commitments = facts["monthly_commitments"]
 
-    analysis_parts = [
+    analysis_bullets = [
         f"Your financial health score is {score}/100 ({label}).",
     ]
     if facts["weak_pillars"]:
-        analysis_parts.append(
+        analysis_bullets.append(
             f"The main areas to improve are: {', '.join(facts['weak_pillars'])}."
         )
     else:
-        analysis_parts.append("Your core pillars are in good shape — focus on maintaining habits.")
+        analysis_bullets.append("Your core pillars are in good shape — focus on maintaining habits.")
+    analysis_bullets.append(
+        f"Monthly commitments are {commitments['pct_of_income']}% of income "
+        f"(₹{commitments['monthly_inr']:,.0f}/month: "
+        f"₹{commitments.get('profile_rent_inr') or 0:,.0f} rent + "
+        f"₹{commitments.get('profile_emi_inr') or 0:,.0f} EMI + "
+        f"₹{commitments.get('other_recurring_inr') or 0:,.0f} other recurring)."
+    )
 
     recommendations = facts["improvement_triggers"][:5]
     if not recommendations:
@@ -206,7 +254,10 @@ def _rule_based_health_insights(facts: dict[str, Any]) -> dict[str, Any]:
             if p["pillar"] == "Savings Rate":
                 insight = f"Savings rate is {value}% — target at least 20% of income."
             elif p["pillar"] == "Monthly Commitments":
-                insight = f"Monthly commitments are {value}% of income — keep recurring costs under 30%."
+                insight = (
+                    f"Monthly commitments are {value}% of income "
+                    f"(₹{commitments['monthly_inr']:,.0f}/month) — keep recurring costs under 30%."
+                )
             elif p["pillar"] == "Emergency Buffer":
                 insight = f"Emergency buffer is {value} months — aim for 6 months of expenses."
             else:
@@ -214,11 +265,22 @@ def _rule_based_health_insights(facts: dict[str, Any]) -> dict[str, Any]:
         pillar_insights.append({"pillar": p["pillar"], "status": p["status"], "insight": insight})
 
     return {
-        "analysis": " ".join(analysis_parts),
+        "analysis": analysis_bullets,
         "recommendations": recommendations,
         "pillar_insights": pillar_insights,
         "source": "rule_based",
     }
+
+
+def _normalize_llm_analysis(parsed: dict[str, Any]) -> list[str]:
+    raw = parsed.get("analysis")
+    if isinstance(raw, list):
+        bullets = [str(item).strip() for item in raw if str(item).strip()]
+        if bullets:
+            return bullets
+    if isinstance(raw, str) and raw.strip():
+        return _analysis_to_bullets(raw)
+    return []
 
 
 def _llm_health_insights(facts: dict[str, Any]) -> dict[str, Any] | None:
@@ -231,9 +293,12 @@ def _llm_health_insights(facts: dict[str, Any]) -> dict[str, Any] | None:
         "statuses are pre-computed in pre_computed_facts. Your ONLY job is to explain the user's "
         "financial health and give practical, specific recommendations to improve their score. "
         "Do NOT calculate, derive, estimate, or invent any numbers. Use ONLY values from "
-        "pre_computed_facts. Write in clear, encouraging prose for an Indian user (use ₹ for INR). "
+        "pre_computed_facts. Write for an Indian user (use ₹ for INR). "
+        "TERMINOLOGY: Always call the recurring-obligations metric 'Monthly Commitments'. "
+        "Monthly Commitments is pre_computed_facts.monthly_commitments — rent and EMI "
+        "always come from the profile (profile_rent_inr, profile_emi_inr), not transactions. "
         "Return valid JSON with keys: "
-        "analysis (string, 2-4 sentences summarizing health and biggest gaps), "
+        "analysis (string[], 3-5 concise bullet points summarizing health and biggest gaps), "
         "recommendations (string[], 3-5 actionable steps prioritized by score impact), "
         "pillar_insights ([{pillar, status, insight}] — one per pillar in pre_computed_facts.pillars)."
     )
@@ -262,12 +327,14 @@ def _llm_health_insights(facts: dict[str, Any]) -> dict[str, Any] | None:
         )
         raw = (response.choices[0].message.content or "").strip()
         parsed = json.loads(raw)
+        parsed["analysis"] = _normalize_llm_analysis(parsed)
         parsed["source"] = "llm"
         tab_info(
             "dashboard",
-            "financial health LLM done elapsed_ms=%.0f recommendations=%d",
+            "financial health LLM done elapsed_ms=%.0f recommendations=%d analysis_points=%d",
             (time.perf_counter() - started) * 1000,
             len(parsed.get("recommendations") or []),
+            len(parsed.get("analysis") or []),
         )
         return parsed
     except Exception as exc:
