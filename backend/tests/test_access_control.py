@@ -127,6 +127,7 @@ class TestUnauthenticated:
         "/api/budgets",
         "/api/goals",
         "/api/investments",
+        "/api/fixed-deposits",
         "/api/forecast",
         "/api/statement/uploaded-statements",
     ]
