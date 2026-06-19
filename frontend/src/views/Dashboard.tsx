@@ -142,23 +142,30 @@ export const Dashboard: React.FC = () => {
     loadHealthInsightsPipeline();
   }, [user?.isAuthenticated, loadHealthInsightsPipeline]);
 
+  // Whether the dashboard slice already embeds a usable forecast (then no overlay fetch
+  // is needed). Derived as a boolean so the effect below depends on this value rather than
+  // the whole `periodData` object — otherwise every new `periodData` reference (dashboard
+  // refetch, window focus, period change, StrictMode) would re-trigger /api/forecast.
+  const sliceHasForecast =
+    periodData?.predicted_next_month != null && periodData.predicted_next_month > 0;
+  const chartHasForecast = (periodData?.chart_data ?? []).some(
+    (d: { is_forecast?: boolean }) => d.is_forecast,
+  );
+  const dashboardSliceHasForecast = sliceHasForecast && chartHasForecast;
+
   React.useEffect(() => {
     if (!user?.isAuthenticated) return;
-    const sliceHasForecast =
-      periodData?.predicted_next_month != null && periodData.predicted_next_month > 0;
-    const chartHasForecast = (periodData?.chart_data ?? []).some(
-      (d: { is_forecast?: boolean }) => d.is_forecast,
-    );
-    if (sliceHasForecast && chartHasForecast) {
+    if (dashboardSliceHasForecast) {
       setForecastOverlay(null);
       return;
     }
+    // Fetch the forecast overlay once per period when the slice lacks one.
     void loadForecast({ period: analysisPeriod }).then((data) => {
       if (data?.predicted_next_month) {
         setForecastOverlay(data);
       }
     });
-  }, [user?.isAuthenticated, periodData, analysisPeriod, loadForecast]);
+  }, [user?.isAuthenticated, dashboardSliceHasForecast, analysisPeriod, loadForecast]);
 
   const predictedNextMonth =
     periodData?.predicted_next_month ??

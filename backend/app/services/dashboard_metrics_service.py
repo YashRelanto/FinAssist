@@ -1513,6 +1513,8 @@ def build_dashboard_payload(
     profile_income: float = 0.0,
     profile_fixed_rent: float = 0.0,
     profile_fixed_emi: float = 0.0,
+    liquid_funds_value: float = 0.0,
+    fixed_deposits_value: float = 0.0,
     period: str = "1m",
 ) -> dict[str, Any]:
     ref = reference or datetime.now()
@@ -1542,6 +1544,8 @@ def build_dashboard_payload(
         profile_income=profile_income,
         profile_fixed_rent=profile_fixed_rent,
         profile_fixed_emi=profile_fixed_emi,
+        liquid_funds_value=liquid_funds_value,
+        fixed_deposits_value=fixed_deposits_value,
         reference=ref,
         user_id=user_id,
     )

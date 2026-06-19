@@ -362,6 +362,19 @@ async def get_dashboard_summary(
             profile_fixed_rent = float(prof_res.data[0].get("fixed_rent") or 0.0)
             profile_fixed_emi = float(prof_res.data[0].get("fixed_emi") or 0.0)
 
+        # Near-cash assets that extend the emergency runway — must be valued identically to the
+        # /financial-health-insights endpoint so the hero score matches the AI analysis.
+        from app.graph.tools.goal_planner_tool import (
+            _fetch_fixed_deposits,
+            _fetch_investment_holdings,
+            _liquid_fund_value,
+        )
+
+        liquid_funds_value = _liquid_fund_value(_fetch_investment_holdings(user_id))
+        fixed_deposits_value = round(
+            sum(float(fd.get("break_value") or 0) for fd in _fetch_fixed_deposits(user_id)), 2
+        )
+
         return build_dashboard_payload(
             user_id=user_id.strip(),
             accounts=accounts,
@@ -371,6 +384,8 @@ async def get_dashboard_summary(
             profile_income=profile_income,
             profile_fixed_rent=profile_fixed_rent,
             profile_fixed_emi=profile_fixed_emi,
+            liquid_funds_value=liquid_funds_value,
+            fixed_deposits_value=fixed_deposits_value,
             period=period_key,
         )
     except HTTPException:
