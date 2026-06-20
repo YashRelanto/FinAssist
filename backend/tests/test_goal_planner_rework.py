@@ -153,3 +153,19 @@ def test_savings_scenario_b_minimal_deploy_only_the_gap():
     assert b["deployment"]["from_fds_broken"] == 0.0
     assert b["monthly_savings_needed"] == 0.0
     assert b["feasible"] is True
+
+
+from app.graph.tools.goal_planner_tool import _education_scenarios
+
+
+def test_education_self_funded_feasibility_uses_surplus_plus_cuts():
+    agg = _agg(total_current_balance=0.0)
+    scenarios, _meta = _education_scenarios(
+        cost=2000000.0, existing=0.0, user_months=24, self_pct=0.0,
+        surplus=18000.0, cuts=2000.0, agg=agg, tenure=180,
+    )
+    b = scenarios[1]                                  # "Maximise the loan" — recommended
+    assert b["recommended"] is True
+    assert b["loan_amount"] > 0
+    # Self-funded slice is minimal; its monthly saving must be within surplus+cuts to be feasible.
+    assert b["feasible"] == (b["monthly_savings_needed"] <= 20000 + 1)

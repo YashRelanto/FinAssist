@@ -1146,7 +1146,7 @@ def _savings_scenarios(*, target: float, existing: float, user_months: float,
 
 
 def _education_scenarios(*, cost: float, existing: float, user_months: float, self_pct: float,
-                         surplus: float, cuts: float, deployable: float,
+                         surplus: float, cuts: float, agg: dict,
                          rate: float = 10.5, tenure: int = 180) -> tuple:
     """
     Education NEVER scales the program cost — a PhD/MS/MBA costs what it costs. Every scenario
@@ -1165,14 +1165,13 @@ def _education_scenarios(*, cost: float, existing: float, user_months: float, se
     The program is never "out of reach": financing changes, not the program cost (spec #17).
     """
     surplus = max(surplus, 0.0); cuts = max(cuts, 0.0); cost = max(cost, 0.0)
-    deployable = max(deployable, 0.0)
+    deployable = max(_deployable(agg), 0.0)
     user_months = max(1, int(round(user_months)))
     avail = existing + deployable
     cuts_note = f" (with ₹{round(cuts):,}/mo spending cuts)" if cuts > 0 else ""
-    # The self-funded portion is saved over the WHOLE study period, so it must come from the
-    # SUSTAINABLE base surplus (~70%) — we never ask the user to save more per month than they
-    # realistically can. (Don't bake in permanent spending cuts to inflate the self-funding.)
-    save_cap = surplus * _CAP_UTIL
+    # The self-funded slice is saved during study; it may use the FULL sustainable capacity
+    # (surplus + reclaimable cuts), not a 70%-of-surplus sliver.
+    save_cap = surplus + cuts
     yrs = max(1, tenure // 12)
 
     def make(tag, label, recommended, self_amt, months):
@@ -1400,7 +1399,7 @@ def _plan_education(goal: dict, agg: dict) -> dict:
     # Education program cost is FIXED — the lever is the financing mix, not a cheaper "price".
     scenarios, meta = _education_scenarios(
         cost=cost, existing=existing, user_months=months, self_pct=user_self_pct,
-        surplus=net, cuts=cuts, deployable=_deployable(agg), tenure=tenure_months,
+        surplus=net, cuts=cuts, agg=agg, tenure=tenure_months,
     )
     rec = next(s for s in scenarios if s["recommended"])
     return {
