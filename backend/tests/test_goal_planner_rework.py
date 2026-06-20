@@ -198,3 +198,35 @@ def test_liquid_fund_value_at_grows_for_long_horizon():
     flat = _liquid_fund_value_at(data, 6, annual_return_pct=7.0)
     assert grown > 100000.0
     assert flat == 100000.0          # <= 12 months: kept liquid, no growth assumed
+
+
+from app.graph.tools.goal_planner_tool import (
+    _plan_car,
+    _apply_what_if,
+    _apply_what_if_scenarios,
+)
+
+
+def test_loan_rate_override_zero_interest():
+    agg = _agg(total_current_balance=0.0, liquid_fund_value=0.0,
+               fd_funding_view=[], funding_selection={"bank_use_pct": 90.0})
+    goal = {"goal_type": "car", "target_amount": 600000, "timeline": "60 months",
+            "down_payment_pct": 20, "loan_interest_rate_pct": 0}
+    out = _plan_car(goal, agg)
+    rec = next(s for s in out["scenarios"] if s["recommended"])
+    # Zero-interest: total interest is 0 and EMI == loan / tenure.
+    assert rec["total_interest_paid"] == 0.0
+
+
+def test_monthly_savings_override_sets_capacity():
+    agg = _agg(monthly_net_flow=10000.0, total_spending_cuts=0.0)
+    agg2 = _apply_what_if(agg, {"monthly_savings_override": 15000})
+    assert agg2["monthly_net_flow"] == 15000.0
+
+
+def test_what_if_keeps_only_scenario_a():
+    scenarios = [{"tag": "A"}, {"tag": "B"}, {"tag": "C"}]
+    kept = _apply_what_if_scenarios(scenarios, what_if=True)
+    assert [s["tag"] for s in kept] == ["A"]
+    kept_all = _apply_what_if_scenarios(scenarios, what_if=False)
+    assert len(kept_all) == 3

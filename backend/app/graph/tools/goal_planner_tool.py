@@ -1301,11 +1301,12 @@ def _plan_car(goal: dict, agg: dict) -> dict:
     net      = agg["monthly_net_flow"]
     cuts     = agg.get("total_spending_cuts", 0.0)
     tenure_months = max(1, int(_num(goal.get("loan_tenure_months"), 60)))
+    rate = _num(goal.get("loan_interest_rate_pct"), 10.0)
 
     scenarios, meta = _loan_scenarios(
         price=price, existing=existing, user_months=months, user_dp_pct=user_dp,
         surplus=net, cuts=cuts, agg=agg,
-        rate=10.0, tenure=tenure_months, down_label="down payment", asset="car",
+        rate=rate, tenure=tenure_months, down_label="down payment", asset="car",
         instrument="Recurring Deposit or Liquid MF for the down payment",
     )
     rec = next(s for s in scenarios if s["recommended"])
@@ -1372,11 +1373,12 @@ def _plan_house(goal: dict, agg: dict) -> dict:
     stamp     = round(prop * stamp_pct / 100.0, 2)
     net      = agg["monthly_net_flow"]
     cuts     = agg.get("total_spending_cuts", 0.0)
+    rate     = _num(goal.get("loan_interest_rate_pct"), 8.5)
 
     scenarios, meta = _loan_scenarios(
         price=prop, existing=existing, user_months=months, user_dp_pct=user_dp,
         surplus=net, cuts=cuts, agg=agg,
-        rate=8.5, tenure=240, extra_upfront=stamp,
+        rate=rate, tenure=240, extra_upfront=stamp,
         down_label="down payment", asset="home",
         instrument="Equity MF SIP (if >3 years away) + FD / RD closer to purchase",
     )
@@ -1424,11 +1426,12 @@ def _plan_education(goal: dict, agg: dict) -> dict:
     # Loan tenure is configurable (10/15/20-year are common); default to 15 years.
     tenure_years = max(1, int(_num(goal.get("loan_tenure_years"), 15)))
     tenure_months = tenure_years * 12
+    edu_rate = _num(goal.get("loan_interest_rate_pct"), 10.5)
 
     # Education program cost is FIXED — the lever is the financing mix, not a cheaper "price".
     scenarios, meta = _education_scenarios(
         cost=cost, existing=existing, user_months=months, self_pct=user_self_pct,
-        surplus=net, cuts=cuts, agg=agg, tenure=tenure_months,
+        surplus=net, cuts=cuts, agg=agg, tenure=tenure_months, rate=edu_rate,
     )
     rec = next(s for s in scenarios if s["recommended"])
     return {
@@ -1680,6 +1683,27 @@ def _plan_generic(goal: dict, agg: dict) -> dict:
                                 "gap": round(max(0.0, target - existing), 2)})
 
 
+def _apply_what_if(agg: dict, goal: dict) -> dict:
+    """Apply goal-level what-if overrides that affect the financial snapshot. Currently:
+    `monthly_savings_override` replaces the user's modelled monthly surplus (so feasibility,
+    the EMI cap and SIP all reflect the hypothetical saving rate)."""
+    override = goal.get("monthly_savings_override")
+    if override is not None:
+        val = _parse_amount(override)
+        if val is not None and val >= 0:
+            agg = {**agg, "monthly_net_flow": float(val), "total_spending_cuts": 0.0}
+    return agg
+
+
+def _apply_what_if_scenarios(scenarios: list, what_if: bool) -> list:
+    """For a what-if, keep ONLY scenario A (the single direct computation) — no B/C report."""
+    if what_if and scenarios:
+        head = dict(scenarios[0])
+        head["recommended"] = True
+        return [head]
+    return scenarios
+
+
 _GOAL_PLANNERS = {
     "gadget_purchase": _plan_gadget,
     "car":             _plan_car,
@@ -1755,10 +1779,21 @@ def goal_planner_tool(state: AgentState) -> dict:
     agg["goal_end_date"]      = goal_end_date.isoformat()
     agg["fd_list"]            = fds                                              # for naming sources by bank
 
+    # What-if overrides (e.g. "what if I save ₹15,000/mo") adjust the snapshot before planning.
+    what_if = bool(goal.get("what_if"))
+    agg = _apply_what_if(agg, goal)
+
     # Run type-specific planner
     goal_type = str(goal.get("goal_type") or "generic").lower().strip()
     planner   = _GOAL_PLANNERS.get(goal_type, _plan_generic)
     extra     = planner(goal, agg)
+
+    # A what-if returns a single direct computation (scenario A) — no A/B/C report.
+    if "scenarios" in extra:
+        extra["scenarios"] = _apply_what_if_scenarios(extra["scenarios"], what_if)
+    if what_if:
+        extra["what_if"] = True
+        extra["what_if_summary"] = goal.get("description") or task.get("sub_question") or "What-if analysis"
 
     if spend_ops:
         extra["spending_reduction_opportunities"] = spend_ops
@@ -1799,6 +1834,7 @@ def goal_planner_tool(state: AgentState) -> dict:
 
     data = {
         "goal_type": goal_type,
+        "what_if": what_if,
         "goal_description": goal.get("description"),
         "target_amount": target_amount,
         "timeline": goal.get("timeline"),
