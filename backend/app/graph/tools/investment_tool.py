@@ -46,6 +46,17 @@ def _monthly_nav_map(scheme_data: Optional[Dict]) -> Dict[str, float]:
     return out
 
 
+def _latest_nav(scheme_data: Optional[Dict]) -> Optional[float]:
+    """Most-recent NAV from an mfapi scheme-history payload (data is latest-first)."""
+    data = (scheme_data or {}).get("data") or []
+    if not data:
+        return None
+    try:
+        return float(data[0]["nav"])
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
 def _pct_returns(values: List[float]) -> List[float]:
     return [values[i] / values[i - 1] - 1.0 for i in range(1, len(values)) if values[i - 1]]
 

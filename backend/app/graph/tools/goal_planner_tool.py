@@ -414,11 +414,29 @@ _LIQUID_INV_KW = ("liquid", "debt", "fd", "fixed deposit", "savings", "money mar
                   "overnight", "ultra short", "short term", "arbitrage")
 
 
-def _liquid_fund_value(inv_data: Optional[Dict]) -> float:
-    """Value of liquid / debt mutual-fund holdings (redeemable in ~1 day) — near-cash."""
+def _liquid_fund_current_value(inv_data: Optional[Dict]) -> float:
+    """Current market value of liquid/debt holdings (near-cash). Uses each holding's
+    `current_value`, which the caller fills from LIVE NAV (see _fetch_investment_holdings)."""
     holdings = (inv_data or {}).get("holdings") or []
     return round(sum(float(h.get("current_value") or 0) for h in holdings
                      if any(kw in (h.get("name") or "").lower() for kw in _LIQUID_INV_KW)), 2)
+
+
+def _liquid_fund_value_at(inv_data: Optional[Dict], months: float,
+                          annual_return_pct: Optional[float] = None) -> float:
+    """Liquid-fund value at the goal horizon: current value grown at a debt-fund return for goals
+    longer than _RETURN_MIN_MONTHS; kept flat (liquid) for short goals."""
+    if annual_return_pct is None:
+        annual_return_pct = _SAVINGS_RETURN_PCT
+    current = _liquid_fund_current_value(inv_data)
+    if current <= 0 or months <= _RETURN_MIN_MONTHS or annual_return_pct <= 0:
+        return current
+    return round(_corpus_growth(current, 0.0, annual_return_pct / 100.0, int(round(months))), 2)
+
+
+# Back-compat alias: existing callers expect the goal-horizon value via `_liquid_fund_value`.
+def _liquid_fund_value(inv_data: Optional[Dict], months: float = 0.0) -> float:
+    return _liquid_fund_value_at(inv_data, months) if months else _liquid_fund_current_value(inv_data)
 
 
 # ── Evidence extraction helpers ───────────────────────────────────────────────
@@ -689,25 +707,36 @@ def _compute_category_breakdown(user_id: str, months_observed: int) -> List[Dict
 
 
 def _fetch_investment_holdings(user_id: str) -> Optional[Dict]:
-    """Lightweight portfolio snapshot at purchase value (no live NAV calls, for speed)."""
+    """Portfolio snapshot at LIVE NAV (falls back to purchase NAV per holding if the NAV
+    lookup fails). Liquid/debt holdings then reflect their true current market value."""
+    from app.graph.tools.investment_tool import _fetch_scheme_history, _latest_nav
+
     try:
-        if supabase_db:
-            resp = (supabase_db.table("investments")
-                    .select("scheme_name, quantity, purchase_nav")
-                    .eq("user_id", user_id).execute())
-            rows = resp.data or []
-            if not rows:
-                return None
-            holdings, total = [], 0.0
-            for r in rows:
-                val = float(r.get("quantity") or 0) * float(r.get("purchase_nav") or 0)
-                total += val
-                holdings.append({"name": r.get("scheme_name"), "current_value": round(val, 2)})
-            for h in holdings:
-                h["share_pct"] = round(h["current_value"] / total * 100, 2) if total > 0 else 0.0
-            # Values are cost basis (quantity * purchase_nav), NOT live NAV — flag it honestly.
-            return {"total_current": round(total, 2), "holdings": holdings,
-                    "valuation_basis": "purchase_cost"}
+        if not supabase_db:
+            return None
+        resp = (supabase_db.table("investments")
+                .select("scheme_name, scheme_code, quantity, purchase_nav")
+                .eq("user_id", user_id).execute())
+        rows = resp.data or []
+        if not rows:
+            return None
+        holdings, total = [], 0.0
+        for r in rows:
+            qty = float(r.get("quantity") or 0)
+            purch = float(r.get("purchase_nav") or 0)
+            nav = purch
+            code = r.get("scheme_code")
+            if code:
+                live = _latest_nav(_fetch_scheme_history(code))
+                if live and live > 0:
+                    nav = live
+            val = qty * nav
+            total += val
+            holdings.append({"name": r.get("scheme_name"), "current_value": round(val, 2)})
+        for h in holdings:
+            h["share_pct"] = round(h["current_value"] / total * 100, 2) if total > 0 else 0.0
+        return {"total_current": round(total, 2), "holdings": holdings,
+                "valuation_basis": "live_nav"}
     except Exception as exc:
         logger.warning("[goal_planner] investment fetch error: %s", exc)
     return None
@@ -1718,7 +1747,8 @@ def goal_planner_tool(state: AgentState) -> dict:
     fd_view = _fd_funding_view(fds, goal_end_date, agg["funding_selection"])
 
     agg["portfolio_value"]    = round(float((inv_data or {}).get("total_current") or 0.0), 2)
-    agg["liquid_fund_value"]  = _liquid_fund_value(inv_data)                     # near-cash MFs
+    agg["liquid_fund_value"]        = _liquid_fund_value(inv_data, _goal_months)   # value at goal end
+    agg["liquid_fund_current_value"] = _liquid_fund_current_value(inv_data)        # value today
     agg["fd_current_value"]   = round(sum(f.get("current_value") or 0.0 for f in fds), 2)  # held-to-maturity
     agg["fd_breakable_value"] = round(sum(f.get("break_value") or 0.0 for f in fds), 2)    # net if broken now
     agg["fd_funding_view"]    = fd_view                                         # per-FD value at goal end + selection

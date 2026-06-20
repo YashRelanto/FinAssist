@@ -169,3 +169,32 @@ def test_education_self_funded_feasibility_uses_surplus_plus_cuts():
     assert b["loan_amount"] > 0
     # Self-funded slice is minimal; its monthly saving must be within surplus+cuts to be feasible.
     assert b["feasible"] == (b["monthly_savings_needed"] <= 20000 + 1)
+
+
+from app.graph.tools.goal_planner_tool import (
+    _liquid_fund_current_value,
+    _liquid_fund_value_at,
+)
+
+
+def _inv(name, current_value):
+    return {"holdings": [{"name": name, "current_value": current_value}], "total_current": current_value}
+
+
+def test_liquid_fund_current_value_picks_liquid_holdings():
+    data = _inv("ABC Liquid Fund Direct Growth", 104000.0)
+    assert _liquid_fund_current_value(data) == 104000.0
+
+
+def test_liquid_fund_current_value_ignores_equity():
+    data = _inv("XYZ Bluechip Equity Fund", 104000.0)
+    assert _liquid_fund_current_value(data) == 0.0
+
+
+def test_liquid_fund_value_at_grows_for_long_horizon():
+    data = _inv("ABC Liquid Fund", 100000.0)
+    # 24 months at 7% p.a. > current value (grows); short horizon ~= current.
+    grown = _liquid_fund_value_at(data, 24, annual_return_pct=7.0)
+    flat = _liquid_fund_value_at(data, 6, annual_return_pct=7.0)
+    assert grown > 100000.0
+    assert flat == 100000.0          # <= 12 months: kept liquid, no growth assumed
