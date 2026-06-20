@@ -1049,35 +1049,29 @@ def _loan_scenarios(*, price: float, existing: float, user_months: float, user_d
 
 
 def _savings_scenarios(*, target: float, existing: float, user_months: float,
-                       surplus: float, cuts: float, instrument: str, asset: str = "goal",
-                       annual_return_pct: float = _SAVINGS_RETURN_PCT,
-                       deployable: float = 0.0) -> tuple:
+                       surplus: float, cuts: float, instrument: str, agg: dict,
+                       asset: str = "goal",
+                       annual_return_pct: float = _SAVINGS_RETURN_PCT) -> tuple:
     """
-    Three DYNAMIC scenarios for a cash (no-loan) goal, respecting the user's timeline.
-    Money invested for >12 months GROWS, so the monthly contribution needed for long goals is
-    the SIP amount (lower than a flat gap/months). Short goals (<=12 months) and 0%-return goals
-    (e.g. an emergency fund kept liquid) stay linear.
-
-    `deployable` is the user's spare assets (idle bank cash + liquid funds + breakable FDs). It is
-    used as a one-time head-start that REDUCES the gap to save for — so these assets genuinely cut
-    the monthly commitment on every cash goal. Only the amount the goal needs is ever drawn.
-      A 'Your Plan'   — your timeline (no assets deployed — judged honestly).
-      B 'Recommended' — deploy spare assets + keep the timeline if it fits; else stretch MODESTLY.
-      C 'Right-Size'  — the largest target reachable within the original timeline (deploying assets).
+    Three scenarios for a cash (no-loan) goal, respecting the user's timeline.
+      A 'Your Plan'   — your timeline, funded only by your own existing savings + monthly saving.
+      B 'Recommended' — deploy MINIMAL least-disruptive assets to close the gap, keep the timeline
+                        if it fits; else stretch MODESTLY.
+      C 'Right-Size'  — the largest target reachable within the original timeline using the FULL pool.
+    Feasibility projects balance growth: existing + deployed + saving × months (with returns for
+    goals > 12 months), so a large idle balance makes a goal feasible with little/no monthly saving.
     """
     surplus = max(surplus, 0.0)
     cuts = max(cuts, 0.0)
-    deployable = max(0.0, deployable)
+    deployable = _deployable(agg)
     user_months = max(1, int(round(user_months)))
-    cap = surplus + cuts
-    c = cap * _CAP_UTIL
+    cap = surplus + cuts                    # full sustainable monthly saving capacity
     r = annual_return_pct / 100.0
     grows = annual_return_pct > 0
     cuts_note = f" (with ₹{round(cuts):,}/mo spending cuts)" if cuts > 0 else ""
     max_months = _max_stretch_months(user_months)
 
     def _monthly_for(target_amt, months, base):
-        """Monthly contribution needed to reach target_amt from `base` (existing + deployed) over `months`."""
         if months > _RETURN_MIN_MONTHS and grows:
             base_fv = _corpus_growth(base, 0.0, r, months)
             need = max(0.0, target_amt - base_fv)
@@ -1085,14 +1079,13 @@ def _savings_scenarios(*, target: float, existing: float, user_months: float,
         return round(max(0.0, target_amt - base) / months, 2)
 
     def _reachable(months, base):
-        """Largest target reachable from `base` over `months` at full capacity c."""
         if months > _RETURN_MIN_MONTHS and grows:
-            return _corpus_growth(base, c, r, months)
-        return base + c * months
+            return _corpus_growth(base, cap, r, months)
+        return base + cap * months
 
-    def build(tag, label, recommended, target_amt, months, capacity, deploy):
+    def build(tag, label, recommended, target_amt, months, deployment):
         months = max(1, int(months))
-        deploy = round(min(max(0.0, deploy), max(0.0, target_amt - existing)), 2)  # only what's needed
+        deploy = deployment["deployed_total"]
         base = existing + deploy
         save = _monthly_for(target_amt, months, base)
         return {
@@ -1101,50 +1094,52 @@ def _savings_scenarios(*, target: float, existing: float, user_months: float,
             "monthly_savings_needed": save,
             "target_amount": round(target_amt, 2),
             "gap": round(max(0.0, target_amt - existing), 2),
-            "deployed_now": deploy,                       # spare assets put in up-front (incl. broken FDs)
+            "deployed_now": round(deploy, 2),
+            "deployment": deployment,
             "assumed_annual_return_pct": annual_return_pct,
-            # Only ~70% of the monthly capacity may be committed — keep a lifestyle cushion.
-            "feasible": save <= capacity * _CAP_UTIL + 1,
-            "shortfall_per_month": round(max(0.0, save - capacity * _CAP_UTIL), 2),
+            "feasible": save <= cap + 1,
+            "shortfall_per_month": round(max(0.0, save - cap), 2),
             "recommended_instrument": instrument,
         }
 
-    # A — your plan over your timeline, DEPLOYING available assets (bank cash + liquid funds +
-    # breakable FDs), judged honestly against the monthly surplus alone.
-    sc_a = build("A", f"Your Plan — {user_months} months", False, target, user_months, surplus, deployable)
+    zero_deploy = _minimal_deployment(0.0, agg)
 
-    # B — deploy spare assets, keep the timeline if it fits; else stretch MODESTLY (capped ~1.5x)
-    deploy_b = round(min(deployable, max(0.0, target - existing)), 2)
-    base_b = existing + deploy_b
+    # A — your plan, no asset deployment.
+    sc_a = build("A", f"Your Plan — {user_months} months", False, target, user_months, zero_deploy)
+
+    # B — deploy MINIMAL assets to close the gap the user can't self-fund over the timeline.
+    self_fundable_b = _reachable(user_months, existing)
+    gap_b = max(0.0, target - self_fundable_b)
+    deploy_b = _minimal_deployment(gap_b, agg)
     months_b = user_months
-    while c > 0 and _monthly_for(target, months_b, base_b) > c and months_b < max_months:
+    while cap > 0 and _monthly_for(target, months_b, existing + deploy_b["deployed_total"]) > cap and months_b < max_months:
         months_b += 1
-    deploy_note = f", deploy {_inr(deploy_b)} now" if deploy_b > 0 else ""
+    deploy_note = f", deploy {_inr(deploy_b['deployed_total'])} now" if deploy_b["deployed_total"] > 0 else ""
     if months_b == user_months:
         label_b = f"Keep this target — your {user_months}-month timeline{deploy_note}{cuts_note}"
     else:
-        label_b = f"Keep this target — {months_b} months (a {months_b-user_months}-month extension){deploy_note}{cuts_note}"
-    sc_b = build("B", label_b, False, target, months_b, cap, deployable)
+        label_b = f"Keep this target — {months_b} months (a {months_b - user_months}-month extension){deploy_note}{cuts_note}"
+    sc_b = build("B", label_b, False, target, months_b, deploy_b)
 
-    # C — right-size the target to the original timeline (or reach sooner if it already fits)
+    # C — right-size to the original timeline (or reach sooner if it already fits) using the full pool.
+    full_deploy = _minimal_deployment(deployable, agg)
     reachable = _reachable(user_months, existing + deployable)
     affordable_target = round(min(reachable, target), 2)
     out_of_reach = target > 0 and affordable_target < target * _TARGET_FLOOR_FRAC
     if reachable >= target * 0.98:
         months_fast = user_months
-        while c > 0 and _monthly_for(target, months_fast, existing + deployable) <= c and months_fast > 1:
+        while cap > 0 and _monthly_for(target, months_fast, existing + deployable) <= cap and months_fast > 1:
             months_fast -= 1
-        months_fast = min(months_fast + 1, user_months)  # smallest months that still fits
+        months_fast = min(months_fast + 1, user_months)
         sc_c = build("C", f"Reach Sooner — same target in {months_fast} months{cuts_note}",
-                     False, target, months_fast, cap, deployable)
+                     False, target, months_fast, full_deploy)
     elif out_of_reach:
         sc_c = build("C", f"Most you can save — {_inr(affordable_target)} (your {_inr(target)} target is out of reach in {user_months} months){cuts_note}",
-                     False, affordable_target, user_months, cap, deployable)
+                     False, affordable_target, user_months, full_deploy)
     else:
         sc_c = build("C", f"Right-Size — a {_inr(affordable_target)} target fits your {user_months}-month timeline{cuts_note}",
-                     False, affordable_target, user_months, cap, deployable)
+                     False, affordable_target, user_months, full_deploy)
 
-    # Recommend whichever actually works within the user's (modestly stretched) timeline.
     (sc_b if sc_b["feasible"] else sc_c)["recommended"] = True
     meta = {"max_financeable_target": affordable_target, "target_out_of_reach": bool(out_of_reach)}
     return [sc_a, sc_b, sc_c], meta
@@ -1244,7 +1239,7 @@ def _savings_goal(goal: dict, agg: dict, *, target: float, existing: float, mont
     scenarios, meta = _savings_scenarios(
         target=target, existing=existing, user_months=months,
         surplus=agg["monthly_net_flow"], cuts=agg.get("total_spending_cuts", 0.0),
-        deployable=_deployable(agg), instrument=instrument, annual_return_pct=annual_return_pct,
+        agg=agg, instrument=instrument, annual_return_pct=annual_return_pct,
     )
     rec = next(s for s in scenarios if s["recommended"])
     return {

@@ -120,3 +120,36 @@ def test_loan_emi_cap_uses_surplus_plus_cuts_not_surplus_alone():
     b = scenarios[1]
     assert b["estimated_emi"] <= 14000 + 1
     assert b["feasible"] is True
+
+
+from app.graph.tools.goal_planner_tool import _savings_scenarios
+
+
+def test_savings_balance_growth_makes_goal_feasible_via_saving():
+    # Target 200k reachable by saving alone (cap 20k * 24 = 480k) → feasible WITHOUT touching
+    # assets (minimal deployment: none needed). This is the balance-growth feasibility rule.
+    agg = _agg(total_current_balance=1500000.0)
+    scenarios, _meta = _savings_scenarios(
+        target=200000.0, existing=0.0, user_months=24, surplus=18000.0, cuts=2000.0,
+        instrument="Liquid MF", agg=agg, annual_return_pct=0.0,
+    )
+    a, b = scenarios[0], scenarios[1]
+    assert a["deployment"]["deployed_total"] == 0.0      # A deploys nothing
+    assert b["deployment"]["deployed_total"] == 0.0      # saving suffices → no assets disturbed
+    assert b["feasible"] is True
+    assert 0 < b["monthly_savings_needed"] <= 20000
+
+
+def test_savings_scenario_b_minimal_deploy_only_the_gap():
+    # No surplus, existing 150k, target 200k → falling short by 50k → redeem EXACTLY 50k from a
+    # 60k liquid fund (your Q2 example: deploy the shortfall, not everything).
+    agg = _agg(liquid_fund_value=60000.0, total_current_balance=0.0)
+    scenarios, _meta = _savings_scenarios(
+        target=200000.0, existing=150000.0, user_months=12, surplus=0.0, cuts=0.0,
+        instrument="Liquid MF", agg=agg, annual_return_pct=0.0,
+    )
+    b = scenarios[1]
+    assert b["deployment"]["from_liquid"] == 50000.0
+    assert b["deployment"]["from_fds_broken"] == 0.0
+    assert b["monthly_savings_needed"] == 0.0
+    assert b["feasible"] is True
