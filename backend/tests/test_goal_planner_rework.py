@@ -230,3 +230,28 @@ def test_what_if_keeps_only_scenario_a():
     assert [s["tag"] for s in kept] == ["A"]
     kept_all = _apply_what_if_scenarios(scenarios, what_if=False)
     assert len(kept_all) == 3
+
+
+from app.graph.nodes.answer_node import _funding_split_pie, _select_goal_artifacts
+
+
+def test_funding_split_pie_has_loan_and_self_funded_slices():
+    g = {"funding_breakdown": {"loan": 700000.0, "bank": 150000.0, "fd": 100000.0, "liquid": 50000.0}}
+    arts = _funding_split_pie(g)
+    assert len(arts) == 1
+    pie = arts[0]
+    assert pie["chart_type"] == "pie"
+    labels = {d["label"] for d in pie["data"]}
+    assert {"Loan-financed", "Bank cash", "Fixed deposits", "Liquid funds"} == labels
+
+
+def test_funding_split_pie_omits_zero_slices():
+    g = {"funding_breakdown": {"loan": 0.0, "bank": 200000.0, "fd": 0.0, "liquid": 0.0}}
+    arts = _funding_split_pie(g)
+    labels = {d["label"] for d in arts[0]["data"]}
+    assert labels == {"Bank cash"}
+
+
+def test_select_goal_artifacts_empty_on_what_if():
+    g = {"what_if": True, "scenarios": [{"tag": "A", "monthly_savings_needed": 5000}]}
+    assert _select_goal_artifacts("car", g) == []

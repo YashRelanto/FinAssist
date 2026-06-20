@@ -1803,6 +1803,16 @@ def goal_planner_tool(state: AgentState) -> dict:
     # the answer is transparent that some funding may require breaking an FD.
     extra["funding_sources"] = _funding_sources(agg)
     extra["funding_selection_applied"] = agg["funding_selection"]
+
+    # Compact self-funded-vs-loan split for the funding pie (answer_node).
+    _rec = next((s for s in (extra.get("scenarios") or []) if s.get("recommended")), None) or {}
+    _fs = extra["funding_sources"]
+    extra["funding_breakdown"] = {
+        "loan": round(float(_rec.get("loan_amount") or 0.0), 2),
+        "bank": round(float(_fs.get("from_bank_savings") or 0.0), 2),
+        "fd": round(float(_fs.get("from_fixed_deposits") or 0.0), 2),
+        "liquid": round(float(_fs.get("from_liquid_funds") or 0.0), 2),
+    }
     if fds:
         extra["fixed_deposits"] = fd_view              # per-FD value at goal end + selection
         extra["fixed_deposits_summary"] = {

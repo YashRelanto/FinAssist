@@ -185,6 +185,15 @@ def _funding_sources_bar(g: Dict[str, Any]) -> List[Dict]:
     return [_chart("bar", "Your Available Funds", "label", "amount", data)] if len(data) >= 2 else []
 
 
+def _funding_split_pie(g: Dict[str, Any]) -> List[Dict]:
+    """Pie: how the goal is funded — Loan-financed vs self-funded sources (Bank / FD / Liquid)."""
+    fb = g.get("funding_breakdown") or {}
+    pairs = [("Loan-financed", fb.get("loan")), ("Bank cash", fb.get("bank")),
+             ("Fixed deposits", fb.get("fd")), ("Liquid funds", fb.get("liquid"))]
+    data = [{"label": lbl, "value": round(float(v), 2)} for lbl, v in pairs if v and float(v) > 0]
+    return [_chart("pie", "How This Goal Is Funded", "label", "value", data)] if data else []
+
+
 def _goal_facts_for_captions(g: Dict[str, Any]) -> Dict[str, Any]:
     """Compact facts that let the caption model explain what each number means."""
     from app.graph.tools.goal_planner_tool import _attach_inr
@@ -249,6 +258,8 @@ def _attach_chart_captions(artifacts: List[Dict], g: Dict[str, Any]) -> None:
 
 def _select_goal_artifacts(goal_type: str, g: Dict[str, Any]) -> List[Dict]:
     """Build 2-3 charts for a goal planning result — all from goal_planner data."""
+    if g.get("what_if"):                      # what-ifs return a concise answer, no charts
+        return []
     charts: List[Dict] = []
     scenarios = g.get("scenarios") or []
 
@@ -256,8 +267,8 @@ def _select_goal_artifacts(goal_type: str, g: Dict[str, Any]) -> List[Dict]:
     charts += _scenarios_comparison_bar(scenarios)
     # Chart 2: Budget impact (universal)
     charts += _budget_impact_bar(g)
-    # Chart 3: Where the funds come from (bank / liquid / FDs / equity) — the funding context.
-    charts += _funding_sources_bar(g)
+    # Chart 3: Self-funded vs loan-financed split (Bank / FD / Liquid slices).
+    charts += _funding_split_pie(g)
 
     # If we still have fewer than 3, fill with a goal-type-specific chart.
     if len(charts) < 3:
