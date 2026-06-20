@@ -868,6 +868,69 @@ def _funding_sources(agg: dict) -> Dict[str, Any]:
     }
 
 
+def _max_sustainable_save(agg: dict) -> float:
+    """Most the user can be asked to save per month: current surplus + reclaimable category cuts.
+    The saving phase may use this in full; the permanent EMI is capped at 70% of it (see _loan_scenarios)."""
+    return round(max(0.0, agg.get("monthly_net_flow", 0.0))
+                 + max(0.0, agg.get("total_spending_cuts", 0.0)), 2)
+
+
+def _minimal_deployment(gap: float, agg: dict) -> dict:
+    """Cover `gap` with the LEAST-disruptive assets, in order (Scenario B helper):
+       1. FDs maturing by the goal date  (free — already becoming cash),
+       2. liquid/debt funds              (partial redemption to the EXACT amount needed),
+       3. bank cash                      (keeping the chosen cushion, only what's needed),
+       4. a still-locked FD broken ONLY if still short — the one whose usable value is CLOSEST
+          to the remaining need (minimise forfeited interest; never break everything).
+    """
+    gap = max(0.0, round(gap, 2))
+    used = {"from_fds_matured": 0.0, "from_liquid": 0.0, "from_bank": 0.0,
+            "from_fds_broken": 0.0, "fds_broken": [], "penalty_paid": 0.0}
+    remaining = gap
+    view = agg.get("fd_funding_view") or []
+
+    for fd in view:                                   # 1. matured-by-goal-end FDs (free)
+        if remaining <= 0:
+            break
+        if fd.get("matures_by_goal_end"):
+            take = min(remaining, float(fd.get("usable_value") or 0.0))
+            used["from_fds_matured"] += take
+            remaining -= take
+
+    if remaining > 0:                                 # 2. liquid/debt funds (exact partial)
+        take = min(remaining, float(agg.get("liquid_fund_value") or 0.0))
+        used["from_liquid"] += take
+        remaining -= take
+
+    if remaining > 0:                                 # 3. bank cash (keep cushion)
+        sel = agg.get("funding_selection") or {}
+        pct = float(sel.get("bank_use_pct", (1.0 - _BANK_RETAIN_FRAC) * 100.0))
+        bank_avail = max(0.0, float(agg.get("total_current_balance") or 0.0) * pct / 100.0)
+        take = min(remaining, bank_avail)
+        used["from_bank"] += take
+        remaining -= take
+
+    if remaining > 0:                                 # 4. break the FD closest to the remaining need
+        locked = [fd for fd in view if not fd.get("matures_by_goal_end")]
+        locked.sort(key=lambda fd: abs(float(fd.get("usable_value") or 0.0) - remaining))
+        for fd in locked:
+            if remaining <= 0:
+                break
+            take = min(remaining, float(fd.get("usable_value") or 0.0))
+            if take <= 0:
+                continue
+            used["from_fds_broken"] += take
+            used["penalty_paid"] += float(fd.get("penalty_if_broken") or 0.0)
+            used["fds_broken"].append(fd.get("bank_name") or fd.get("label") or "FD")
+            remaining -= take
+
+    for k in ("from_fds_matured", "from_liquid", "from_bank", "from_fds_broken", "penalty_paid"):
+        used[k] = round(used[k], 2)
+    used["deployed_total"] = round(gap - remaining, 2)
+    used["shortfall_uncovered"] = round(max(0.0, remaining), 2)
+    return used
+
+
 def _loan_scenarios(*, price: float, existing: float, user_months: float, user_dp_pct: float,
                     surplus: float, cuts: float, rate: float, tenure: int,
                     deployable: float = 0.0,
