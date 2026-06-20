@@ -933,36 +933,32 @@ def _minimal_deployment(gap: float, agg: dict) -> dict:
 
 def _loan_scenarios(*, price: float, existing: float, user_months: float, user_dp_pct: float,
                     surplus: float, cuts: float, rate: float, tenure: int,
-                    deployable: float = 0.0,
+                    agg: dict,
                     extra_upfront: float = 0.0, down_label: str = "down payment",
                     asset: str = "purchase",
-                    instrument: str = "Recurring Deposit or Liquid MF") -> List[Dict]:
+                    instrument: str = "Recurring Deposit or Liquid MF") -> tuple:
     """
-    Three DYNAMIC scenarios that RESPECT the user's timeline. Levers tried in order:
-      1. deploy idle liquid funds as a lump-sum head-start on the down payment;
-      2. raise the down payment % so the EMI fits the monthly capacity;
-      3. keep the timeline; stretch only MODESTLY (≤1.5x) if no down payment works;
-      4. if it still doesn't fit, right-size the purchase.
-        A 'Your Plan'   — exactly the user's inputs (no fund deployment, judged honestly).
-        B 'Recommended' — SOLVED to be feasible: deploys spare funds + adjusts the down payment,
-                          keeping the timeline (or a modest extension). Always shows the down
-                          payment split, EMI, total interest and total cost.
-        C 'Right-Size'  — biggest purchase that fits the ORIGINAL timeline (or "buy sooner").
+    Three scenarios that RESPECT the user's timeline.
+      A 'Your Plan'   — EXACTLY the user's inputs, funded only by their own existing savings +
+                        monthly saving. No asset deployment — judged honestly.
+      B 'Recommended' — keep the timeline; raise the down payment just enough that the EMI fits
+                        70% of the user's max sustainable saving, funding the extra purely by
+                        MINIMAL least-disruptive asset deployment (never inflating the saving).
+      C 'Right-Size'  — biggest purchase that fits the timeline using the FULL deployable pool.
+    EMI affordability cap = 0.70 × (surplus + cuts): the permanent EMI may use up to 70% of the
+    most the user can sustainably save (their current surplus PLUS reclaimable category cuts).
     """
     surplus = max(surplus, 0.0)
     cuts = max(cuts, 0.0)
     price = max(price, 0.0)
-    deployable = max(deployable, 0.0)
     user_months = max(1, int(round(user_months)))
-    cap = surplus + cuts                      # SAVING-phase capacity (short-term cuts are OK)
-    # The EMI runs for years, so it must be sustainable from the BASE surplus alone — we do NOT
-    # assume the user permanently slashes spending to pay an EMI. (Cuts help the down payment, not
-    # the long-term EMI.)
-    emi_cap = surplus * _CAP_UTIL
+    cap = surplus + cuts                       # full sustainable monthly saving capacity
+    emi_cap = cap * _CAP_UTIL                   # permanent EMI: 70% of that capacity
+    deployable = _deployable(agg)               # full pool (for Scenario C only)
     cuts_note = f" (with ₹{round(cuts):,}/mo spending cuts)" if cuts > 0 else ""
     max_months = _max_stretch_months(user_months)
 
-    def make(tag, label, recommended, dp_pct, months, capacity, P, head_start):
+    def make(tag, label, recommended, dp_pct, months, P, head_start, deployment):
         dp_pct = min(max(dp_pct, 0.0), 100.0)
         dp_amt = round(P * dp_pct / 100.0, 2)
         loan = round(max(0.0, P - dp_amt), 2)
@@ -970,8 +966,8 @@ def _loan_scenarios(*, price: float, existing: float, user_months: float, user_d
         months = max(1, int(months))
         upfront_need = dp_amt + extra_upfront
         available = existing + head_start
-        lump = round(min(upfront_need, available), 2)          # funded now from spare cash/savings
-        to_save = round(max(0.0, upfront_need - lump), 2)      # the rest, saved monthly
+        lump = round(min(upfront_need, available), 2)        # funded now from existing + deployed
+        to_save = round(max(0.0, upfront_need - lump), 2)    # the rest, saved monthly
         save = round(to_save / months, 2)
         interest = round(emi * tenure - loan, 2) if loan > 0 else 0.0
         return {
@@ -989,79 +985,64 @@ def _loan_scenarios(*, price: float, existing: float, user_months: float, user_d
             "total_cost_of_ownership": round(P + interest + extra_upfront, 2),
             "timeline_months": months,
             "monthly_savings_needed": save,
-            # The down-payment SAVING must fit ~70% of the saving capacity (surplus + short-term
-            # cuts); the post-purchase EMI must fit ~70% of the BASE surplus (emi_cap) — a plan
-            # whose EMI eats the whole surplus is NOT affordable, even with cuts.
-            "feasible": (save <= capacity * _CAP_UTIL + 1) and (emi <= emi_cap + 1),
-            "shortfall_per_month": round(max(0.0, save - capacity * _CAP_UTIL), 2),
-            "emi_fits_base_surplus": emi <= emi_cap + 1,
+            # Saving phase may use the FULL sustainable capacity; the EMI must fit 70% of it.
+            "feasible": (save <= cap + 1) and (emi <= emi_cap + 1),
+            "shortfall_per_month": round(max(0.0, save - cap), 2),
+            "emi_fits_capacity": emi <= emi_cap + 1,
+            "deployment": deployment,
             "recommended_instrument": instrument,
         }
 
-    def feasible_band(months, capacity, available):
-        """[dp_lo, dp_hi] of down-payment % that keeps the EMI within base surplus AND the monthly
-        saving within the saving capacity, after using `available` (existing + spare funds) up front."""
-        c = capacity * _CAP_UTIL                          # this month's saving allowance
-        max_loan = _inv_emi(emi_cap, rate, tenure)        # EMI must fit BASE surplus, not surplus+cuts
-        dp_lo = max(0.0, (price - max_loan) / price * 100.0) if price else 0.0                       # EMI fits
-        dp_hi = ((c * months + available - extra_upfront) / price * 100.0) if price else 100.0       # saving fits
-        return dp_lo, min(100.0, dp_hi)
+    zero_deploy = _minimal_deployment(0.0, agg)
 
-    # A — user's exact plan (their down-payment % and timeline), DEPLOYING their available assets
-    # (idle bank cash + liquid funds + breakable FDs) toward the upfront, judged honestly against
-    # the base surplus. This reflects "use my money / break my FDs" in the user's own plan.
+    # A — the user's exact plan, no asset deployment.
     sc_a = make("A", f"Your Plan — {user_dp_pct:.0f}% {down_label} over {user_months} months",
-                False, user_dp_pct, user_months, surplus, price, deployable)
+                False, user_dp_pct, user_months, price, 0.0, zero_deploy)
 
-    # B — SOLVE for feasibility: deploy spare funds, raise the down payment so the EMI fits, keep
-    #     the timeline (modest stretch only if no down payment works at all).
-    avail_b = existing + deployable
+    # B — raise the down payment to the smallest % whose EMI fits emi_cap, funding the extra by
+    #     MINIMAL asset deployment. Stretch the timeline only if even that can't make saving fit.
+    max_loan = _inv_emi(emi_cap, rate, tenure)
+    dp_lo_pct = max(user_dp_pct, (price - max_loan) / price * 100.0 if price else 0.0)
+    dp_lo_pct = min(100.0, dp_lo_pct)
+    dp_b_amt = round(price * dp_lo_pct / 100.0, 2)
+    # What the user can fund themselves over the timeline (existing + sustainable saving):
+    self_fundable = existing + cap * user_months
+    shortfall_b = max(0.0, dp_b_amt + extra_upfront - self_fundable)
+    deploy_b = _minimal_deployment(shortfall_b, agg)
     months_b = user_months
-    dp_lo, dp_hi = feasible_band(months_b, cap, avail_b)
-    while dp_lo > dp_hi + 0.01 and months_b < max_months:
+    sc_b = make("B", "", False, dp_lo_pct, months_b, price,
+                deploy_b["deployed_total"], deploy_b)
+    # If the down-payment saving still doesn't fit, extend the timeline modestly.
+    while not sc_b["feasible"] and months_b < max_months and sc_b["monthly_savings_needed"] > cap:
         months_b = min(months_b + 3, max_months)
-        dp_lo, dp_hi = feasible_band(months_b, cap, avail_b)
-    if dp_lo <= dp_hi + 0.01:
-        dp_b = min(max(user_dp_pct, dp_lo), dp_hi)        # honour the user's % unless EMI forces higher
-        deploy_note = f", deploy {_inr(deployable)} now" if deployable > 0 else ""
-        ext = "" if months_b == user_months else f" ({months_b-user_months}-month extension)"
-        label_b = f"Keep this {asset} — {dp_b:.0f}% {down_label} over {months_b} months{ext}{deploy_note}{cuts_note}"
-        sc_b = make("B", label_b, False, dp_b, months_b, cap, price, deployable)
-    else:
-        dp_b = min(100.0, max(user_dp_pct, dp_lo))
-        sc_b = make("B", f"Keep this {asset} — a stretch even at {max_months} months on your budget{cuts_note}",
-                    False, dp_b, max_months, cap, price, deployable)
+        sc_b = make("B", "", False, dp_lo_pct, months_b, price,
+                    deploy_b["deployed_total"], deploy_b)
+    deploy_note = f", deploy {_inr(deploy_b['deployed_total'])} now" if deploy_b["deployed_total"] > 0 else ""
+    ext = "" if months_b == user_months else f" ({months_b - user_months}-month extension)"
+    sc_b["label"] = f"Keep this {asset} — {dp_lo_pct:.0f}% {down_label} over {months_b} months{ext}{deploy_note}{cuts_note}"
 
-    # C — RIGHT-SIZE / MAX FINANCEABLE: the biggest purchase that fits, putting ALL deployable
-    # funds (idle cash, liquid funds AND broken FDs) toward the down payment, PLUS the largest loan
-    # whose EMI fits the base surplus. Maximising the down payment with assets (incl. breaking FDs)
-    # shrinks the loan, so a bigger car becomes affordable than at the user's stated down-payment %.
-    dp_frac = min(max(user_dp_pct / 100.0, 0.0), 1.0)
-    c = cap * _CAP_UTIL
+    # C — biggest purchase that fits: ALL deployable assets toward the down payment PLUS the
+    # largest EMI-affordable loan.
     avail_c = existing + deployable
-    max_loan = _inv_emi(emi_cap, rate, tenure)                          # biggest EMI-affordable loan
-    down_avail = max(0.0, avail_c + c * user_months - extra_upfront)    # most we can put down
+    down_avail = max(0.0, avail_c + cap * user_months - extra_upfront)
     price_c = down_avail + max_loan
     price_c_capped = min(price_c, price)
     out_of_reach = price > 0 and price_c < price * _TARGET_FLOOR_FRAC
-    # Down-payment % for the right-sized car: assets first, loan covers the rest. Keep it UNROUNDED
-    # so the loan = exactly max_loan and the EMI lands on emi_cap (rounding the % would push a few
-    # hundred rupees into the loan and trip the EMI cap). make() rounds the % for display.
     dp_pct_c = min(100.0, down_avail / price_c_capped * 100.0) if price_c_capped > 0 else user_dp_pct
-    deploy_c = f" by deploying {_inr(deployable)} of savings/investments now" if deployable > 0 else ""
+    deploy_c_dict = _minimal_deployment(down_avail, agg)
+    deploy_c = f" by deploying {_inr(deploy_c_dict['deployed_total'])} now" if deploy_c_dict["deployed_total"] > 0 else ""
     if price_c >= price * 0.98:
-        need = max(0.0, price * dp_frac + extra_upfront - avail_c)
-        months_fast = max(1, math.ceil(need / c)) if c > 0 else user_months
+        need = max(0.0, price * min(max(user_dp_pct / 100.0, 0.0), 1.0) + extra_upfront - avail_c)
+        months_fast = max(1, math.ceil(need / cap)) if cap > 0 else user_months
         sc_c = make("C", f"Buy Sooner — same {asset} in {months_fast} months{cuts_note}",
-                    False, user_dp_pct, months_fast, cap, price, deployable)
+                    False, user_dp_pct, months_fast, price, deploy_c_dict["deployed_total"], deploy_c_dict)
     elif out_of_reach:
         sc_c = make("C", f"Most you can finance — a {_inr(price_c_capped)} {asset}{deploy_c} (your {_inr(price)} target is out of reach in {user_months} months){cuts_note}",
-                    False, dp_pct_c, user_months, cap, price_c_capped, deployable)
+                    False, dp_pct_c, user_months, price_c_capped, deploy_c_dict["deployed_total"], deploy_c_dict)
     else:
         sc_c = make("C", f"Right-Size — a {_inr(price_c_capped)} {asset} fits your {user_months}-month timeline{deploy_c}{cuts_note}",
-                    False, dp_pct_c, user_months, cap, price_c_capped, deployable)
+                    False, dp_pct_c, user_months, price_c_capped, deploy_c_dict["deployed_total"], deploy_c_dict)
 
-    # Recommend the plan that actually WORKS.
     (sc_b if sc_b["feasible"] else sc_c)["recommended"] = True
     meta = {"max_financeable_target": round(price_c_capped, 2), "target_out_of_reach": bool(out_of_reach)}
     return [sc_a, sc_b, sc_c], meta
@@ -1300,7 +1281,7 @@ def _plan_car(goal: dict, agg: dict) -> dict:
 
     scenarios, meta = _loan_scenarios(
         price=price, existing=existing, user_months=months, user_dp_pct=user_dp,
-        surplus=net, cuts=cuts, deployable=_deployable(agg),
+        surplus=net, cuts=cuts, agg=agg,
         rate=10.0, tenure=tenure_months, down_label="down payment", asset="car",
         instrument="Recurring Deposit or Liquid MF for the down payment",
     )
@@ -1371,7 +1352,7 @@ def _plan_house(goal: dict, agg: dict) -> dict:
 
     scenarios, meta = _loan_scenarios(
         price=prop, existing=existing, user_months=months, user_dp_pct=user_dp,
-        surplus=net, cuts=cuts, deployable=_deployable(agg),
+        surplus=net, cuts=cuts, agg=agg,
         rate=8.5, tenure=240, extra_upfront=stamp,
         down_label="down payment", asset="home",
         instrument="Equity MF SIP (if >3 years away) + FD / RD closer to purchase",

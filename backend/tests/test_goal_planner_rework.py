@@ -74,3 +74,49 @@ def test_minimal_deployment_uses_matured_fd_free_before_breaking():
     assert out["from_fds_matured"] == 50000.0
     assert out["from_fds_broken"] == 0.0
     assert out["penalty_paid"] == 0.0
+
+
+from app.graph.tools.goal_planner_tool import _loan_scenarios
+
+
+def test_loan_scenario_a_is_pure_user_plan_no_asset_deployment():
+    # User: 30% down, 18 months, no existing savings, big idle bank balance available.
+    agg = _agg(total_current_balance=1500000.0)
+    scenarios, _meta = _loan_scenarios(
+        price=1000000.0, existing=0.0, user_months=18, user_dp_pct=30.0,
+        surplus=18000.0, cuts=2000.0, rate=10.0, tenure=60, agg=agg, asset="car",
+    )
+    a = scenarios[0]
+    assert a["tag"] == "A"
+    assert a["down_payment_pct"] == 30.0                 # exactly the user's choice, unchanged
+    assert a["down_payment_from_existing"] == 0.0        # A deploys NO assets
+    assert a["deployment"]["deployed_total"] == 0.0
+
+
+def test_loan_scenario_b_deploys_minimal_assets_to_fit_emi():
+    # Short 6-month timeline: saving alone (cap 20k * 6 = 120k) can't reach the EMI-fitting down
+    # payment, so B deploys minimal liquid-fund assets to bridge the gap.
+    agg = _agg(liquid_fund_value=400000.0, total_current_balance=0.0)
+    scenarios, _meta = _loan_scenarios(
+        price=1000000.0, existing=0.0, user_months=6, user_dp_pct=30.0,
+        surplus=18000.0, cuts=2000.0, rate=10.0, tenure=60, agg=agg, asset="car",
+    )
+    b = scenarios[1]
+    assert b["tag"] == "B"
+    assert b["deployment"]["deployed_total"] > 0          # B deploys assets to bridge the gap
+    assert b["deployment"]["from_liquid"] > 0             # ...from the liquid fund, least-disruptive
+    assert b["estimated_emi"] <= 0.70 * 20000 + 1         # EMI fits 70% of max sustainable save
+    assert b["down_payment_amount"] >= scenarios[0]["down_payment_amount"]  # deployment raised the down payment
+
+
+def test_loan_emi_cap_uses_surplus_plus_cuts_not_surplus_alone():
+    # An EMI of ~13,500 must be allowed (<= 0.70*(18000+2000)=14,000) where the old cap
+    # (0.70*18000=12,600) would have rejected it.
+    agg = _agg(liquid_fund_value=350000.0)
+    scenarios, _meta = _loan_scenarios(
+        price=900000.0, existing=0.0, user_months=24, user_dp_pct=40.0,
+        surplus=18000.0, cuts=2000.0, rate=10.0, tenure=60, agg=agg, asset="car",
+    )
+    b = scenarios[1]
+    assert b["estimated_emi"] <= 14000 + 1
+    assert b["feasible"] is True
