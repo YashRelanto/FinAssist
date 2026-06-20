@@ -255,3 +255,17 @@ def test_funding_split_pie_omits_zero_slices():
 def test_select_goal_artifacts_empty_on_what_if():
     g = {"what_if": True, "scenarios": [{"tag": "A", "monthly_savings_needed": 5000}]}
     assert _select_goal_artifacts("car", g) == []
+
+
+from app.utils import prompts as P
+
+
+def test_goal_whatif_system_prompt_exists():
+    assert isinstance(getattr(P, "GOAL_WHATIF_SYSTEM", None), str)
+    assert "what_if" in P.GOAL_WHATIF_SYSTEM.lower() or "what-if" in P.GOAL_WHATIF_SYSTEM.lower()
+
+
+def test_brain_schema_has_whatif_fields():
+    assert "loan_interest_rate_pct" in P.BRAIN_SYSTEM
+    assert "monthly_savings_override" in P.BRAIN_SYSTEM
+    assert '"what_if"' in P.BRAIN_SYSTEM

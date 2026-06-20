@@ -31,6 +31,7 @@ from app.utils.prompts import (
     ANSWER_KNOWLEDGE_SYSTEM,
     GOAL_PLAN_SYSTEM,
     GOAL_PLAN_SUMMARY_SYSTEM,
+    GOAL_WHATIF_SYSTEM,
     CHART_CAPTION_SYSTEM,
 )
 
@@ -363,7 +364,10 @@ def answer_node(state: AgentState) -> dict:
 
             # Both views show 2-3 charts (scenario comparison + budget impact + funding sources).
             artifacts = _select_goal_artifacts(goal_type, g)
-            if detailed:
+            if g.get("what_if"):
+                system_prompt = GOAL_WHATIF_SYSTEM.format(context_text=ctx, **fields)
+                max_tokens = 400
+            elif detailed:
                 system_prompt = GOAL_PLAN_SYSTEM.format(context_text=ctx, **fields)
                 max_tokens = 1400
             else:

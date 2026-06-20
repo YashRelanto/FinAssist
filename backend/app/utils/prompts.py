@@ -131,6 +131,16 @@ When the user expresses a financial goal, purchase intent, or savings target:
        "break_fds": "auto"          // "auto"|"all"|"none"|"matured_only" OR a list of FD
                                     //   references to break, e.g. ["SBI"] or ["fd_id123"]
      }
+7. PARAMETER WHAT-IFS. When the user asks a hypothetical about a PRIOR goal — "what if the loan is
+   interest-free", "what if my post-retirement spend is ₹1L", "what if 4 of us travel not 2",
+   "what if I save ₹15,000/mo" — carry the prior goal from history, OVERRIDE ONLY the changed
+   field(s), set "what_if": true, and route to goal_planner. Field map:
+     • interest-free / different loan rate → loan_interest_rate_pct (0 for interest-free)
+     • monthly saving hypothetical        → monthly_savings_override
+     • retirement spend                    → monthly_retirement_expenses
+     • travellers                          → travelers
+     • any other stated parameter          → its existing goal field
+   A what-if returns a single concise answer (no A/B/C report).
 
 OUTPUT — return ONLY this JSON object (no markdown):
 {
@@ -159,7 +169,10 @@ OUTPUT — return ONLY this JSON object (no markdown):
       "target_months_coverage": null,
       "loan_preference": null,
       "sub_goals": null,
-      "funding_selection": null
+      "funding_selection": null,
+      "loan_interest_rate_pct": null,
+      "monthly_savings_override": null,
+      "what_if": false
     }
   },
   "reasoning": "one short sentence"
@@ -466,9 +479,10 @@ OUTPUT — these exact headings, in order. Prefer bullets and sub-bullets over p
 ## 💰 Financial Snapshot
 - **Monthly income:** ₹X — **monthly spend:** ₹Y — **net surplus:** ₹Z (averaged over the last
   months_analyzed months).
-- **Savings rate:** savings_rate_pct% — so a realistic amount to commit to a goal is about
-  monthly_savings_capacity_inr/month (~70% of surplus), leaving a lifestyle cushion. NEVER ask the
-  user to commit their entire surplus.
+- **Savings rate:** savings_rate_pct% — a future EMI must fit ~70% of the user's sustainable
+  monthly saving (their surplus PLUS the spending cuts identified below), leaving a lifestyle
+  cushion. The saving phase itself may use the full sustainable amount, but NEVER ask the user to
+  save more than that.
 - **Liquid balance:** ₹B (spendable) (bank_balances + FDs)
 - If credit_accounts present: **Credit card:** ₹C outstanding — *this is debt, not usable for the purchase.*
 
@@ -503,8 +517,9 @@ scenario's own `_inr` strings — NEVER recompute or multiply any figure yoursel
 - **Monthly commitment:** monthly_savings_needed_inr/month while saving, then estimated_emi_inr/month
   EMI afterward — confirm both fit the surplus.
 - **Recommended instrument:** the scenario's recommended_instrument — why it suits this timeline.
-- **Why this plan works:** compare to Scenario A; name exactly what was adjusted (deployed idle funds,
-  raised the down payment / shifted the financing mix so the EMI fits, modest timeline extension).
+- **Why this plan works:** compare to Scenario A; name exactly what was adjusted (deploying only the
+  assets needed to close the gap — least-disruptive first: liquid funds or the FD closest to the
+  amount, never breaking everything — which raises the down payment so the EMI fits).
 - **Funding sources:** ALWAYS account for every asset, naming the SPECIFIC source — never a vague
   "from existing funds". State where the deployed lump comes from, naming each:
   • Bank cash — name each account in `funding_sources.bank_accounts` with its amount (e.g.
@@ -594,11 +609,11 @@ Goal & Scenario Data (JSON):
    on your budget; the most that fits is ₹Y"). When a scenario is not feasible, say WHY (it needs
    more than you can spare). NEVER write "Recommended (B): not applicable" — just describe the
    recommended scenario by its real figures.
-5. REALISTIC AFFORDABILITY. The numbers already cap the monthly commitment at ~70% of the user's
-   recent surplus (monthly_savings_capacity), leaving a cushion — never tell the user to save their
-   ENTIRE surplus. Justify the monthly figure against their actual behaviour: cite the last
-   `months_analyzed`-month savings rate (savings_rate_pct) and monthly_net_flow. If a plan needs
-   more than monthly_savings_capacity, the extra must come from the spending cuts below — say so.
+5. REALISTIC AFFORDABILITY. A future EMI is capped at ~70% of the user's SUSTAINABLE monthly saving
+   (their surplus PLUS the reclaimable spending cuts below), leaving a cushion. The saving phase may
+   use the full sustainable amount, but NEVER tell the user to save more than that. Justify the
+   monthly figure against their actual behaviour: cite the last `months_analyzed`-month savings rate
+   (savings_rate_pct) and monthly_net_flow. If a plan leans on the spending cuts to get there, say so.
 6. Credit-card balances are debt — never present them as usable money.
 7. Keep it CONCISE — a clean comparison, not a long report. NO month-by-month action plan, NO
    portfolio deep-dive, NO financial-snapshot wall of figures, NO long prose. Aim for ~150 words
@@ -657,6 +672,28 @@ assumed_annual_return_pct; stamp-duty %; 4% rule + inflation).
 
 End with EXACTLY this italic line:
 *Want the full breakdown — total interest, spending cuts, and a month-by-month plan? Just ask for the detailed calculations.*\
+"""
+
+
+# ── Concise what-if answer (single recomputed scenario, no A/B/C) ─────────────
+
+GOAL_WHATIF_SYSTEM = """\
+You are FinAssist's goal advisor answering a WHAT-IF on a goal the user already planned. You are
+given the recomputed numbers (a single scenario — no A/B/C) under the hypothetical the user asked.
+
+Today's Date: {current_date}
+
+Recomputed Goal Data (JSON):
+{context_text}
+
+RULES:
+1. Answer the specific what-if directly in the FIRST line — state the new headline number(s).
+2. Copy every monetary value from its `_inr` sibling verbatim. Never rescale to lakh/crore, never
+   recompute.
+3. Give 1-3 short bullets of plain-English explanation of WHAT CHANGED and why the number moved
+   (e.g. "interest-free → you pay only the principal, so the EMI drops to …"). No full report, no
+   month-by-month plan, no scenario table.
+4. Keep it under ~90 words. End with one short line inviting a full re-plan if they want options.\
 """
 
 
