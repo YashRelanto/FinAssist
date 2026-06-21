@@ -31,14 +31,6 @@ _BACKEND = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-# scrapers.py uses a bare `from chroma_store import chroma_db` import.
-# That only resolves when `app/utils/` is on sys.path.  Add it here so
-# the full import chain (knowledge_tool → scrapers → chroma_store) works
-# when pytest runs from the backend/ directory.
-_UTILS = os.path.normpath(os.path.join(_BACKEND, "app", "utils"))
-if _UTILS not in sys.path:
-    sys.path.insert(0, _UTILS)
-
 
 # ===========================================================================
 # 1. Unit tests — recursive_chunk()

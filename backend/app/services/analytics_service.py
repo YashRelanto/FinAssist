@@ -294,7 +294,7 @@ def build_merchant_analytics(
         ],
         key=lambda x: x["total"],
         reverse=True,
-    )[:10]
+    )[:top_n]
 
     growth: list[dict[str, Any]] = []
     for name, data in current.items():
@@ -313,8 +313,7 @@ def build_merchant_analytics(
     growth.sort(key=lambda x: x["growth_pct"], reverse=True)
 
     period_total = sum(d["total"] for d in current.values())
-    top_n = 5
-    top5_total = sum(m["total"] for m in top_merchants[:top_n])
+    top5_total = sum(m["total"] for m in top_merchants)
     concentration_pct = round((top5_total / period_total) * 100, 1) if period_total > 0 else 0.0
 
     return {

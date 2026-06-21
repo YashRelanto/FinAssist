@@ -12,7 +12,7 @@ from typing import Optional
 from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 
-from chroma_store import chroma_db
+from app.utils.chroma_store import chroma_db
 
 # ══════════════════════════════════════════════════════════════════════
 # LOGGING  (replaces bare print() calls throughout)
