@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 from app.core.config import settings
-from app.graph.logging_utils import graph_chat_completion
+from app.graph.llm import graph_chat_completion
 from app.graph.state import AgentState
 from app.graph.schema_registry import render_schema_for_prompt
 from app.utils.prompts import (

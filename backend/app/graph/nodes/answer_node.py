@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 from langchain_core.messages import AIMessage
 
 from app.core.config import settings
-from app.graph.logging_utils import graph_chat_completion
+from app.graph.llm import graph_chat_completion
 from app.graph.state import AgentState
 from app.utils.prompts import (
     ANSWER_VIZ_SYSTEM,

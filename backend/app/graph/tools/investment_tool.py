@@ -18,7 +18,7 @@ import urllib.request
 from typing import Any, Dict, List, Optional
 
 from app.core.config import settings
-from app.graph.logging_utils import graph_chat_completion
+from app.graph.llm import graph_chat_completion
 from app.graph.state import AgentState
 from app.utils.supabase_client import supabase_db as supabase
 from app.utils.prompts import INVESTMENT_ANALYSIS_SYSTEM, INVESTMENT_ANALYSIS_USER

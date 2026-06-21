@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from app.core.config import settings
-from app.graph.logging_utils import create_openai_client
+from app.core.llm_client import create_openai_client
 from app.utils.tab_logging import tab_info, tab_warning
 
 logger = logging.getLogger(__name__)
