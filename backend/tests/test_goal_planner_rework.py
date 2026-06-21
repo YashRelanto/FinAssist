@@ -79,96 +79,165 @@ def test_minimal_deployment_uses_matured_fd_free_before_breaking():
 from app.graph.tools.goal_planner_tool import _loan_scenarios
 
 
-def test_loan_scenario_a_is_pure_user_plan_no_asset_deployment():
-    # User: 30% down, 18 months, no existing savings, big idle bank balance available.
-    agg = _agg(total_current_balance=1500000.0)
+def test_loan_returns_four_scenarios_abcd():
+    agg = _agg(total_current_balance=200000.0)
+    scenarios, _meta = _loan_scenarios(
+        price=1000000.0, existing=0.0, user_months=18, user_dp_pct=30.0,
+        surplus=18000.0, cuts=2000.0, rate=10.0, tenure=60, agg=agg, asset="car",
+    )
+    assert [s["tag"] for s in scenarios] == ["A", "B", "C", "D"]
+
+
+def test_loan_scenario_a_baseline_uses_bank_no_breaking():
+    # A funds the down payment from bank cash (available in every scenario) but breaks NO funds.
+    agg = _agg(total_current_balance=1500000.0, liquid_fund_value=400000.0)
     scenarios, _meta = _loan_scenarios(
         price=1000000.0, existing=0.0, user_months=18, user_dp_pct=30.0,
         surplus=18000.0, cuts=2000.0, rate=10.0, tenure=60, agg=agg, asset="car",
     )
     a = scenarios[0]
-    assert a["tag"] == "A"
-    assert a["down_payment_pct"] == 30.0                 # exactly the user's choice, unchanged
-    assert a["down_payment_from_existing"] == 0.0        # A deploys NO assets
-    assert a["deployment"]["deployed_total"] == 0.0
+    assert a["down_payment_pct"] == 30.0                          # user's exact %
+    assert a["deployment"]["deployed_total"] == 0.0              # no FD/liquid broken in A
+    assert a["down_payment_from_existing"] > 0                   # but bank cash funds the upfront
+    # 3L down payment is covered by the 15L bank, EMI 7L loan ~14.9k > 0.7*18k=12.6k → not feasible.
+    assert a["down_payment_fundable"] is True
+    assert a["emi_fits_capacity"] is False
 
 
-def test_loan_scenario_b_deploys_minimal_assets_to_fit_emi():
-    # Short 6-month timeline: saving alone (cap 20k * 6 = 120k) can't reach the EMI-fitting down
-    # payment, so B deploys minimal liquid-fund assets to bridge the gap.
-    agg = _agg(liquid_fund_value=400000.0, total_current_balance=0.0)
+def test_loan_scenario_b_judges_emi_against_surplus_plus_cuts():
+    # B keeps the same plan but its EMI is judged against 0.70*(surplus+cuts).
+    agg = _agg(total_current_balance=1500000.0)
     scenarios, _meta = _loan_scenarios(
-        price=1000000.0, existing=0.0, user_months=6, user_dp_pct=30.0,
-        surplus=18000.0, cuts=2000.0, rate=10.0, tenure=60, agg=agg, asset="car",
+        price=600000.0, existing=0.0, user_months=18, user_dp_pct=30.0,
+        surplus=18000.0, cuts=4000.0, rate=10.0, tenure=60, agg=agg, asset="car",
     )
     b = scenarios[1]
     assert b["tag"] == "B"
-    assert b["deployment"]["deployed_total"] > 0          # B deploys assets to bridge the gap
-    assert b["deployment"]["from_liquid"] > 0             # ...from the liquid fund, least-disruptive
-    assert b["estimated_emi"] <= 0.70 * 20000 + 1         # EMI fits 70% of max sustainable save
-    assert b["down_payment_amount"] >= scenarios[0]["down_payment_amount"]  # deployment raised the down payment
+    assert b["deployment"]["deployed_total"] == 0.0              # B breaks nothing (cuts only)
+    assert b["assumed_monthly_saving"] == 22000.0               # surplus + cuts
+    # EMI on a 4.2L loan ~8.9k must fit 0.70*22000 = 15400.
+    assert b["emi_fits_capacity"] is True
 
 
-def test_loan_emi_cap_uses_surplus_plus_cuts_not_surplus_alone():
-    # An EMI of ~13,500 must be allowed (<= 0.70*(18000+2000)=14,000) where the old cap
-    # (0.70*18000=12,600) would have rejected it.
-    agg = _agg(liquid_fund_value=350000.0)
+def test_loan_scenario_c_breaks_minimal_liquidity_to_fit_emi():
+    # No cuts; C breaks minimal FD/liquid funds to raise the down payment so EMI fits 0.70*surplus.
+    agg = _agg(total_current_balance=100000.0, liquid_fund_value=600000.0)
     scenarios, _meta = _loan_scenarios(
-        price=900000.0, existing=0.0, user_months=24, user_dp_pct=40.0,
+        price=1000000.0, existing=0.0, user_months=12, user_dp_pct=30.0,
         surplus=18000.0, cuts=2000.0, rate=10.0, tenure=60, agg=agg, asset="car",
     )
-    b = scenarios[1]
-    assert b["estimated_emi"] <= 14000 + 1
-    assert b["feasible"] is True
+    c = scenarios[2]
+    assert c["tag"] == "C"
+    assert c["deployment"]["from_liquid"] > 0                    # liquidity broken
+    assert c["deployment"]["from_bank"] == 0.0                  # but NOT bank (already 'available cash')
+    assert c["estimated_emi"] <= 0.70 * 18000 + 1              # EMI brought within 70% of current saving
+    assert c["down_payment_amount"] > scenarios[0]["down_payment_amount"]
+
+
+def test_loan_scenario_c_caps_down_payment_at_fundable():
+    # Unaffordable goal (1cr on tiny saving): C must NOT invent a 91L down payment to force a small
+    # EMI — it caps the down payment at the user's % / fundable amount and reports the REAL EMI.
+    agg = _agg(total_current_balance=157246.0, liquid_fund_value=125007.0, total_spending_cuts=0.0)
+    scenarios, meta = _loan_scenarios(
+        price=10000000.0, existing=0.0, user_months=36, user_dp_pct=20.0,
+        surplus=10642.0, cuts=0.0, rate=8.5, tenure=240, agg=agg, extra_upfront=700000.0, asset="home",
+    )
+    c = scenarios[2]
+    assert c["down_payment_amount"] <= 10000000.0                 # never exceeds the price
+    assert c["down_payment_amount"] == 2000000.0                 # capped at the user's 20% (not 91L)
+    assert c["estimated_emi"] > 60000                            # the REAL EMI on an 80L loan, not ₹7,449
+    assert c["feasible"] is False
+    assert meta["any_feasible"] is False                          # whole goal is unaffordable
+
+
+def test_loan_scenario_d_uses_cuts_and_liquidity_beyond_b():
+    # When cuts (B) already make it feasible, D must still deploy liquidity to shrink the loan
+    # further — it must NOT collapse onto B.
+    agg = _agg(total_current_balance=157246.0, liquid_fund_value=300000.0,
+               total_spending_cuts=11972.0)
+    scenarios, _meta = _loan_scenarios(
+        price=900000.0, existing=0.0, user_months=12, user_dp_pct=30.0,
+        surplus=10642.0, cuts=11972.0, rate=10.0, tenure=60, agg=agg, asset="car",
+    )
+    b, c, d = scenarios[1], scenarios[2], scenarios[3]
+    assert b["deployment"]["deployed_total"] == 0.0          # B breaks nothing (cuts only)
+    assert d["deployment"]["deployed_total"] > 0             # D actually breaks funds
+    assert d["loan_amount"] < b["loan_amount"]              # D's bigger down payment → smaller loan
+    assert d["deployment"]["deployed_total"] >= c["deployment"]["deployed_total"]  # D >= C's minimal break
+    assert d["feasible"] is True
+
+
+def test_loan_scenario_d_can_prefund_emi_shortfall():
+    # Tiny saving but huge liquidity → D deploys liquidity for the down payment (and EMI reserve).
+    agg = _agg(total_current_balance=0.0, liquid_fund_value=5000000.0)
+    scenarios, _meta = _loan_scenarios(
+        price=1000000.0, existing=0.0, user_months=12, user_dp_pct=20.0,
+        surplus=3000.0, cuts=1000.0, rate=10.0, tenure=60, agg=agg, asset="car",
+    )
+    d = scenarios[3]
+    assert d["tag"] == "D"
+    assert d["deployment"]["deployed_total"] > 0
+    assert d["emi_pre_funded_monthly"] >= 0
+    assert d["feasible"] is True
 
 
 from app.graph.tools.goal_planner_tool import _savings_scenarios
 
 
-def test_savings_balance_growth_makes_goal_feasible_via_saving():
-    # Target 200k reachable by saving alone (cap 20k * 24 = 480k) → feasible WITHOUT touching
-    # assets (minimal deployment: none needed). This is the balance-growth feasibility rule.
-    agg = _agg(total_current_balance=1500000.0)
+def test_savings_returns_four_scenarios_abcd():
+    agg = _agg(total_current_balance=100000.0)
     scenarios, _meta = _savings_scenarios(
         target=200000.0, existing=0.0, user_months=24, surplus=18000.0, cuts=2000.0,
         instrument="Liquid MF", agg=agg, annual_return_pct=0.0,
     )
-    a, b = scenarios[0], scenarios[1]
-    assert a["deployment"]["deployed_total"] == 0.0      # A deploys nothing
-    assert b["deployment"]["deployed_total"] == 0.0      # saving suffices → no assets disturbed
-    assert b["feasible"] is True
-    assert 0 < b["monthly_savings_needed"] <= 20000
+    assert [s["tag"] for s in scenarios] == ["A", "B", "C", "D"]
 
 
-def test_savings_scenario_b_minimal_deploy_only_the_gap():
-    # No surplus, existing 150k, target 200k → falling short by 50k → redeem EXACTLY 50k from a
-    # 60k liquid fund (your Q2 example: deploy the shortfall, not everything).
-    agg = _agg(liquid_fund_value=60000.0, total_current_balance=0.0)
+def test_savings_scenario_a_feasible_from_bank_plus_saving():
+    # 1L bank + 18k/mo * 24 reaches a 2L target with no cuts, no breaking.
+    agg = _agg(total_current_balance=100000.0)
     scenarios, _meta = _savings_scenarios(
-        target=200000.0, existing=150000.0, user_months=12, surplus=0.0, cuts=0.0,
+        target=200000.0, existing=0.0, user_months=24, surplus=18000.0, cuts=2000.0,
         instrument="Liquid MF", agg=agg, annual_return_pct=0.0,
     )
-    b = scenarios[1]
-    assert b["deployment"]["from_liquid"] == 50000.0
-    assert b["deployment"]["from_fds_broken"] == 0.0
-    assert b["monthly_savings_needed"] == 0.0
-    assert b["feasible"] is True
+    a = scenarios[0]
+    assert a["deployment"]["deployed_total"] == 0.0
+    assert a["feasible"] is True
+
+
+def test_savings_scenario_c_breaks_minimal_liquidity_only():
+    # No surplus, no bank, target 200k → C breaks EXACTLY the 200k gap from a 250k liquid fund.
+    agg = _agg(total_current_balance=0.0, liquid_fund_value=250000.0)
+    scenarios, _meta = _savings_scenarios(
+        target=200000.0, existing=0.0, user_months=12, surplus=0.0, cuts=0.0,
+        instrument="Liquid MF", agg=agg, annual_return_pct=0.0,
+    )
+    c = scenarios[2]
+    assert c["tag"] == "C"
+    assert c["deployment"]["from_liquid"] == 200000.0
+    assert c["deployment"]["from_bank"] == 0.0
+    assert c["feasible"] is True
 
 
 from app.graph.tools.goal_planner_tool import _education_scenarios
 
 
-def test_education_self_funded_feasibility_uses_surplus_plus_cuts():
-    agg = _agg(total_current_balance=0.0)
+def test_education_four_scenarios_more_effort_smaller_loan():
+    # Cost 20L, modest savings + a liquid fund. A=baseline recommended; B/C/D shrink the loan.
+    agg = _agg(total_current_balance=100000.0, liquid_fund_value=500000.0)
     scenarios, _meta = _education_scenarios(
         cost=2000000.0, existing=0.0, user_months=24, self_pct=0.0,
         surplus=18000.0, cuts=2000.0, agg=agg, tenure=180,
     )
-    b = scenarios[1]                                  # "Maximise the loan" — recommended
-    assert b["recommended"] is True
-    assert b["loan_amount"] > 0
-    # Self-funded slice is minimal; its monthly saving must be within surplus+cuts to be feasible.
-    assert b["feasible"] == (b["monthly_savings_needed"] <= 20000 + 1)
+    assert [s["tag"] for s in scenarios] == ["A", "B", "C", "D"]
+    a, b, c, d = scenarios
+    assert a["recommended"] is True                  # baseline is least-disruptive
+    assert all(s["feasible"] for s in scenarios)     # education is always financeable
+    # More effort ⇒ more self-funding ⇒ a smaller loan: A >= B >= D, and C (liquidity) < A.
+    assert b["loan_amount"] <= a["loan_amount"] + 1
+    assert d["loan_amount"] <= b["loan_amount"] + 1
+    assert c["loan_amount"] < a["loan_amount"]       # liquidity cut the loan
+    assert c["deployment"]["from_liquid"] > 0
 
 
 from app.graph.tools.goal_planner_tool import (
@@ -203,7 +272,6 @@ def test_liquid_fund_value_at_grows_for_long_horizon():
 from app.graph.tools.goal_planner_tool import (
     _plan_car,
     _apply_what_if,
-    _apply_what_if_scenarios,
 )
 
 
@@ -224,12 +292,66 @@ def test_monthly_savings_override_sets_capacity():
     assert agg2["monthly_net_flow"] == 15000.0
 
 
-def test_what_if_keeps_only_scenario_a():
-    scenarios = [{"tag": "A"}, {"tag": "B"}, {"tag": "C"}]
-    kept = _apply_what_if_scenarios(scenarios, what_if=True)
-    assert [s["tag"] for s in kept] == ["A"]
-    kept_all = _apply_what_if_scenarios(scenarios, what_if=False)
-    assert len(kept_all) == 3
+from app.graph.tools.goal_planner_tool import _resolve_down_payment_pct
+
+
+def test_down_payment_override_explicit_amount():
+    agg = _agg()
+    # explicit ₹2,00,000 down payment on an ₹8,00,000 car → 25%
+    pct = _resolve_down_payment_pct({"down_payment_amount": 200000}, agg, 800000.0, 12, 30.0)
+    assert pct == 25.0
+
+
+def test_down_payment_source_savings_uses_bank_plus_savings():
+    # "increase my down payment to whatever I save in 12 months": bank 1.57L + 10,642*12 = 2.84L
+    agg = _agg(monthly_net_flow=10642.0, total_current_balance=157246.0)
+    pct = _resolve_down_payment_pct({"down_payment_source": "savings"}, agg, 800000.0, 12, 30.0)
+    expected = round((157246.0 + 10642.0 * 12) / 800000.0 * 100, 6)
+    assert abs(pct - expected) < 0.01
+
+
+def test_down_payment_source_everything_adds_liquidity():
+    agg = _agg(monthly_net_flow=10642.0, total_current_balance=157246.0, liquid_fund_value=50000.0)
+    savings_pct = _resolve_down_payment_pct({"down_payment_source": "savings"}, agg, 800000.0, 12, 30.0)
+    everything_pct = _resolve_down_payment_pct({"down_payment_source": "everything"}, agg, 800000.0, 12, 30.0)
+    assert everything_pct > savings_pct          # "everything" also breaks the 50k liquid fund
+
+
+def test_max_affordable_price_is_downpayment_plus_max_loan():
+    from app.graph.tools.goal_planner_tool import _max_affordable_price, _inv_emi, _CAP_UTIL
+    agg = _agg(monthly_net_flow=10642.0, total_current_balance=157246.0, liquid_fund_value=100000.0)
+    price = _max_affordable_price({"down_payment_source": "everything"}, agg, 10.0, 60, 12)
+    max_loan = _inv_emi(_CAP_UTIL * 10642.0, 10.0, 60)
+    down = 157246.0 + 10642.0 * 12 + 100000.0      # bank + savings + liquid (everything)
+    assert abs(price - (down + max_loan)) < 1.0
+
+
+def test_find_max_affordable_emi_at_cap():
+    # "what car can I afford if I liquidate everything": price is COMPUTED (down payment + max loan),
+    # and the EMI lands at 70% of saving (the largest loan that fits).
+    from app.graph.tools.goal_planner_tool import _max_affordable_price
+    agg = _agg(monthly_net_flow=10642.0, total_current_balance=157246.0, liquid_fund_value=100000.0,
+               total_spending_cuts=0.0)
+    goal = {"goal_type": "car", "target_amount": 500000, "timeline": "12 months",
+            "down_payment_pct": 30, "find_max_affordable": True,
+            "down_payment_source": "everything", "what_if": True}
+    expected = _max_affordable_price(goal, agg, 10.0, 60, 12)
+    out = _plan_car(goal, agg)
+    rec = next(s for s in out["scenarios"] if s["recommended"])
+    assert abs(rec["purchase_price"] - expected) < 1.0   # price COMPUTED, not the ₹5L prior target
+    assert rec["estimated_emi"] <= 0.70 * 10642 + 1       # EMI at/under the savings cap
+    assert rec["loan_amount"] > 0
+
+
+def test_whatif_car_keeps_target_and_shows_loan():
+    # The bug: a what-if that loses target_amount → price 0 → no loan. With price carried, it's a
+    # real loan scenario (funding_breakdown has a loan slice for the funding pie).
+    agg = _agg(total_current_balance=157246.0)
+    out = _plan_car({"goal_type": "car", "target_amount": 800000, "timeline": "12 months",
+                     "down_payment_pct": 30, "down_payment_source": "savings", "what_if": True}, agg)
+    rec = next(s for s in out["scenarios"] if s["recommended"])
+    assert rec["purchase_price"] == 800000.0
+    assert rec["loan_amount"] > 0                 # a real loan exists → funding pie will render
 
 
 from app.graph.nodes.answer_node import _funding_split_pie, _select_goal_artifacts
@@ -252,9 +374,13 @@ def test_funding_split_pie_omits_zero_slices():
     assert labels == {"Bank cash"}
 
 
-def test_select_goal_artifacts_empty_on_what_if():
-    g = {"what_if": True, "scenarios": [{"tag": "A", "monthly_savings_needed": 5000}]}
-    assert _select_goal_artifacts("car", g) == []
+def test_select_goal_artifacts_handles_single_whatif_scenario():
+    # What-ifs now DO get charts; a single-scenario what-if must not crash the artifact builder.
+    g = {"what_if": True, "monthly_avg_income": 60000, "monthly_avg_spend": 42000,
+         "monthly_savings_needed": 5000, "timeline_months": 12,
+         "scenarios": [{"tag": "B", "label": "x", "monthly_savings_needed": 5000, "estimated_emi": 9000}]}
+    arts = _select_goal_artifacts("car", g)
+    assert isinstance(arts, list)        # builds without error (no KeyError)
 
 
 from app.utils import prompts as P

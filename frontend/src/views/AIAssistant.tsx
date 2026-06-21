@@ -4,6 +4,7 @@ import { cn, formatCurrency, APP_NAME } from '../lib/utils';
 import { useAppContext } from '../context/AppContext';
 import { apiFetch } from '../lib/api';
 import { ChatChart } from '../components/ChatChart';
+import { ScenarioCards, type ScenarioCard } from '../components/ScenarioCards';
 import { PageHeader, PageShell } from '../components/PageShell';
 import { Markdown } from '../components/Markdown';
 import { ClarificationCard, type ClarificationQuestion } from '../components/ClarificationCard';
@@ -15,6 +16,7 @@ interface Message {
   text: string;
   type: 'text' | 'clarification' | 'card';
   artifacts?: unknown[];
+  scenarios?: ScenarioCard[];
   clarificationQuestions?: ClarificationQuestion[];
   clarificationAnswered?: boolean;
   data?: { label: string; value: number; color: string; percent: number }[];
@@ -71,6 +73,7 @@ export const AIAssistant: React.FC = () => {
         text: data.answer || data.response || "I didn't quite catch that.",
         type: isClarification && questions.length > 0 ? 'clarification' : 'text',
         artifacts: Array.isArray(data.artifacts) ? data.artifacts : [],
+        scenarios: Array.isArray(data.scenarios) ? data.scenarios : [],
         clarificationQuestions: isClarification && questions.length > 0 ? questions : undefined,
         clarificationAnswered: false,
       };
@@ -174,6 +177,11 @@ export const AIAssistant: React.FC = () => {
                           <ChatChart key={i} artifact={a} />
                         ))}
                     </div>
+                  )}
+
+                  {/* Goal-planning scenario cards (A/B/C/D) */}
+                  {m.role === 'ai' && Array.isArray(m.scenarios) && m.scenarios.length > 0 && (
+                    <ScenarioCards scenarios={m.scenarios as ScenarioCard[]} />
                   )}
 
                   {/* Legacy card data */}

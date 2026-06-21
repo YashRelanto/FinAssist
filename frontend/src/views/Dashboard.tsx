@@ -109,7 +109,11 @@ export const Dashboard: React.FC = () => {
 
   const loadHealthInsightsPipeline = React.useCallback(
     (force?: boolean) => {
-      if (!force && healthLoadedRef.current && healthInsights) return;
+      // Gate on the ref ALONE (set true BEFORE the requests fire). The slow LLM insight can take
+      // ~90s, during which `healthInsights` is still null — gating on it (the old `&& healthInsights`)
+      // let every re-render in that window launch ANOTHER concurrent call. The ref blocks re-entry
+      // from mount, so the pipeline runs ONCE per load and only re-runs on an explicit forced reload.
+      if (!force && healthLoadedRef.current) return;
       healthLoadedRef.current = true;
       void loadFinancialHealthInsights({ force, llm: false }).then((data) => {
         if (data) setHealthInsights(data);
@@ -120,7 +124,9 @@ export const Dashboard: React.FC = () => {
         setHealthInsightsLlmLoading(false);
       });
     },
-    [loadFinancialHealthInsights, healthInsights],
+    // NOT dependent on `healthInsights` — that identity churn (it changes twice per load) is exactly
+    // what recreated this callback and re-fired the effect mid-request.
+    [loadFinancialHealthInsights],
   );
 
   const refreshDashboard = React.useCallback(

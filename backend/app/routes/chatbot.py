@@ -93,6 +93,13 @@ class ChatResponse(BaseModel):
             "type/chart_type/title/x_field/y_field/data."
         ),
     )
+    scenarios: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "Goal-planning scenario cards (A/B/C/D). Each: tag, title, subtitle, feasible, "
+            "recommended, headline, metrics[], charts[], pros[], cons[], bottom_line."
+        ),
+    )
     metadata: dict = Field(
         default_factory=dict,
         description=(
@@ -356,6 +363,7 @@ async def post_chat_message(
 
     # 2. Call the core engine (LangGraph supervisor)
     artifacts: List[dict] = []
+    scenarios: List[dict] = []
     metadata: Dict[str, Any] = {}
     try:
         from langgraph.types import Command
@@ -441,6 +449,7 @@ async def post_chat_message(
             intent = final_state.get("final_intent") or "FINANCIAL_KNOWLEDGE"
             sources = final_state.get("sources") or []
             artifacts = final_state.get("artifacts") or []
+            scenarios = final_state.get("scenario_cards") or []
 
         # Build observability metadata.
         token_usage = get_token_usage()
@@ -506,6 +515,7 @@ async def post_chat_message(
         sources=sources,
         clarification_questions=clarification_questions_out,
         artifacts=artifacts,
+        scenarios=scenarios,
         metadata=metadata,
         thread_id=request.thread_id,
         user_id=request.user_id,
