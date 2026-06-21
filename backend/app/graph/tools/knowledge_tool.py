@@ -2,23 +2,29 @@
 Knowledge Tool — RAG retrieval for general financial education / product info.
 
 Pipeline (in order):
-  1. Collection routing  — probe each collection with n=1; pick the one whose
-                           best match has the lowest cosine distance to the query.
-  2. Candidate fetch     — retrieve 15 candidates from the winning collection,
-                           including their embedding vectors.
-  3. MMR                 — filter 15 → 8 using Maximal Marginal Relevance
-                           (λ=0.7 balances relevance vs diversity).
-  4. Cross-encoder rerank— score the 8 MMR survivors with a bi-directional
-                           cross-encoder and keep the top 3.
-  5. Web fallback        — if the best ANN distance > 0.6 (weak local match),
-                           discard local results and run a live DuckDuckGo search.
+  1. Collection routing  — pure keyword scoring; maps the query to exactly one
+                           ChromaDB collection in O(keywords) time, zero DB calls.
+                           Single-word keywords use exact token matching to prevent
+                           false positives ("rd" in "word", "nse" in "expenses").
+  2. Candidate fetch     — retrieve _MMR_CANDIDATES docs + embedding vectors from
+                           the routed collection via chroma_db.search_with_embeddings.
+  3. MMR                 — filter candidates → _MMR_KEEP using Maximal Marginal
+                           Relevance (λ=0.7 balances relevance vs diversity).
+                           All similarities are precomputed with numpy in one pass.
+  4. Cross-encoder rerank— score the _MMR_KEEP survivors with a bi-directional
+                           cross-encoder and keep the top _RERANK_TOP_K.
+  5. Web fallback        — if best ANN distance > _WEB_FALLBACK_DIST (weak local
+                           match), discard local results and run a live DuckDuckGo
+                           search instead. Text is capped at _MAX_WEB_CHARS.
 """
 
 from __future__ import annotations
 
 import logging
-import math
-from typing import List
+import re
+import threading
+
+import numpy as np
 
 from app.graph.state import AgentState
 from app.utils.chroma_store import chroma_db
@@ -28,20 +34,31 @@ logger = logging.getLogger(__name__)
 
 KNOWLEDGE_COLLECTIONS = ["banking_data", "investment_data", "financial_tips"]
 
-# MMR: λ = 0.7 → 70% relevance, 30% diversity.  Lower → more diverse.
-_MMR_LAMBDA = 0.7
-_MMR_CANDIDATES = 15   # initial fetch from the single routed collection
-_MMR_KEEP = 8          # MMR output (input to reranker)
-_RERANK_TOP_K = 3      # final results returned to the Brain
-_WEB_FALLBACK_DIST = 0.6   # cosine distance threshold; above this → web fallback
+# ── Retrieval hyper-parameters ─────────────────────────────────────────────────
+_MMR_LAMBDA        = 0.7    # λ: 70 % relevance, 30 % diversity
+_MMR_CANDIDATES    = 15     # initial fetch from the routed collection
+_MMR_KEEP          = 8      # MMR survivors fed to the reranker
+_RERANK_TOP_K      = 3      # final chunks returned to the Brain
+_WEB_FALLBACK_DIST = 0.6    # cosine distance threshold: above this → web fallback
+_MAX_WEB_CHARS     = 4_000  # FIX: raw scraped text can be 50k+ chars; cap it here
+                             #      to prevent downstream LLM context-window overflow
 
-# Lazy-loaded cross-encoder (loaded once, reused across requests).
-_cross_encoder = None
+# ── Cross-encoder: lazy singleton, thread-safe ────────────────────────────────
+# FIX: original had no lock — concurrent requests raced to load the model.
+#      A failed load left _cross_encoder=None so every call retried the import.
+#      Now: one lock + a boolean flag ensure exactly one load attempt, ever.
+_cross_encoder        = None
+_cross_encoder_loaded = False  # True once a load attempt has completed (pass or fail)
+_cross_encoder_lock   = threading.Lock()
 
-# ── Collection routing vocabulary ─────────────────────────────────────────────
-# Each collection maps to a set of lowercase keyword tokens.
-# Order matters only for the fallback: if nothing matches, _DEFAULT_COLLECTION is used.
+# ── Routing ────────────────────────────────────────────────────────────────────
 _DEFAULT_COLLECTION = "financial_tips"
+
+# Compile a reusable word-tokeniser once
+# FIX: original used `kw in query_string` which is a raw substring check.
+#      "rd" matches "word"/"record"/"third"; "nse" matches "expenses";
+#      "nav" matches "navigate". Single-word keywords now use token-set lookup.
+_WORD_TOKEN_RE = re.compile(r"\b\w+\b")
 
 _ROUTING_RULES: list[tuple[str, set[str]]] = [
     ("banking_data", {
@@ -70,55 +87,66 @@ _ROUTING_RULES: list[tuple[str, set[str]]] = [
 ]
 
 
-def _load_cross_encoder():
-    global _cross_encoder
-    if _cross_encoder is not None:
+# ── Cross-encoder loader ───────────────────────────────────────────────────────
+
+def _load_cross_encoder() -> object | None:
+    global _cross_encoder, _cross_encoder_loaded
+
+    # Fast path: a load attempt already happened (success or failure)
+    if _cross_encoder_loaded:
         return _cross_encoder
-    try:
-        from sentence_transformers import CrossEncoder
-        _cross_encoder = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-        logger.info("[knowledge] Cross-encoder loaded: ms-marco-MiniLM-L-6-v2")
-    except Exception as exc:
-        logger.warning("[knowledge] CrossEncoder unavailable (%s) — reranking disabled.", exc)
-        _cross_encoder = None
+
+    # Slow path: first call — serialize with a lock so concurrent requests
+    # don't each try to load the model independently.
+    with _cross_encoder_lock:
+        if _cross_encoder_loaded:          # double-checked inside the lock
+            return _cross_encoder
+        try:
+            from sentence_transformers import CrossEncoder
+            _cross_encoder = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+            logger.info("[knowledge] Cross-encoder loaded: ms-marco-MiniLM-L-6-v2")
+        except Exception as exc:
+            logger.warning("[knowledge] CrossEncoder unavailable (%s) — reranking disabled.", exc)
+            _cross_encoder = None
+        finally:
+            _cross_encoder_loaded = True   # never retry after first attempt, pass or fail
+
     return _cross_encoder
 
 
-# ── Math helpers ──────────────────────────────────────────────────────────────
-
-def _cosine(a: list, b: list) -> float:
-    """Cosine similarity between two equal-length vectors."""
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na  = math.sqrt(sum(x * x for x in a))
-    nb  = math.sqrt(sum(y * y for y in b))
-    return dot / (na * nb + 1e-9)
-
-
-# ── Stage 1 — Collection routing (pure keyword, zero DB calls) ───────────────
+# ── Stage 1 — Collection routing (zero DB calls) ──────────────────────────────
 
 def _route_collection(query: str) -> str:
     """
     Map a query to exactly one collection using keyword scoring.
-    No DB is touched — this is pure string matching.
 
-    Algorithm:
-      - Lowercase the query once.
-      - For each collection's keyword set, count how many keywords appear
-        as substrings in the query.
-      - Return the collection with the highest count.
-      - Tie-break: earlier in _ROUTING_RULES wins (banking > investment > tips).
-      - No match at all → _DEFAULT_COLLECTION ("financial_tips").
+    Algorithm
+    ---------
+    - Lowercase the query and extract word tokens via regex.
+    - Multi-word keywords (e.g. "mutual fund", "fixed deposit"):
+        substring match on the lowercased query — specific enough to be safe.
+    - Single-word keywords (e.g. "rd", "nse", "nav"):
+        exact token match against the word-token set — prevents false positives
+        like "rd" in "word"/"third", "nse" in "expenses", "nav" in "navigate".
+    - Return the collection with the highest hit count.
+    - Tie-break: earlier in _ROUTING_RULES wins (banking > investment > tips).
+    - Zero hits → _DEFAULT_COLLECTION.
 
-    Cost: O(total_keywords) substring checks — microseconds.
+    Cost: O(total_keywords) — microseconds, zero DB calls.
     """
-    q = query.lower()
+    q_lower  = query.lower()
+    q_tokens = set(_WORD_TOKEN_RE.findall(q_lower))  # {"what", "is", "the", "rd", ...}
+
     best_name  = _DEFAULT_COLLECTION
     best_score = 0
 
     for collection_name, keywords in _ROUTING_RULES:
-        score = sum(1 for kw in keywords if kw in q)
+        score = 0
+        for kw in keywords:
+            if " " in kw:
+                score += kw in q_lower    # multi-word: substring is specific enough
+            else:
+                score += kw in q_tokens   # single-word: exact token to avoid false hits
         if score > best_score:
             best_score = score
             best_name  = collection_name
@@ -133,43 +161,60 @@ def _route_collection(query: str) -> str:
 # ── Stage 2 — MMR ─────────────────────────────────────────────────────────────
 
 def _mmr(
-    query_emb: list,
-    docs: List[dict],
-    k: int = _MMR_KEEP,
+    query_emb:   list,
+    docs:        list[dict],
+    k:           int   = _MMR_KEEP,
     lambda_mult: float = _MMR_LAMBDA,
-) -> List[dict]:
+) -> list[dict]:
     """
-    Maximal Marginal Relevance over `docs`.
+    Maximal Marginal Relevance over *docs*.
 
-    Each doc must have an "embedding" key (list[float]).
-    Returns up to k docs that balance relevance to the query and
-    diversity from each other.
+    FIX: original called a pure-Python _cosine() O(k × n) times inside the
+    selection loop over 384-768-dim vectors — extremely slow.
+    Now: numpy precomputes ALL relevance scores and pairwise similarities in
+    one matrix multiply before the loop, so the loop itself does only
+    arithmetic on scalars.
 
     MMR score at each step:
         λ × sim(doc, query) − (1−λ) × max sim(doc, already_selected)
     """
     if not docs:
         return []
-    if not isinstance(query_emb, list) or len(query_emb) == 0:
+    if not isinstance(query_emb, list) or not query_emb:
         # No query embedding available — fall back to distance ranking
-        return sorted(docs, key=lambda d: d["distance"])[:k]
+        return sorted(docs, key=lambda d: d.get("distance", 1.0))[:k]
 
-    embs = [d["embedding"] for d in docs]
-    rel  = [_cosine(query_emb, e) for e in embs]  # relevance to query
+    # ── Precompute all similarities in one numpy pass ──────────────────────
+    emb_matrix = np.array([d["embedding"] for d in docs], dtype=np.float32)  # (n, dim)
+    q_vec      = np.array(query_emb, dtype=np.float32)  # (dim,)
 
-    selected_idx: List[int] = []
-    remaining    = list(range(len(docs)))
+    # L2-normalise so dot product == cosine similarity
+    emb_unit = emb_matrix / (np.linalg.norm(emb_matrix, axis=1, keepdims=True) + 1e-9)
+    q_unit   = q_vec      / (np.linalg.norm(q_vec)                            + 1e-9)
+
+    rel = (emb_unit @ q_unit).tolist()      # (n,)   — cosine sim to query
+    sim = (emb_unit @ emb_unit.T).tolist()  # (n, n) — pairwise cosine sim
+
+    # ── Greedy MMR selection ───────────────────────────────────────────────
+    selected_idx: list[int] = []
+    remaining = list(range(len(docs)))
 
     while remaining and len(selected_idx) < k:
         if not selected_idx:
-            # First pick: purely most relevant
             best = max(remaining, key=lambda i: rel[i])
         else:
-            def _mmr_score(i: int) -> float:
-                redundancy = max(_cosine(embs[i], embs[j]) for j in selected_idx)
-                return lambda_mult * rel[i] - (1 - lambda_mult) * redundancy
-            best = max(remaining, key=_mmr_score)
-
+            # FIX: original defined _mmr_score() inside this loop, recompiling
+            # it and re-running pure-Python _cosine on every iteration.
+            # Now: sim[i][j] is a pre-computed scalar lookup — O(1) per pair.
+            # Snapshot selected_idx via default arg to make the capture explicit.
+            sel  = selected_idx
+            best = max(
+                remaining,
+                key=lambda i, _sel=sel: (
+                    lambda_mult * rel[i]
+                    - (1 - lambda_mult) * max(sim[i][j] for j in _sel)
+                ),
+            )
         selected_idx.append(best)
         remaining.remove(best)
 
@@ -178,12 +223,10 @@ def _mmr(
 
 # ── Stage 3 — Cross-encoder reranking ────────────────────────────────────────
 
-def _rerank(query: str, docs: List[dict], top_k: int = _RERANK_TOP_K) -> List[dict]:
+def _rerank(query: str, docs: list[dict], top_k: int = _RERANK_TOP_K) -> list[dict]:
     """
-    Score each (query, doc_text) pair with a cross-encoder and return the
-    top_k by descending score.
-
-    Falls back to distance order if the model is not installed.
+    Score each (query, doc_text) pair with a cross-encoder; keep top_k.
+    Falls back to MMR order when the model is unavailable.
     """
     if not docs:
         return []
@@ -221,21 +264,22 @@ def knowledge_tool(state: AgentState) -> dict:
     if not query.strip():
         return {
             "retrieved_context": [],
-            "sources": ["FinAssist Knowledge Base"],
+            "sources":           ["FinAssist Knowledge Base"],
             "evidence": [{"tool": "knowledge", "task": query,
                           "summary": "Empty query — skipped.", "data": {}}],
         }
 
-    # ── Stage 1: route query to one collection — zero DB calls ───────────────
+    # ── Stage 1: route to one collection — zero DB calls ─────────────────────
     collection_name = _route_collection(query)
 
-    # ── Stage 2: fetch candidates with embeddings from that one collection ────
+    # ── Stage 2: fetch candidates + embedding vectors ─────────────────────────
     candidates, query_emb = chroma_db.search_with_embeddings(
         collection_name=collection_name,
         query=query,
         n_results=_MMR_CANDIDATES,
     )
-    best_dist = candidates[0]["distance"] if candidates else 1.0
+    # FIX: original did candidates[0]["distance"] — KeyError if the key is absent.
+    best_dist = candidates[0].get("distance", 1.0) if candidates else 1.0
 
     # ── Web fallback: local match too weak ────────────────────────────────────
     if not candidates or best_dist > _WEB_FALLBACK_DIST:
@@ -246,30 +290,42 @@ def knowledge_tool(state: AgentState) -> dict:
         try:
             scraped_text, source_url = live_web_search_and_scrape(query, max_results=1)
             if scraped_text:
-                summary = f"Web fallback: 1 chunk (local dist={best_dist:.3f})."
+                # FIX: raw scraped text is 10k-50k chars; passing it whole to the
+                # downstream LLM blows the context window.  Cap at _MAX_WEB_CHARS.
+                context = scraped_text[:_MAX_WEB_CHARS]
+                summary = (
+                    f"Web fallback: {len(context):,} chars returned "
+                    f"(local dist={best_dist:.3f})."
+                )
                 return {
-                    "retrieved_context": [scraped_text],
-                    "sources": [f"Live Web Search ({source_url})"],
+                    "retrieved_context": [context],
+                    "sources":           [f"Live Web Search ({source_url})"],
                     "evidence": [{"tool": "knowledge", "task": query,
-                                  "summary": summary, "data": {"min_distance": best_dist}}],
+                                  "summary": summary,
+                                  "data": {"min_distance": best_dist}}],
                 }
         except Exception as exc:
             logger.error("[knowledge] Live web search failed: %s", exc)
+
+        # Both local AND web failed — return empty, not a misleading source name.
+        # FIX: original still said sources=["FinAssist Knowledge Base"] here,
+        # implying we found something when we found nothing.
         return {
             "retrieved_context": [],
-            "sources": ["FinAssist Knowledge Base"],
+            "sources":           [],
             "evidence": [{"tool": "knowledge", "task": query,
-                          "summary": "No results found.", "data": {}}],
+                          "summary": "No results found locally or via web search.",
+                          "data": {}}],
         }
 
-    # ── Stage 3: MMR ─────────────────────────────────────────────────────────
+    # ── Stage 3: MMR ──────────────────────────────────────────────────────────
     mmr_results = _mmr(query_emb, candidates, k=_MMR_KEEP, lambda_mult=_MMR_LAMBDA)
     logger.info(
         "[knowledge] MMR: %d candidates → %d diverse docs",
         len(candidates), len(mmr_results),
     )
 
-    # ── Stage 4: cross-encoder rerank ────────────────────────────────────────
+    # ── Stage 4: cross-encoder rerank ─────────────────────────────────────────
     final = _rerank(query, mmr_results, top_k=_RERANK_TOP_K)
 
     context_blocks = [d["text"] for d in final if d.get("text")]
@@ -289,7 +345,7 @@ def knowledge_tool(state: AgentState) -> dict:
 
     return {
         "retrieved_context": context_blocks,
-        "sources": source_refs or ["FinAssist Knowledge Base"],
+        "sources":           source_refs or ["FinAssist Knowledge Base"],
         "evidence": [{
             "tool":    "knowledge",
             "task":    query,
