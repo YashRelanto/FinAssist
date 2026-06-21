@@ -1,4 +1,4 @@
-"""Structured logging for the LangGraph pipeline and LLM calls."""
+"""Structured logging and observability for the LangGraph pipeline."""
 
 from __future__ import annotations
 
@@ -9,10 +9,7 @@ from contextvars import ContextVar
 from functools import wraps
 from typing import Any, Callable
 
-import openai
 from langgraph.errors import GraphInterrupt
-
-from app.core.config import settings
 
 logger = logging.getLogger("app.graph")
 
@@ -54,22 +51,13 @@ def get_token_usage() -> dict[str, int]:
     return usage
 
 
-def _record_token_usage(node: str, total_tokens: int) -> None:
+def record_token_usage(node: str, total_tokens: int) -> None:
     """Add a completion's token count to the per-node accumulator."""
     if not total_tokens:
         return
     with _token_lock:
         bucket = _token_usage.setdefault(_run_key(), {})
         bucket[node] = bucket.get(node, 0) + int(total_tokens)
-
-
-def _ctx_prefix() -> str:
-    ctx = _run_context.get()
-    if not ctx:
-        return ""
-    uid = ctx.get("user_id", "?")
-    tid = ctx.get("thread_id", "?")
-    return f"user={uid[:8]} thread={tid[:8]} "
 
 
 def truncate(text: str | None, max_len: int = 200) -> str:
@@ -81,30 +69,6 @@ def truncate(text: str | None, max_len: int = 200) -> str:
     return f"{cleaned[: max_len - 3]}..."
 
 
-def summarize_messages(messages: list[dict[str, Any]]) -> str:
-    parts: list[str] = []
-    for msg in messages:
-        role = msg.get("role", "?")
-        content = truncate(str(msg.get("content", "")), 120)
-        parts.append(f"{role}={content!r}")
-    return "; ".join(parts)
-
-
-def summarize_state_snapshot(state: dict[str, Any]) -> str:
-    fields = {
-        "intent": state.get("intent"),
-        "selected_agent": state.get("selected_agent"),
-        "workflow_active": state.get("workflow_active"),
-        "clarification_needed": state.get("clarification_needed"),
-        "input_blocked": state.get("input_blocked"),
-        "output_blocked": state.get("output_blocked"),
-    }
-    query = state.get("rewritten_query") or state.get("user_query")
-    if query:
-        fields["query"] = truncate(str(query), 120)
-    return ", ".join(f"{k}={v!r}" for k, v in fields.items() if v is not None)
-
-
 def _summarize_output(updates: dict[str, Any] | None) -> str:
     """Full output of a node's return dict — no truncation."""
     if not updates:
@@ -114,42 +78,6 @@ def _summarize_output(updates: dict[str, Any] | None) -> str:
         return json.dumps(updates, default=str, ensure_ascii=False)
     except Exception:
         return str(updates)
-
-
-def create_openai_client() -> openai.OpenAI:
-    return openai.OpenAI(
-        api_key=settings.active_api_key,
-        base_url=settings.active_base_url,
-    )
-
-
-def graph_chat_completion(
-    *,
-    node: str,
-    purpose: str,
-    client: openai.OpenAI | None = None,
-    **kwargs: Any,
-):
-    """Log and execute an OpenAI chat completion used inside the graph."""
-    model = kwargs.get("model", settings.active_chat_model)
-    started = time.perf_counter()
-
-    if client is None:
-        client = create_openai_client()
-
-    response = client.chat.completions.create(**kwargs)
-    elapsed_ms = (time.perf_counter() - started) * 1000
-
-    usage = getattr(response, "usage", None)
-    tokens = getattr(usage, "total_tokens", 0) or 0
-    if tokens:
-        _record_token_usage(node, tokens)
-
-    logger.info(
-        "[%s] LLM | purpose=%s model=%s elapsed_ms=%.0f tokens=%d",
-        node, purpose, model, elapsed_ms, tokens,
-    )
-    return response
 
 
 def wrap_graph_node(node_name: str, fn: Callable[[Any], dict[str, Any]]) -> Callable[[Any], dict[str, Any]]:

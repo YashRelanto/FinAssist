@@ -13,7 +13,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.services.analytics_service import build_weekend_behavior_insight
-from app.graph.logging_utils import create_openai_client
+from app.core.llm_client import create_openai_client
 from app.utils.tab_logging import tab_debug, tab_info, tab_warning
 
 logger = logging.getLogger(__name__)

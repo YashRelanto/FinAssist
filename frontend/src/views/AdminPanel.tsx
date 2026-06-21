@@ -16,41 +16,19 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
-import { loadAuthSession } from '../lib/authSession';
-import { activeUserId } from '../lib/activeUserId';
+import { apiFetch } from '../lib/api';
 import { PageHeader, PageShell } from '../components/PageShell';
 
-const API_BASE = 'http://localhost:8000/api/admin';
-
 // ─── helpers ────────────────────────────────────────────────────────────────
-function adminHeaders(extra: Record<string, string> = {}): Record<string, string> {
-  const session = loadAuthSession();
-  const uid = activeUserId(session?.user);
-  if (!uid) {
-    throw new Error('Not signed in');
-  }
-  const headers: Record<string, string> = {
-    'X-User-Id': uid,
-    ...extra,
-  };
-  const token = session?.accessToken ?? localStorage.getItem('token');
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-  return headers;
-}
-
 async function adminGet(path: string) {
-  const r = await fetch(`${API_BASE}${path}`, {
-    headers: adminHeaders(),
-  });
+  const r = await apiFetch(`/api/admin${path}`);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 async function adminPost(path: string, body?: unknown) {
-  const r = await fetch(`${API_BASE}${path}`, {
+  const r = await apiFetch(`/api/admin${path}`, {
     method: 'POST',
-    headers: adminHeaders({ 'Content-Type': 'application/json' }),
+    headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) throw new Error(await r.text());

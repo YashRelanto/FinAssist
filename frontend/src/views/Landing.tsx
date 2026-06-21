@@ -6,42 +6,17 @@ import { APP_NAME } from '../lib/utils';
 import { BrandMark } from '../components/BrandMark';
 import { FoundationScrollSection } from '../components/landing/FoundationScrollSection';
 import { LandingHeroDashboard } from '../components/landing/LandingHeroDashboard';
-
-const HERO_IMAGE =
-  'https://lh3.googleusercontent.com/aida-public/AB6AXuAcWbGUdACr36fX5hq-oT8ngiA2oYJGmnxAuMCv8IdYpfmCPhQFCgMjJVe8S1SNbcmYtXokWEjq7HXcuDPqsK66nAOCWDwwcFnAi7rLIiGgq0g4ciJ9HTaa_-y83MYXjI0tC86fE7SfguLA6iZM4nPo-IvPIuEsdJ8I8HhX_UpvxAj6oP-EDtty-0DvKpE8X0rOlIO9Xs6aMeYigq4zDwSC8lIPL8OkX7edi3UY4poLurpq-LSLK2Op14VLN44qL8TscvRN9LtcZDCo';
+import { CustomerBasesSection } from '../components/landing/CustomerBasesSection';
+import { ManifestoScrollSection } from '../components/landing/ManifestoScrollSection';
+import { AIAssistantHighlight } from '../components/landing/AIAssistantHighlight';
 
 const TRUST_BRANDS = [
+  'AI Assistant',
   'Designed for clarity',
   'Privacy First',
   'Smarter Planning',
   'Unified Financial View',
   'Precision Analytics',
-];
-
-const USE_CASES = [
-  {
-    title: 'Market Analysis',
-    desc: 'Generate comprehensive reports aligned with portfolio strategy.',
-    image:
-      'https://lh3.googleusercontent.com/aida-public/AB6AXuBuMLs5Etr282ziHGQ97qSR_FW7o8KVbN5I0cxtVsoe9tuiC2VR1EuL3W2Eh6W_kPkQRsnk_bwnhy7JgNsf6Iyiq8Y41zzmb9AilMJJSTIDZlS68R9rf8ujHZQnABMMfFqSHo4VhFWv87RGdlvwD5Y8La_Tidtnc0XM8oI6I4st_LM9cZfHhP7TsziILGGRT--BMEEB5mEloXIVxfSJ3A1r6UC8PX9xxzAylxQ3sTBFdhyUX8M21v4z_JPwdXcUK-UTTYOg9V1zETjI',
-  },
-  {
-    title: 'Risk Assessment',
-    desc: 'Ensure compliance and stability across all investments.',
-    image: HERO_IMAGE,
-  },
-  {
-    title: 'Budget Planning',
-    desc: 'Empower teams with up-to-date, structured spending data.',
-    image:
-      'https://lh3.googleusercontent.com/aida-public/AB6AXuAwKGdFgAHSj6Ezip4VTA15Faz_307SpXnRvVEdxj_KmdlUUgh-iR5Q_HBI-GZtIBCDOBXCtjGX3OTlydTQ8wIQOMqizGfOJ1pxT6JJpczWRgvmILVhew1LruibCBmM_UcWq2kCgX1dfOuIdVIo2DrdSGc8dTSaM5n2GG6VEIJN5kXZ55PXq8RdlcOvm7GZn4ANaYrE4o9f8hk0ES05NA9lu2awVwx1WP-5fd6y0I7pMeXmXDsJ6TXD60vmomEkeXG5OHXs-PbbuBox',
-  },
-  {
-    title: 'AI Insights',
-    desc: 'Codify your financial goals and get intelligent recommendations.',
-    image:
-      'https://lh3.googleusercontent.com/aida-public/AB6AXuBuMLs5Etr282ziHGQ97qSR_FW7o8KVbN5I0cxtVsoe9tuiC2VR1EuL3W2Eh6W_kPkQRsnk_bwnhy7JgNsf6Iyiq8Y41zzmb9AilMJJSTIDZlS68R9rf8ujHZQnABMMfFqSHo4VhFWv87RGdlvwD5Y8La_Tidtnc0XM8oI6I4st_LM9cZfHhP7TsziILGGRT--BMEEB5mEloXIVxfSJ3A1r6UC8PX9xxzAylxQ3sTBFdhyUX8M21v4z_JPwdXcUK-UTTYOg9V1zETjI',
-  },
 ];
 
 export const Landing: React.FC = () => {
@@ -103,35 +78,11 @@ export const Landing: React.FC = () => {
 
         <FoundationScrollSection />
 
-        <section id="manifesto" className="py-32 px-margin max-w-[1000px] mx-auto text-center">
-          <h2 className="font-display text-3xl md:text-5xl leading-[1.1] tracking-tight text-balance font-light">
-            As financial data expands across your life, the need for a singular source of truth has never been more
-            critical. {APP_NAME} unifies your strategy.
-          </h2>
-        </section>
+        <ManifestoScrollSection />
 
-        <section className="py-24 px-margin max-w-[1728px] mx-auto">
-          <h2 className="font-display text-3xl font-bold text-center mb-12">Built for every team.</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            {USE_CASES.map((item) => (
-              <div
-                key={item.title}
-                className="relative h-[320px] rounded-[32px] p-8 flex flex-col justify-end overflow-hidden border border-lumio-line/20 group"
-              >
-                <img
-                  alt={item.title}
-                  className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                  src={item.image}
-                />
-                <div className="absolute inset-0 bg-black/45" />
-                <div className="relative z-10">
-                  <h3 className="text-xl font-bold text-white mb-2">{item.title}</h3>
-                  <p className="text-white/80 text-sm">{item.desc}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+        <CustomerBasesSection />
+
+        <AIAssistantHighlight />
 
         <section id="cta" className="py-32 px-margin">
           <div className="max-w-4xl mx-auto flex flex-col items-center text-center">

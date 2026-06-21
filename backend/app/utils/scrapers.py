@@ -34,15 +34,6 @@ MIN_CHUNK_LENGTH:     int   = 50    # chars — discard tiny trailing chunks
 MAX_CHUNK_WORDS:      int   = 160   # words per chunk (≈ 800 chars at 5 chars/word)
 OVERLAP_WORDS:        int   = 20    # words carried forward from previous chunk
 
-# FIX: was rebuilt as a local dict inside store_in_chroma() on every call
-COLLECTION_MAP: dict[str, str] = {
-    "banking":       "banking_data",
-    "stocks":        "investment_data",
-    "mutual_funds":  "investment_data",
-    "gold":          "investment_data",
-    "retirement":    "financial_tips",
-    "financial_tips":"financial_tips",
-}
 
 # ══════════════════════════════════════════════════════════════════════
 # DATA SOURCES
@@ -306,7 +297,7 @@ def scrape_url_playwright(
 # CHROMADB STORAGE
 # ══════════════════════════════════════════════════════════════════════
 def store_in_chroma(category: str, url: str, source_name: str, text: str) -> None:
-    """Chunk *text* and upsert into the appropriate ChromaDB collection."""
+    """Chunk *text* and upsert into the single ChromaDB collection."""
     if not text or len(text) < MIN_TEXT_LENGTH:
         log.warning(
             "Skipping '%s' — insufficient text (%d chars)",
@@ -321,7 +312,7 @@ def store_in_chroma(category: str, url: str, source_name: str, text: str) -> Non
 
     log.info("'%s' → %d chunks", source_name, len(chunks))
 
-    collection_name = COLLECTION_MAP.get(category, "financial_tips")
+    collection_name = "finassist_knowledge"
     now = datetime.now().isoformat()
 
     # FIX: original built a list[dict], unpacked it into 3 separate lists,

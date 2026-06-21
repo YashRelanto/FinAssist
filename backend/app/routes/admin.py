@@ -58,11 +58,6 @@ async def admin_overview(
     return {"success": True, "performance": performance, "drift": drift}
 
 
-@router.get("/drift")
-async def admin_drift(_user=Depends(require_admin)):
-    return {"success": True, "drift": compute_drift_stats()}
-
-
 @router.get("/performance")
 async def admin_performance(_user=Depends(require_admin)):
     return {"success": True, "performance": get_production_performance()}

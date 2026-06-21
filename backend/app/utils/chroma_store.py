@@ -8,9 +8,8 @@ Provides a module-level singleton `chroma_db` that is imported by:
 Storage location: backend/chroma_db/   (auto-created on first run)
 
 Collections managed:
-  - banking_data      : Bank rates, FD/RD, loans, credit cards
-  - investment_data   : Equities, mutual funds, NPS, SGB, SIP
-  - financial_tips    : Budgeting, tax, insurance, retirement
+  - finassist_knowledge : All scraped financial data (banking, investments, tips)
+                          Category is preserved in per-chunk metadata.
 
 Embedding strategy (priority order):
   1. OpenAI text-embedding-3-small  — if OPENAI_API_KEY is set (best quality)
@@ -51,9 +50,7 @@ _CHROMA_DB_PATH: str = os.path.normpath(
 # ─── Known collections (auto-created on first access) ─────────────────────────
 
 KNOWN_COLLECTIONS: list[str] = [
-    "banking_data",
-    "investment_data",
-    "financial_tips",
+    "finassist_knowledge",
 ]
 
 
@@ -184,6 +181,10 @@ class ChromaStore:
         except Exception as exc:
             logger.error("[ChromaStore] Cannot get/create collection '%s': %s", name, exc)
             raise
+
+    def get_or_create_collection(self, name: str) -> chromadb.Collection:
+        """Public wrapper around _get_or_create_collection."""
+        return self._get_or_create_collection(name)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -478,6 +479,6 @@ Module-level ChromaStore singleton.  Import and use like:
 
     from app.utils.chroma_store import chroma_db
 
-    results = chroma_db.search("banking_data", "best FD rates", n_results=3)
-    chroma_db.add_documents("banking_data", documents)
+    results = chroma_db.search("finassist_knowledge", "best FD rates", n_results=3)
+    chroma_db.add_documents("finassist_knowledge", documents)
 """

@@ -19,7 +19,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import interrupt
 
 from app.core.config import settings
-from app.graph.logging_utils import graph_chat_completion
+from app.graph.llm import graph_chat_completion
 from app.graph.state import AgentState
 from app.utils.prompts import BRAIN_SYSTEM, BRAIN_USER
 
