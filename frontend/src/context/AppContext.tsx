@@ -697,7 +697,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setAccountHubAnalysisLoading(true);
       inflightRef.current.accountHubAnalysis = apiFetch(
-        `/api/account-hub-analysis`,
+        `/api/spending-analytics`,
       )
         .then((res) => res.json())
         .then((data) => {
@@ -885,7 +885,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const existing = inflightMap.get(key);
       if (existing) return existing;
 
-      const query = new URLSearchParams({ user_id: uid, period });
+      const query = new URLSearchParams({ period });
       if (params.accountId) query.set('account_id', params.accountId);
       if (params.categoryId) query.set('category_id', params.categoryId);
       if (params.merchant) query.set('merchant', params.merchant);

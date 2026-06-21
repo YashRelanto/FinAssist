@@ -311,7 +311,7 @@ async def get_dashboard_summary(
         tx_select = (
             "transaction_id, amount, transaction_type, transaction_date, "
             "merchant_name, description, is_recurring, recurrence_period, recurrence_skips, "
-            "category_id, categories(main_category, sub_category)"
+            "category_id, account_id, categories(main_category, sub_category)"
         )
         page_size = 1000
         offset = 0
@@ -332,14 +332,15 @@ async def get_dashboard_summary(
                 break
             offset += page_size
 
-        recent_res = (
-            supabase.table("transactions")
-            .select("*, categories(main_category, sub_category), accounts(account_name)")
-            .eq("user_id", user_id)
-            .order("transaction_date", desc=True)
-            .limit(8)
-            .execute()
-        )
+        accounts_dict = {acc["account_id"]: acc for acc in accounts}
+        recent_rows = []
+        for tx in reversed(transactions):
+            tx_copy = dict(tx)
+            acc_id = tx_copy.get("account_id")
+            tx_copy["accounts"] = {"account_name": accounts_dict[acc_id].get("account_name")} if acc_id and acc_id in accounts_dict else None
+            recent_rows.append(tx_copy)
+            if len(recent_rows) >= 8:
+                break
 
         budget_res = (
             supabase.table("budgets")
@@ -379,7 +380,7 @@ async def get_dashboard_summary(
             user_id=user_id.strip(),
             accounts=accounts,
             transactions=transactions,
-            recent_rows=recent_res.data or [],
+            recent_rows=recent_rows,
             budgets=budget_res.data or [],
             profile_income=profile_income,
             profile_fixed_rent=profile_fixed_rent,
@@ -462,31 +463,13 @@ def _build_spending_analytics_response(
 
 @router.get("/spending-analytics")
 async def get_spending_analytics(
-    user_id: str,
-    period: str = "3m",
-    account_id: str | None = None,
-    category_id: str | None = None,
-    merchant: str | None = None,
-):
-    """Spending analytics for the Analytics/Forecasting view (category trends, merchants, behaviour)."""
-    return _build_spending_analytics_response(
-        user_id,
-        period=period,
-        account_id=account_id,
-        category_id=category_id,
-        merchant=merchant,
-    )
-
-
-@router.get("/account-hub-analysis")
-async def get_account_hub_analysis(
     period: str = "3m",
     account_id: str | None = None,
     category_id: str | None = None,
     merchant: str | None = None,
     current_user: dict = Depends(get_current_user),
 ):
-    """JWT-authenticated alias of spending-analytics used by the account hub."""
+    """Spending analytics for the Analytics/Forecasting view (category trends, merchants, behaviour)."""
     return _build_spending_analytics_response(
         current_user["user_id"],
         period=period,

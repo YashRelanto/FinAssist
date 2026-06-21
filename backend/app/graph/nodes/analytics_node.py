@@ -61,7 +61,8 @@ def analytics_node(state: AgentState) -> dict:
         return {
             "analytics_results": analytics_results,
             "evidence": [{
-                "tool": "nl2sql", "task": sub_question,
+                "tool": "nl2sql", 
+                "task": sub_question,
                 "entities": resolved_entities,
                 "analysis_type": analysis_type,
                 "summary": f"Comparison: A=₹{sum_a:,.2f} vs B=₹{sum_b:,.2f} ({pct_change:+.1f}%).",
