@@ -47,10 +47,10 @@ def test_category_trends_mom_change():
 
 def test_merchant_growth_sorted():
     rows = [
-        _txn("2026-04-01", 100, "Food", "Swiggy"),
-        _txn("2026-05-01", 200, "Food", "Swiggy"),
-        _txn("2026-04-01", 50, "Food", "Amazon"),
-        _txn("2026-05-01", 60, "Food", "Amazon"),
+        _txn("2026-04-01", 1000, "Food", "Swiggy"),
+        _txn("2026-05-01", 2000, "Food", "Swiggy"),
+        _txn("2026-04-01", 500, "Food", "Amazon"),
+        _txn("2026-05-01", 600, "Food", "Amazon"),
     ]
     ma = build_merchant_analytics(
         rows,
@@ -62,6 +62,27 @@ def test_merchant_growth_sorted():
     assert ma["top_merchants"][0]["name"] == "Swiggy"
     assert ma["merchant_growth"][0]["name"] == "Swiggy"
     assert ma["merchant_growth"][0]["growth_pct"] == 100.0
+    assert ma["merchant_growth"][0]["growth_display"] == "+100.0%"
+    assert "₹1,000" in ma["merchant_growth"][0]["growth_insight"]
+
+
+def test_merchant_growth_excludes_low_baseline():
+    rows = [
+        _txn("2026-04-01", 30, "Food", "Barbeque Nation"),
+        _txn("2026-05-01", 9386, "Food", "Barbeque Nation"),
+        _txn("2026-04-01", 1000, "Food", "Swiggy"),
+        _txn("2026-05-01", 1500, "Food", "Swiggy"),
+    ]
+    ma = build_merchant_analytics(
+        rows,
+        start_date="2026-05-01",
+        end_date="2026-05-31",
+        comparison_start="2026-04-01",
+        comparison_end="2026-04-30",
+    )
+    names = [m["name"] for m in ma["merchant_growth"]]
+    assert "Barbeque Nation" not in names
+    assert names[0] == "Swiggy"
 
 
 def test_spending_behavior_weekend_multiplier():

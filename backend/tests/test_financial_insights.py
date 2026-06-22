@@ -38,6 +38,10 @@ def _sample_analytics():
                     "current_total": 1500,
                     "prior_total": 1000,
                     "growth_pct": 50,
+                    "growth_display": "+50.0%",
+                    "growth_insight": (
+                        "Swiggy spending rose 50.0% vs the prior period (₹1,000 → ₹1,500)."
+                    ),
                 }
             ],
             "concentration": {"top_n": 5, "pct_of_total": 47},

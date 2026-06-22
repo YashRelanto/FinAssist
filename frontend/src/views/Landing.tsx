@@ -10,6 +10,7 @@ import { ProductFeaturesSection } from '../components/landing/ProductFeaturesSec
 import { CustomerBasesSection } from '../components/landing/CustomerBasesSection';
 import { ManifestoScrollSection } from '../components/landing/ManifestoScrollSection';
 import { AIAssistantHighlight } from '../components/landing/AIAssistantHighlight';
+import { LandingPreloader } from '../components/landing/LandingPreloader';
 
 const TRUST_BRANDS = [
   'AI Assistant',
@@ -54,7 +55,7 @@ export const Landing: React.FC = () => {
 
       <main>
         <section className="pt-48 px-margin max-w-[1728px] mx-auto flex flex-col items-center text-center pb-32">
-          <h1 className="font-display text-5xl md:text-7xl lg:text-[82px] leading-[1.05] tracking-tighter text-balance max-w-4xl mb-8">
+          <h1 className="font-hero text-6xl md:text-8xl lg:text-[100px] leading-[0.92] tracking-wide uppercase text-balance max-w-4xl mb-8">
             One Platform for every Financial Decision
           </h1>
           <p className="text-lg text-lumio-muted max-w-2xl mb-10 leading-relaxed">

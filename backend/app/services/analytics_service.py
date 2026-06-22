@@ -22,6 +22,8 @@ from app.utils.tab_logging import tab_debug
 logger = logging.getLogger(__name__)
 
 WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+MIN_PRIOR_MERCHANT_SPEND = 500.0
+MAX_GROWTH_PCT_DISPLAY = 300.0
 
 
 def _calendar_weekday_weekend_counts(
@@ -90,6 +92,43 @@ def _category_from_row(row: dict[str, Any]) -> str:
 def _merchant_from_row(row: dict[str, Any]) -> str:
     name = (row.get("merchant_name") or row.get("description") or "Unknown").strip()
     return name or "Unknown"
+
+
+def _inr(amount: float) -> str:
+    return f"₹{amount:,.0f}"
+
+
+def _format_merchant_growth_display(prior: float, current: float, growth_pct: float) -> str:
+    if growth_pct < 0:
+        return f"{growth_pct:.1f}%"
+    if growth_pct > MAX_GROWTH_PCT_DISPLAY:
+        return f"+{MAX_GROWTH_PCT_DISPLAY:.0f}%+"
+    return f"+{growth_pct:.1f}%"
+
+
+def _format_merchant_growth_insight(
+    name: str,
+    prior: float,
+    current: float,
+    growth_pct: float,
+) -> str:
+    delta = current - prior
+    if prior < MIN_PRIOR_MERCHANT_SPEND:
+        return (
+            f"{name} spending rose to {_inr(current)} this period "
+            f"(only {_inr(prior)} in the prior period — too small for a reliable % comparison)."
+        )
+    if abs(growth_pct) > MAX_GROWTH_PCT_DISPLAY:
+        direction = "rose" if delta >= 0 else "fell"
+        return (
+            f"{name} spending {direction} sharply — {_inr(prior)} → {_inr(current)} "
+            f"({'+' if growth_pct >= 0 else ''}{growth_pct:.1f}% vs prior period)."
+        )
+    direction = "rose" if growth_pct >= 0 else "fell"
+    return (
+        f"{name} spending {direction} {abs(growth_pct):.1f}% vs the prior period "
+        f"({_inr(prior)} → {_inr(current)})."
+    )
 
 
 def filter_analytics_transactions(
@@ -300,14 +339,17 @@ def build_merchant_analytics(
     for name, data in current.items():
         cur = data["total"]
         prev = prior.get(name, 0.0)
-        if prev <= 0 or cur <= 0:
+        if prev <= 0 or cur <= 0 or prev < MIN_PRIOR_MERCHANT_SPEND:
             continue
+        growth_pct = ((cur - prev) / prev) * 100
         growth.append(
             {
                 "name": name,
                 "current_total": round(cur, 2),
                 "prior_total": round(prev, 2),
-                "growth_pct": round(((cur - prev) / prev) * 100, 1),
+                "growth_pct": round(growth_pct, 1),
+                "growth_display": _format_merchant_growth_display(prev, cur, growth_pct),
+                "growth_insight": _format_merchant_growth_insight(name, prev, cur, growth_pct),
             }
         )
     growth.sort(key=lambda x: x["growth_pct"], reverse=True)

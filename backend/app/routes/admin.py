@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.core.admin_auth import require_admin
+from app.core.auth import require_admin
 from app.services.prophet.monitoring import compute_drift_stats, get_production_performance
 from app.services.prophet.jobs import (
     TRAINABLE_MODELS,

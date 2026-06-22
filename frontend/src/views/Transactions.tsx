@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Search, Download, Upload, Plus, Edit2, Trash2 } from 'lucide-react';
+import { Search, Download, Upload, Plus, Edit2, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
 import { TransactionModal } from '../components/TransactionModal';
 import { QuickAddModal } from '../components/Dashboard/QuickAddModal';
@@ -10,6 +10,8 @@ import { apiFetch } from '../lib/api';
 import { activeUserId } from '../lib/activeUserId';
 import { analyzeStatementFile } from '../lib/statementParser';
 import { PageHeader, PageLoading, PageShell, lumio } from '../components/PageShell';
+
+const PAGE_SIZE = 25;
 
 export const Transactions: React.FC = () => {
   const {
@@ -36,6 +38,7 @@ export const Transactions: React.FC = () => {
   const [selectedAccount, setSelectedAccount] = useState('All Accounts');
   const [selectedCategory, setSelectedCategory] = useState('All Categories');
   const [selectedType, setSelectedType] = useState('All Types');
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Bulk statement upload states
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -213,6 +216,26 @@ export const Transactions: React.FC = () => {
     return matchesSearch && matchesAccount && matchesCategory && matchesType;
   }), [transactions, search, selectedAccount, selectedCategory, selectedType]);
 
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [search, selectedAccount, selectedCategory, selectedType]);
+
+  React.useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const paginated = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }, [filtered, currentPage]);
+
+  const rangeStart = filtered.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(currentPage * PAGE_SIZE, filtered.length);
+
   if (isLoading && authReady && user?.isAuthenticated) {
     return <PageLoading />;
   }
@@ -375,7 +398,14 @@ export const Transactions: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-outline-variant/20">
-              {filtered.map((row) => (
+              {paginated.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-6 py-12 text-center text-sm text-outline font-medium">
+                    No transactions match your filters.
+                  </td>
+                </tr>
+              ) : (
+                paginated.map((row) => (
                 <tr key={row.id} className={lumio.tableRow}>
                   <td className="px-6 py-4 text-sm font-medium text-on-surface-variant">{row.date}</td>
                   <td className="px-6 py-4 text-sm font-bold text-on-surface">{row.merchant}</td>
@@ -412,13 +442,42 @@ export const Transactions: React.FC = () => {
                     </div>
                   </td>
                 </tr>
-              ))}
+                ))
+              )}
             </tbody>
           </table>
         </div>
-        {/* Pagination placeholder */}
-        <div className="px-6 py-4 border-t border-outline-variant/30 flex items-center justify-between bg-surface-container-low/30">
-          <span className="text-xs text-outline font-medium">Showing {filtered.length} transactions</span>
+        <div className="px-6 py-4 border-t border-outline-variant/30 flex flex-col sm:flex-row items-center justify-between gap-4 bg-surface-container-low/30">
+          <span className="text-xs text-outline font-medium">
+            {filtered.length === 0
+              ? 'No transactions'
+              : `Showing ${rangeStart}–${rangeEnd} of ${filtered.length} transactions`}
+          </span>
+          {filtered.length > PAGE_SIZE && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className={cn(lumio.btnSecondary, 'px-3 py-2 disabled:opacity-40 disabled:cursor-not-allowed')}
+                aria-label="Previous page"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="text-xs font-bold text-on-surface-variant px-2 tabular-nums">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className={cn(lumio.btnSecondary, 'px-3 py-2 disabled:opacity-40 disabled:cursor-not-allowed')}
+                aria-label="Next page"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

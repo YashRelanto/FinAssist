@@ -3,7 +3,14 @@ import { formatCurrency } from '../../lib/utils';
 
 interface MerchantAnalyticsPanelProps {
   topMerchants: { name: string; total: number; txn_count: number }[];
-  merchantGrowth: { name: string; current_total: number; prior_total: number; growth_pct: number }[];
+  merchantGrowth: {
+    name: string;
+    current_total: number;
+    prior_total: number;
+    growth_pct: number;
+    growth_display?: string;
+    growth_insight?: string;
+  }[];
   concentration?: { top_n: number; pct_of_total: number };
   fastestGrowingInsight?: string | Record<string, unknown>;
   concentrationInsight?: string | { top_n?: number; pct_of_total?: number };
@@ -27,15 +34,37 @@ function formatConcentrationText(
   return null;
 }
 
+function formatGrowthBadge(m: {
+  growth_pct: number;
+  growth_display?: string;
+}): string {
+  if (m.growth_display) return m.growth_display;
+  return m.growth_pct < 0 ? `${m.growth_pct}%` : `+${m.growth_pct}%`;
+}
+
 function formatFastestGrowingText(
   insight: MerchantAnalyticsPanelProps['fastestGrowingInsight'],
 ): string | null {
   if (typeof insight === 'string' && insight.trim()) {
     return insight;
   }
+  if (insight && typeof insight === 'object' && 'growth_insight' in insight) {
+    const m = insight as { growth_insight?: string };
+    if (m.growth_insight) return m.growth_insight;
+  }
   if (insight && typeof insight === 'object' && 'name' in insight && 'growth_pct' in insight) {
-    const m = insight as { name: string; growth_pct: number };
-    return `${m.name} is your fastest growing merchant (+${m.growth_pct}%).`;
+    const m = insight as {
+      name: string;
+      growth_pct: number;
+      growth_display?: string;
+      prior_total?: number;
+      current_total?: number;
+    };
+    const badge = formatGrowthBadge(m);
+    if (m.prior_total != null && m.current_total != null) {
+      return `${m.name} spending changed ${badge} vs the prior period (${formatCurrency(m.prior_total)} → ${formatCurrency(m.current_total)}).`;
+    }
+    return `${m.name} is your fastest growing merchant (${badge}).`;
   }
   return null;
 }
@@ -99,11 +128,22 @@ export const MerchantAnalyticsPanel: React.FC<MerchantAnalyticsPanelProps> = ({
           <div className="space-y-3">
             {merchantGrowth.length ? (
               merchantGrowth.slice(0, 6).map((m) => (
-                <div key={m.name} className="flex justify-between items-center text-xs font-bold">
-                  <span>{m.name}</span>
-                  <span className="text-error bg-error/10 px-2 py-0.5 rounded-full">
-                    +{m.growth_pct}%
-                  </span>
+                <div key={m.name} className="space-y-1">
+                  <div className="flex justify-between items-center text-xs font-bold gap-3">
+                    <span className="truncate">{m.name}</span>
+                    <span
+                      className={
+                        m.growth_pct < 0
+                          ? 'text-success bg-success/10 px-2 py-0.5 rounded-full shrink-0'
+                          : 'text-error bg-error/10 px-2 py-0.5 rounded-full shrink-0'
+                      }
+                    >
+                      {formatGrowthBadge(m)}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-outline font-medium">
+                    {formatCurrency(m.prior_total)} → {formatCurrency(m.current_total)}
+                  </p>
                 </div>
               ))
             ) : (

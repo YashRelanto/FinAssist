@@ -12,7 +12,7 @@ import time
 from typing import Any
 
 from app.core.config import settings
-from app.services.analytics_service import build_weekend_behavior_insight
+from app.services.analytics_service import _inr, build_weekend_behavior_insight
 from app.core.llm_client import create_openai_client
 from app.utils.tab_logging import tab_debug, tab_info, tab_warning
 
@@ -99,11 +99,14 @@ def _category_suggestion_text(t: dict[str, Any]) -> str:
 def _merchant_insight_strings(facts: dict[str, Any]) -> tuple[str, str]:
     fastest = facts["merchants"].get("fastest_growing")
     conc = facts["merchants"].get("concentration") or {}
-    fastest_insight = (
-        f"{fastest['name']} is your fastest growing merchant (+{fastest['growth_pct']}%)."
-        if fastest
-        else "No merchant growth data for the comparison window."
-    )
+    if fastest:
+        fastest_insight = fastest.get("growth_insight") or (
+            f"{fastest['name']} spending rose {fastest.get('growth_display', f'+{fastest['growth_pct']}%')} "
+            f"vs the prior period ({_inr(float(fastest.get('prior_total') or 0))} → "
+            f"{_inr(float(fastest.get('current_total') or 0))})."
+        )
+    else:
+        fastest_insight = "No merchant growth data for the comparison window."
     conc_insight = (
         f"Top {conc.get('top_n', 5)} merchants account for "
         f"{conc.get('pct_of_total', 0)}% of total spending."
