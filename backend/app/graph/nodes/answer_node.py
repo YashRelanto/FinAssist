@@ -384,8 +384,11 @@ def _scenario_metrics(s: Dict[str, Any], is_loan: bool) -> List[Dict]:
         bal_after = float(s.get("balance_after_upfront") or 0)
         bal_row = (("Bank left after buying", inr("balance_after_upfront")) if bal_after >= 0
                    else ("Funding shortfall", _inr(abs(bal_after))))
-        rows += [("Down payment (total)", inr("down_payment_amount"))]
-        # Down-payment sources (only the non-zero ones):
+        stamp = float(s.get("extra_upfront") or 0)
+        rows.append(("Down payment", inr("down_payment_amount")))
+        if stamp > 0:
+            rows.append(("Stamp duty & fees", _inr(stamp)))
+        # Where the upfront (down payment + fees) is funded from — these reconcile to their sum:
         if bank_cash > 0:
             rows.append(("  • from bank cash", _inr(bank_cash)))
         if from_fds > 0:
@@ -402,6 +405,10 @@ def _scenario_metrics(s: Dict[str, Any], is_loan: bool) -> List[Dict]:
             ("Total cost", inr("total_cost_of_ownership")),
             bal_row,
         ]
+        # Show the EMI shortfall directly when the EMI doesn't fit the saving capacity.
+        emi_over = float(s.get("estimated_emi") or 0) - 0.70 * float(s.get("assumed_monthly_saving") or 0)
+        if not s.get("emi_fits_capacity") and emi_over > 0:
+            rows.append(("EMI over budget by", _inr(emi_over) + "/mo"))
         if float(s.get("penalty_paid") or dep.get("penalty_paid") or 0) > 0:
             rows.append(("Interest forfeited (breaking FDs)", dep.get("penalty_paid_inr") or _inr(dep.get("penalty_paid") or 0)))
         # Assumptions, stated plainly.

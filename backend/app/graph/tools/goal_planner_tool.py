@@ -1045,6 +1045,7 @@ def _loan_scenarios(*, price: float, existing: float, user_months: float, user_d
             "emi_pre_funded_monthly": round(emi_reserve_monthly, 2),
             "total_interest_paid": interest,
             "total_cost_of_ownership": round(price + interest + extra_upfront, 2),
+            "extra_upfront": round(extra_upfront, 2),                 # stamp duty / registration / fees
             "timeline_months": months,
             "monthly_savings_needed": monthly_save,
             "assumed_monthly_saving": round(capacity, 2),
@@ -1089,14 +1090,20 @@ def _loan_scenarios(*, price: float, existing: float, user_months: float, user_d
     #     all-in plan, so it deploys more than C's minimal break — distinguishing it from B and C.
     liquidity_all = _minimal_deployment(price + extra_upfront, agg, include_bank=False)["deployed_total"]
     # Throw bank cash + cuts-boosted savings + every breakable fund at the down payment (cap at price).
-    dp_amt_d = min(price, max(round(price * user_dp_pct / 100.0, 2),
-                              available_now + updated_save * months + liquidity_all - extra_upfront))
+    # NO user-% floor here: when the goal is out of reach this yields the HONEST max down payment the
+    # funds can actually provide (which may be BELOW the stated %), with the real (larger) loan/EMI —
+    # so the answer can say "even deploying everything, the most you can put down is X".
+    dp_amt_d = min(price, max(0.0, available_now + updated_save * months + liquidity_all - extra_upfront))
     dp_pct_d = (dp_amt_d / price * 100.0) if price else user_dp_pct
     loan_d = max(0.0, price - dp_amt_d)
     emi_d = _calc_emi(loan_d, rate, tenure) if loan_d > 0 else 0.0
-    reserve_monthly_d = max(0.0, emi_d - _CAP_UTIL * updated_save)     # EMI the saving can't cover
-    # Liquidity actually broken = the down-payment beyond bank + cuts-boosted savings, plus any reserve.
+    # Liquidity is used FIRST for the down payment; only what's LEFT can pre-fund the EMI gap. Cap the
+    # reserve by that leftover — otherwise D would claim a phantom reserve (e.g. ₹1.6cr) it can't fund
+    # and falsely report an unaffordable goal as feasible.
     shortfall_dp_d = max(0.0, dp_amt_d + extra_upfront - available_now - updated_save * months)
+    liquidity_left = max(0.0, liquidity_all - shortfall_dp_d)
+    reserve_needed = max(0.0, emi_d - _CAP_UTIL * updated_save)        # EMI the saving can't cover
+    reserve_monthly_d = min(reserve_needed, liquidity_left / tenure) if tenure else 0.0
     deploy_d = _minimal_deployment(shortfall_dp_d + reserve_monthly_d * tenure, agg, include_bank=False)
     sc_d = build("D", f"Everything in — spending cuts + break funds for the biggest down payment / smallest loan{cuts_note}",
                  dp_pct=dp_pct_d, capacity=updated_save, deployment=deploy_d,
@@ -1110,6 +1117,22 @@ def _loan_scenarios(*, price: float, existing: float, user_months: float, user_d
     any_feasible = feasible is not None
     meta = {"target_out_of_reach": not any_feasible, "max_financeable_target": round(price, 2),
             "any_feasible": any_feasible}
+
+    # When NOTHING is feasible, precompute the honest "out of reach" explainer from D (the fullest
+    # deployment) so the answer can state exactly WHY — no LLM arithmetic. D is the smallest loan /
+    # EMI achievable; if even that EMI exceeds 70% of the user's sustainable saving, the goal can't
+    # be financed, and we also surface the largest price they COULD afford.
+    if not any_feasible:
+        affordable_emi = round(_CAP_UTIL * updated_save, 2)            # most EMI they can sustain
+        affordable_price = round(sc_d["down_payment_amount"] + _inv_emi(affordable_emi, rate, tenure), 2)
+        meta["out_of_reach"] = {
+            "max_down_payment": sc_d["down_payment_amount"],          # deploying EVERYTHING
+            "min_loan": sc_d["loan_amount"],                          # target − max down payment
+            "min_emi": sc_d["estimated_emi"],                         # the lowest EMI achievable
+            "affordable_emi": affordable_emi,                         # 70% of (surplus + cuts)
+            "emi_gap": round(max(0.0, sc_d["estimated_emi"] - affordable_emi), 2),
+            "affordable_price": affordable_price,                     # the most you could actually afford
+        }
     return scenarios, meta
 
 

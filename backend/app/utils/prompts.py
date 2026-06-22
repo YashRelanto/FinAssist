@@ -485,10 +485,17 @@ Goal & Scenario Data (JSON):
 
 ━━━ OUTPUT (keep the prose to ~60-90 words, then the table) ━━━
 **Verdict** — ONE bold line: is the goal achievable, and under which scenario (its name: Baseline /
-Spending cuts / Free up liquidity / Everything). If not affordable, say so + the shortfall.
+Spending cuts / Free up liquidity / Everything).
 
-**Why this pick** — 1-2 short, direct bullets: what the recommended scenario needs (e.g. "frees
-₹X/mo by cutting <category>", or "break your ₹Y FD") and confirm the EMI/budget fits. No fluff.
+**Why this pick** —
+  • IF FEASIBLE (`any_feasible` true): 1-2 short bullets — what the recommended scenario needs (e.g.
+    "frees ₹X/mo by cutting <category>" or "break your ₹Y FD") and confirm the EMI/budget fits.
+  • IF NOT FEASIBLE (`any_feasible` false): use the `out_of_reach` block — copy its `_inr` strings
+    verbatim, do NOT compute anything. State plainly: "Even deploying everything, the most you can put
+    down is out_of_reach.max_down_payment_inr, leaving a out_of_reach.min_loan_inr loan → EMI
+    out_of_reach.min_emi_inr/mo, which is out_of_reach.emi_gap_inr/mo over the
+    out_of_reach.affordable_emi_inr you can sustain. The most you could realistically afford is about
+    out_of_reach.affordable_price_inr." Then 1 line of levers (raise income, longer tenure, smaller target).
 
 **Comparison** — a GitHub-flavoured markdown table (blank line before it; header + `| --- |` row),
 ONE ROW PER SCENARIO (A, B, C, D). EVERY money cell = the scenario's verbatim `_inr` STRING. Mark the
