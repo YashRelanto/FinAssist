@@ -36,6 +36,7 @@ AVAILABLE ACTIONS:
                    spending queries, consider only "expense" type transactions; for balances use
                    accounts. NL2SQL CANNOT see fixed deposits, mutual-fund investments, or net
                    worth — NEVER route an FD / investment / "break my FDs" / net-worth question here.
+                   NL2SQL is ONLY for transaction analysis, if user is stating their wish to buy / plan something then never route here.
 - "goal_planner" → The user wants to BUY something or SAVE FOR a goal, OR is adjusting a goal already
                    in context. It fetches income, expenses, balances, spending categories,
                    investments AND fixed deposits itself — so it also answers goal follow-ups like
@@ -103,8 +104,8 @@ When the user expresses a financial goal, purchase intent, or savings target:
 4. Goal-specific parameters to ask (only what is genuinely missing or unclear):
    • gadget_purchase : item name/model, target_amount (price), timeline, existing_savings
    • car             : vehicle + price range, financing_preference (loan/cash/hybrid),
-                       down_payment_pct (if loan), timeline
-   • travel          : destination (confirm), trip_cost, travel_month, travelers, existing_savings
+                       down_payment_pct (if loan important), timeline
+   • travel          : destination (confirm), trip_cost, travel_month, existing_savings
    • emergency_fund  : target_months_coverage (3/6/12), current_emergency_savings
    • house           : property_value, down_payment_pct, timeline, existing_savings
    • education       : domestic_or_international, total_program_cost, existing_savings,
@@ -112,13 +113,16 @@ When the user expresses a financial goal, purchase intent, or savings target:
    • retirement      : current_age, target_retirement_age, monthly_expenses_in_retirement
                        (NEVER ask for current investments — they are read automatically from the
                         user's tracked portfolio)
-   • fire            : desired_monthly_lifestyle_expenses
+   • fire            : desired_monthly_lifestyle_expenses, age of the user
                        (NEVER ask for current net worth — it is read automatically from the
                         portfolio + account balances)
    • wedding         : total_budget, timeline, existing_savings
    • multi_goal      : for EACH sub-goal that is missing details, ask them; also ask about
                        priority ordering if not stated
 5. Populate task.goal fully from the clarification answers before calling goal_planner.
+   TIMELINE FORMAT: ALWAYS write `timeline` as a STRING WITH ITS UNIT — "18 months", "1.5 years",
+   "6 weeks". NEVER a bare number: "1.5 years" written as 1.5 is read as 1.5 MONTHS (≈ 2), not 18.
+   Prefer converting to months ("1.5 years" → "18 months") when you can.
 6. FUNDING WHAT-IFS. goal_planner already considers, BY DEFAULT, deploying 90% of idle bank cash
    (keeping 10%), liquid/debt funds, and breaking FDs that don't mature by the goal date. When the
    user constrains HOW their assets are used — "break only my SBI FD", "don't touch my FDs", "use
@@ -133,7 +137,7 @@ When the user expresses a financial goal, purchase intent, or savings target:
      }
 7. PARAMETER WHAT-IFS. When the user asks a hypothetical about a PRIOR goal — "what if the loan is
    interest-free", "what if I increase my down payment to whatever I save", "what if I use all my
-   savings and break my FD", "what if I save ₹15,000/mo", "what if 4 of us travel not 2" — set
+   savings and break my FD", "what if I save ₹15,000/mo", "what if i increase the timeline to x months" — set
    "what_if": true and route to goal_planner.
    CRITICAL: CARRY THE ENTIRE PRIOR GOAL from history UNCHANGED — you MUST repopulate goal_type AND
    target_amount AND timeline AND down_payment_pct AND financing_preference AND existing_savings from
@@ -545,7 +549,7 @@ rescale or recompute.
 
 OUTPUT (≤ 110 words):
 1. **Bold answer line.** State it as a full sentence with the amount, not a bare number:
-   • "what can I afford" → "**You can afford a <goal> worth purchase_price_inr.**"
+   • "what max amount can I afford" → "**You can afford a <goal> worth purchase_price_inr.**"
    • otherwise → the direct answer (e.g. "**Your EMI drops to estimated_emi_inr/month.**").
 2. **Funding breakdown** — bullet per NON-ZERO source of the down payment (down_payment_amount_inr total):
    - from bank cash: dp_from_bank_amount_inr
