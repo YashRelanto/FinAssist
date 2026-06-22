@@ -1,0 +1,154 @@
+# FinAssist AI — UI/UX Enhancement Instructions
+
+Enhance the existing FinAssist AI platform without rebuilding it. Preserve all functionality, workflows, APIs, and business logic. Focus on elevating the current design into a premium, modern, AI-powered financial intelligence platform.
+
+## Core Design Principles
+
+* Minimalist and uncluttered UI.
+* Dark mode as the primary experience.
+* Premium, enterprise-grade aesthetic.
+* Financial trust and clarity over visual noise.
+* Every screen should be understandable within 5 seconds.
+* Prefer simplicity over showing more information.
+* If a page becomes crowded, move content into:
+
+  * Separate tabs
+  * Dedicated pages
+  * Drawers
+  * Modals
+  * Expandable sections
+
+## Design Direction
+
+Use inspiration from:
+
+* Stripe
+* Linear
+* Vercel
+* Apple
+* Arc Browser
+* Revolut
+
+Avoid:
+
+* Dashboard clutter
+* Excessive gradients
+* Neon cyberpunk aesthetics
+* Too many charts
+* Too many KPI cards
+* Unnecessary animations
+
+## UI Enhancements
+
+* Enhance the existing design system rather than replacing it.
+* Improve spacing, typography, hierarchy, consistency, and readability.
+* Add premium glassmorphism and depth effects where appropriate.
+* Introduce subtle 3D effects and parallax only where they improve the experience.
+* Create smooth page transitions and micro-interactions.
+* Improve loading states, skeletons, hover effects, and animations.
+* Make all cards, tables, forms, filters, and charts feel polished and premium.
+
+## Dashboard Rules
+
+Keep the dashboard focused and minimal.
+
+Only show:
+
+* Key financial overview
+* Important KPIs
+* AI insights
+* Recent activity
+
+Move detailed analytics, reports, forecasting, and advanced breakdowns into dedicated sections.
+
+## AI Assistant Experience
+
+Make the AI assistant the centerpiece of the platform.
+
+Enhance:
+
+* Chat UI
+* Streaming responses
+* AI thinking states
+* Financial insight cards
+* Data visualizations within conversations
+
+The AI experience should feel intelligent, premium, and effortless.
+
+## Motion & Animation
+
+Use motion to guide attention, not for decoration.
+
+Add:
+
+* Smooth hover interactions
+* Card elevation effects
+* Elegant page transitions
+* Scroll-triggered animations
+* Subtle depth and parallax
+
+Keep animations fast, smooth, and professional.
+
+## Landing Page
+
+Create a stunning but minimal landing page.
+
+Add:
+
+* Premium hero section
+* Financial-themed visual storytelling
+* Interactive but lightweight 3D elements
+* Scroll-based reveals
+* Strong product positioning
+* Clear calls-to-action
+
+Avoid overwhelming users with information.
+
+## Code Audit
+
+Review the entire codebase and:
+
+* Remove dead code
+* Remove unused components
+* Remove duplicate logic
+* Remove unused styles and assets
+* Refactor redundant code
+* Improve component structure
+* Improve maintainability and performance
+
+Preserve existing functionality.
+
+## Security & Backend Review
+
+Perform a frontend and API security review.
+
+Check for:
+
+* XSS vulnerabilities
+* Unsafe rendering
+* Token handling issues
+* Exposed secrets
+* Missing authorization checks
+
+Apply fixes only where necessary.
+
+Keep backend changes minimal and focus primarily on frontend improvements.
+
+## Performance Requirements
+
+Maintain or improve performance.
+
+Implement:
+
+* Lazy loading
+* Code splitting
+* Optimized rendering
+* Efficient animations
+* Reduced bundle size
+
+Target a smooth, production-ready experience.
+
+## Final Goal
+
+Transform FinAssist AI into a world-class financial intelligence platform that feels premium, minimal, modern, intelligent, and trustworthy while keeping the interface clean, focused, and free from information overload.
+

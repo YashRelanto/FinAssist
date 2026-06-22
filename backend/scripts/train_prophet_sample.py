@@ -15,7 +15,6 @@ sys.path.insert(0, str(ROOT / "backend"))
 from app.services.prophet.inference import generate_forecast, reload_models  # noqa: E402
 from app.services.prophet.training import finalize_production_deployment, train_from_dataframe  # noqa: E402
 
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -51,7 +50,6 @@ def main() -> int:
     print("Forecast success:", forecast.get("success"))
     print("Predicted next month:", forecast.get("predicted_next_month"))
     return 0 if forecast.get("success") else 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
