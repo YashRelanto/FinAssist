@@ -96,6 +96,23 @@ def _category_suggestion_text(t: dict[str, Any]) -> str:
     return f"Track {cat} weekly against your budget to catch shifts early."
 
 
+def _merchant_insight_strings(facts: dict[str, Any]) -> tuple[str, str]:
+    fastest = facts["merchants"].get("fastest_growing")
+    conc = facts["merchants"].get("concentration") or {}
+    fastest_insight = (
+        f"{fastest['name']} is your fastest growing merchant (+{fastest['growth_pct']}%)."
+        if fastest
+        else "No merchant growth data for the comparison window."
+    )
+    conc_insight = (
+        f"Top {conc.get('top_n', 5)} merchants account for "
+        f"{conc.get('pct_of_total', 0)}% of total spending."
+        if conc.get("pct_of_total")
+        else ""
+    )
+    return fastest_insight, conc_insight
+
+
 def build_precomputed_insight_facts(
     analytics: dict[str, Any],
     *,
@@ -113,16 +130,19 @@ def build_precomputed_insight_facts(
     behavior = analytics.get("spending_behavior") or {}
     wknd = behavior.get("weekday_vs_weekend") or {}
     heatmap = behavior.get("day_of_week_heatmap") or []
-    freq = behavior.get("transaction_frequency") or {}
     growth_list = merchant.get("merchant_growth") or []
     top_merchants = merchant.get("top_merchants") or []
     conc = merchant.get("concentration") or {}
 
     top_share = share[0] if share else None
     fastest = growth_list[0] if growth_list else None
-    peak_day = max(heatmap, key=lambda x: x.get("amount", 0), default=None)
     behavior_peak_day = behavior.get("peak_spending_day")
     behavior_peak_amount = float(behavior.get("peak_spending_day_amount") or 0)
+    if not behavior_peak_day and heatmap:
+        peak_entry = max(heatmap, key=lambda x: float(x.get("amount") or 0))
+        if float(peak_entry.get("amount") or 0) > 0:
+            behavior_peak_day = peak_entry.get("day")
+            behavior_peak_amount = float(peak_entry.get("amount") or 0)
     growing_cats = [
         t for t in trends if (t.get("consecutive_growth_months") or 0) >= 2
     ]
@@ -176,21 +196,6 @@ def build_precomputed_insight_facts(
             "Weekend spending is elevated — set a weekend budget cap."
         )
 
-    exec_facts: list[str] = [
-        f"Total spend: ₹{total_spend:,.2f}",
-        f"Transaction count: {txn_count}",
-    ]
-    if top_share:
-        exec_facts.append(
-            f"Top category: {top_share['category']} at {top_share['pct']}% "
-            f"(₹{top_share['amount']:,.2f})"
-        )
-    if predicted_next_month:
-        exec_facts.append(
-            f"Predicted next month ({predicted_month_label or 'next month'}): "
-            f"₹{predicted_next_month:,.2f}"
-        )
-
     return {
         "period": {
             "key": analytics.get("period"),
@@ -201,6 +206,7 @@ def build_precomputed_insight_facts(
         "spending_summary": {
             "total_spend_inr": round(total_spend, 2),
             "transaction_count": txn_count,
+            "period_label": period_label,
             "top_category": top_share["category"] if top_share else None,
             "top_category_pct": top_share["pct"] if top_share else None,
             "top_category_amount_inr": top_share["amount"] if top_share else None,
@@ -229,23 +235,16 @@ def build_precomputed_insight_facts(
             or build_weekend_behavior_insight(wknd, heatmap),
             "weekday_categories": wknd.get("weekday_categories", []),
             "weekend_categories": wknd.get("weekend_categories", []),
-            "peak_spending_day": behavior_peak_day or (peak_day.get("day") if peak_day else None),
-            "peak_spending_day_amount_inr": (
-                behavior_peak_amount
-                if behavior_peak_amount > 0
-                else (peak_day.get("amount") if peak_day else None)
-            ),
+            "peak_spending_day": behavior_peak_day,
+            "peak_spending_day_amount_inr": behavior_peak_amount or None,
+            "peak_insight": behavior.get("peak_insight"),
             "day_of_week_heatmap": heatmap,
-            "avg_transactions_per_active_day": freq.get("avg_per_day"),
-            "total_days_with_transactions": freq.get("total_days_with_txns"),
-            "total_transactions": freq.get("total_txns"),
         },
         "flags": {
             "has_growing_categories": bool(growing_cats),
             "merchant_concentration_high": conc.get("pct_of_total", 0) >= 40,
             "weekend_spending_elevated": bool(wknd.get("weekend_elevated")),
         },
-        "executive_facts": exec_facts,
         "recommendation_triggers": recommendation_triggers,
         "profile": {
             "income_inr": profile.get("income") if profile else None,
@@ -261,7 +260,10 @@ def _narrate_from_facts(facts: dict[str, Any]) -> dict[str, Any]:
     forecast = facts["forecast"]
 
     exec_bullets: list[str] = [
-        f"Total spend: ₹{summary['total_spend_inr']:,.0f} across {summary['transaction_count']} transactions."
+        (
+            f"Total spend for {summary.get('period_label') or 'the selected period'}: "
+            f"₹{summary['total_spend_inr']:,.0f} across {summary['transaction_count']} transactions."
+        ),
     ]
     if summary.get("top_category_pct"):
         exec_bullets.append(
@@ -305,50 +307,27 @@ def _narrate_from_facts(facts: dict[str, Any]) -> dict[str, Any]:
             f"₹{forecast['predicted_next_month_inr']:,.0f}."
         )
 
-    category_trends_out: list[dict[str, str]] = []
-    for t in facts["category_trends"]:
-        cat = t["category"]
-        insight = _category_trend_insight_text(t)
-        category_trends_out.append({"category": cat, "insight": insight})
+    analysis_by_cat = {
+        c["category"]: c["analysis"] for c in facts["category_analysis_facts"]
+    }
+    category_trends_out = [
+        {
+            "category": t["category"],
+            "insight": analysis_by_cat.get(t["category"])
+            or _category_trend_insight_text(t),
+        }
+        for t in facts["category_trends"]
+    ]
 
-    fastest = facts["merchants"].get("fastest_growing")
-    conc = facts["merchants"].get("concentration") or {}
+    fastest_insight, conc_insight = _merchant_insight_strings(facts)
     behavior = facts["behavior"]
 
-    fastest_insight = (
-        f"{fastest['name']} is your fastest growing merchant (+{fastest['growth_pct']}%)."
-        if fastest
-        else "No merchant growth data for the comparison window."
-    )
-    conc_insight = (
-        f"Top {conc.get('top_n', 5)} merchants account for "
-        f"{conc.get('pct_of_total', 0)}% of total spending."
-        if conc.get("pct_of_total")
-        else ""
-    )
-
-    weekend_insight = behavior.get("weekend_insight") or build_weekend_behavior_insight(
-        {
-            "weekend_multiplier": behavior.get("weekend_multiplier"),
-            "weekday_avg_per_day": behavior.get("weekday_avg_per_day_inr"),
-            "weekend_avg_per_day": behavior.get("weekend_avg_per_day_inr"),
-        },
-        behavior.get("day_of_week_heatmap") or [],
-    )
-
-    peak = behavior.get("peak_spending_day")
-    peak_amt = behavior.get("peak_spending_day_amount_inr") or 0
-    time_insight = (
-        f"Highest spend falls on {peak}s (₹{peak_amt:,.0f})."
-        if peak and peak_amt > 0
+    time_insight = behavior.get("peak_insight") or (
+        f"Highest spend falls on {behavior.get('peak_spending_day')}s "
+        f"(₹{float(behavior.get('peak_spending_day_amount_inr') or 0):,.0f})."
+        if behavior.get("peak_spending_day")
+        and float(behavior.get("peak_spending_day_amount_inr") or 0) > 0
         else "Spending is spread evenly across the week."
-    )
-
-    avg = behavior.get("avg_transactions_per_active_day")
-    freq_insight = (
-        f"You average {avg} transactions per active day."
-        if avg
-        else "Limited transaction frequency data for this period."
     )
 
     recommendations = facts["recommendation_triggers"][:4]
@@ -373,9 +352,9 @@ def _narrate_from_facts(facts: dict[str, Any]) -> dict[str, Any]:
             "concentration": conc_insight,
         },
         "behavior_insights": {
-            "weekend": weekend_insight,
+            "weekend": behavior.get("weekend_insight")
+            or "Not enough spending data for weekday vs weekend comparison.",
             "time_of_day": time_insight,
-            "frequency": freq_insight,
         },
         "source": "rule_based",
     }
@@ -417,25 +396,15 @@ def _normalize_merchant_insights(
 ) -> dict[str, str]:
     """Ensure merchant insight fields are strings (LLM may echo raw fact objects)."""
     mi = merchant_insights or {}
-    fastest = facts["merchants"].get("fastest_growing")
-    conc = facts["merchants"].get("concentration") or {}
+    default_fastest, default_conc = _merchant_insight_strings(facts)
 
     fastest_growing = mi.get("fastest_growing")
     if not isinstance(fastest_growing, str):
-        fastest_growing = (
-            f"{fastest['name']} is your fastest growing merchant (+{fastest['growth_pct']}%)."
-            if fastest
-            else "No merchant growth data for the comparison window."
-        )
+        fastest_growing = default_fastest
 
     concentration = mi.get("concentration")
     if not isinstance(concentration, str):
-        concentration = (
-            f"Top {conc.get('top_n', 5)} merchants account for "
-            f"{conc.get('pct_of_total', 0)}% of total spending."
-            if conc.get("pct_of_total")
-            else ""
-        )
+        concentration = default_conc
 
     return {
         "fastest_growing": fastest_growing,
@@ -464,7 +433,7 @@ def _llm_narrate_facts(facts: dict[str, Any]) -> dict[str, Any] | None:
         "- category_trends: [{category, insight}] — cover every category in pre_computed_facts.category_trends.\n"
         "- category_analysis: [{category, headline, analysis, suggestion}] — cover every category in category_analysis_facts.\n"
         "- merchant_insights: {fastest_growing, concentration} — strings.\n"
-        "- behavior_insights: {weekend, time_of_day, frequency} — each must be a JSON ARRAY of 2-3 short bullet-point strings."
+        "- behavior_insights: {weekend, time_of_day} — each must be a JSON ARRAY of 2-3 short bullet-point strings."
     )
 
     try:

@@ -394,7 +394,7 @@ def build_spending_behavior(
     )
 
     total_days = len(days_with_txns)
-    avg_per_day = round(txn_count / total_days, 2) if total_days > 0 else 0.0
+    avg_per_day = round(txn_count / total_days) if total_days > 0 else 0
 
     weekday_vs_weekend = {
         "weekday_total": round(weekday_total, 2),
@@ -416,7 +416,6 @@ def build_spending_behavior(
         "peak_spending_day": peak_day,
         "peak_spending_day_amount": peak_amount,
         "peak_insight": peak_insight,
-        "time_of_day_available": False,
         "transaction_frequency": {
             "avg_per_day": avg_per_day,
             "total_days_with_txns": total_days,
@@ -449,12 +448,30 @@ def build_spending_analytics_payload(
         transaction_amount_value(r.get("amount"), EXPENSE_TYPE)
         for r in filter_rows_by_date(filtered, start_date=start_date, end_date=end_date)
     )
+    comp_start = window.get("comparison_start_date")
+    comp_end = window.get("comparison_end_date")
+    comparison_total_spend = (
+        round(
+            sum(
+                transaction_amount_value(r.get("amount"), EXPENSE_TYPE)
+                for r in filter_rows_by_date(filtered, start_date=comp_start, end_date=comp_end)
+            ),
+            2,
+        )
+        if comp_start and comp_end
+        else None
+    )
 
     payload = {
         "success": True,
         "period": window.get("period"),
+        "period_label": window.get("period_label"),
         "start_date": start_date,
         "end_date": end_date,
+        "comparison_start_date": comp_start,
+        "comparison_end_date": comp_end,
+        "comparison_period_label": window.get("comparison_period_label"),
+        "comparison_total_spend": comparison_total_spend,
         "total_spend": round(total_spend, 2),
         "transaction_count": len(
             filter_rows_by_date(filtered, start_date=start_date, end_date=end_date)

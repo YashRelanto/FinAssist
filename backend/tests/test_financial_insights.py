@@ -57,7 +57,7 @@ def _sample_analytics():
                 {"day": "Mon", "amount": 100, "intensity": 1},
             ],
             "transaction_frequency": {
-                "avg_per_day": 4.2,
+                "avg_per_day": 4,
                 "total_days_with_txns": 10,
                 "total_txns": 42,
             },

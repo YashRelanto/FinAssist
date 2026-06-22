@@ -396,6 +396,41 @@ async def get_dashboard_summary(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _fetch_spending_analytics(
+    user_id: str,
+    *,
+    period: str,
+    account_id: str | None = None,
+    category_id: str | None = None,
+    merchant: str | None = None,
+) -> tuple[list[dict], dict]:
+    """Load transactions and build the spending-analytics payload."""
+    from app.services.analytics_service import build_spending_analytics_payload
+    from app.utils.analysis_period import normalize_period
+
+    period_key = normalize_period(period)
+    trans_response = (
+        supabase.table("transactions")
+        .select(
+            "transaction_id, amount, transaction_type, transaction_date, "
+            "merchant_name, description, account_id, category_id, "
+            "categories(main_category, sub_category)"
+        )
+        .eq("user_id", user_id)
+        .order("transaction_date")
+        .execute()
+    )
+    transactions = trans_response.data or []
+    payload = build_spending_analytics_payload(
+        transactions,
+        period=period_key,
+        account_id=account_id,
+        category_id=category_id,
+        merchant=merchant,
+    )
+    return transactions, payload
+
+
 def _build_spending_analytics_response(
     user_id: str,
     *,
@@ -410,7 +445,6 @@ def _build_spending_analytics_response(
     try:
         import time
 
-        from app.services.analytics_service import build_spending_analytics_payload
         from app.utils.analysis_period import normalize_period
         from app.utils.tab_logging import mask_user_id, tab_error, tab_info
 
@@ -424,21 +458,9 @@ def _build_spending_analytics_response(
         )
         started = time.perf_counter()
 
-        trans_response = (
-            supabase.table("transactions")
-            .select(
-                "transaction_id, amount, transaction_type, transaction_date, "
-                "merchant_name, description, account_id, category_id, "
-                "categories(main_category, sub_category)"
-            )
-            .eq("user_id", user_id)
-            .order("transaction_date")
-            .execute()
-        )
-        transactions = trans_response.data or []
-        payload = build_spending_analytics_payload(
-            transactions,
-            period=period_key,
+        transactions, payload = _fetch_spending_analytics(
+            user_id,
+            period=period,
             account_id=account_id,
             category_id=category_id,
             merchant=merchant,
@@ -494,7 +516,6 @@ async def get_financial_insights(
         import asyncio
         import time
 
-        from app.services.analytics_service import build_spending_analytics_payload
         from app.services.financial_insights_service import build_financial_insights_payload
         from app.services.prophet.inference import get_next_month_prediction
         from app.utils.analysis_period import normalize_period
@@ -512,22 +533,9 @@ async def get_financial_insights(
         )
         started = time.perf_counter()
 
-        trans_response = (
-            supabase.table("transactions")
-            .select(
-                "transaction_id, amount, transaction_type, transaction_date, "
-                "merchant_name, description, account_id, category_id, "
-                "categories(main_category, sub_category)"
-            )
-            .eq("user_id", user_id)
-            .order("transaction_date")
-            .execute()
-        )
-        transactions = trans_response.data or []
-
-        analytics = build_spending_analytics_payload(
-            transactions,
-            period=period_key,
+        transactions, analytics = _fetch_spending_analytics(
+            user_id,
+            period=period,
             account_id=account_id,
             category_id=category_id,
             merchant=merchant,

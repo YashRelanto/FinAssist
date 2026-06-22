@@ -117,11 +117,11 @@ export const Dashboard: React.FC = () => {
       healthLoadedRef.current = true;
       void loadFinancialHealthInsights({ force, llm: false }).then((data) => {
         if (data) setHealthInsights(data);
-      });
-      setHealthInsightsLlmLoading(true);
-      void loadFinancialHealthInsights({ force, llm: true }).then((data) => {
-        if (data?.source === 'llm') setHealthInsights(data);
-        setHealthInsightsLlmLoading(false);
+        setHealthInsightsLlmLoading(true);
+        void loadFinancialHealthInsights({ force, llm: true }).then((llmData) => {
+          if (llmData?.source === 'llm') setHealthInsights(llmData);
+          setHealthInsightsLlmLoading(false);
+        });
       });
     },
     // NOT dependent on `healthInsights` — that identity churn (it changes twice per load) is exactly

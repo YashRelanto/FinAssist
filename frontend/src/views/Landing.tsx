@@ -6,6 +6,7 @@ import { APP_NAME } from '../lib/utils';
 import { BrandMark } from '../components/BrandMark';
 import { FoundationScrollSection } from '../components/landing/FoundationScrollSection';
 import { LandingHeroDashboard } from '../components/landing/LandingHeroDashboard';
+import { ProductFeaturesSection } from '../components/landing/ProductFeaturesSection';
 import { CustomerBasesSection } from '../components/landing/CustomerBasesSection';
 import { ManifestoScrollSection } from '../components/landing/ManifestoScrollSection';
 import { AIAssistantHighlight } from '../components/landing/AIAssistantHighlight';
@@ -63,6 +64,8 @@ export const Landing: React.FC = () => {
             <LandingHeroDashboard />
           </div>
         </section>
+
+        <ProductFeaturesSection />
 
         <section className="py-16 px-margin border-t border-lumio-line/30 max-w-[1728px] mx-auto">
           <div className="marquee-container">

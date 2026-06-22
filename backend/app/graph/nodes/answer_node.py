@@ -8,7 +8,7 @@ Produces:
   - sources      : attribution list
 
 Mode is chosen from the evidence:
-  goal_planner   → feasibility plan (FINASSIST_SYSTEM_PROMPT) + net-flow/savings bar
+  goal_planner   → feasibility plan (GOAL_PLAN_SYSTEM) + net-flow/savings bar
   investment     → tool-authored narrative + portfolio-allocation pie
   knowledge      → RAG answer (ANSWER_KNOWLEDGE_SYSTEM)
   nl2sql / data  → ANSWER_VIZ_SYSTEM (concise text + chart-type choice)
