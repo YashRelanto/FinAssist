@@ -22,7 +22,7 @@ import { AppModal } from '../components/AppModal';
 import { PageHeader, PageShell, lumio } from '../components/PageShell';
 
 export const LinkedAccounts: React.FC = () => {
-  const { user, accounts, loadAccounts, setCurrentPage } = useAppContext();
+  const { user, accounts, loadAccounts, setCurrentPage, loadBudgetGoalsSummary, patchLinkedGoalProgress } = useAppContext();
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
@@ -46,6 +46,8 @@ export const LinkedAccounts: React.FC = () => {
       if (data.success) {
         setDeleteTarget(null);
         loadAccounts({ force: true });
+        patchLinkedGoalProgress();
+        void loadBudgetGoalsSummary({ force: true });
       } else {
         throw new Error(data.detail || 'Failed to delete account');
       }

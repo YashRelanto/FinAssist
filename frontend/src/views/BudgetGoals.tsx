@@ -16,6 +16,8 @@ import {
   Trash2,
   PiggyBank,
   Sparkles,
+  Link2,
+  TrendingUp,
 } from 'lucide-react';
 import { cn, formatCurrency } from '../lib/utils';
 import { defaultBudgetPeriodDates } from '../lib/budgetPeriod';
@@ -53,6 +55,9 @@ const getCategoryIcon = (category: string) => {
       return MoreHorizontal;
   }
 };
+
+const goalColorToBorder = (colorClass: string) =>
+  colorClass.replace(/^bg-/, 'border-');
 
 const defaultTrajectory: SavingsTrajectory = {
   has_data: false,
@@ -120,7 +125,6 @@ export const BudgetGoals: React.FC = () => {
 
   const closeGoalModal = () => {
     setGoalModalOpen(false);
-    refreshSummary({ force: true });
   };
 
   const closeBudgetModal = () => {
@@ -265,7 +269,10 @@ export const BudgetGoals: React.FC = () => {
               return (
                 <div
                   key={goal.id}
-                  className="bg-surface-container-lowest rounded-2xl border border-outline-variant/30 soft-shadow p-6 flex flex-col hover-lift h-full group relative"
+                  className={cn(
+                    'bg-surface-container-lowest rounded-2xl border-2 soft-shadow p-6 flex flex-col hover-lift h-full group relative',
+                    goalColorToBorder(goal.color),
+                  )}
                 >
                   <div className="flex justify-between items-start mb-6">
                     <div className="p-2.5 rounded-xl bg-primary/10 text-primary">
@@ -282,7 +289,6 @@ export const BudgetGoals: React.FC = () => {
                         onClick={() => {
                           if (confirm('Delete this goal?')) {
                             deleteGoal(goal.id);
-                          refreshSummary({ force: true });
                           }
                         }}
                         className="p-1.5 text-outline hover:text-error hover:bg-error-container/10 rounded-lg transition-all opacity-0 group-hover:opacity-100"
@@ -304,12 +310,42 @@ export const BudgetGoals: React.FC = () => {
                   <p className="text-xs text-outline font-medium mb-4 leading-relaxed line-clamp-2">
                     {goal.sub}
                   </p>
-                  {trajectory.has_data && (
-                    <p className="text-[10px] font-bold text-secondary uppercase tracking-widest mb-4">
-                      Net savings this month:{' '}
-                      {formatCurrency(trajectory.monthly_net_savings)}
-                    </p>
-                  )}
+                  {(() => {
+                    const breakdown = goal.funded_breakdown ?? [];
+                    const isLinked = breakdown.length > 0;
+                    if (isLinked) {
+                      return (
+                        <div className="mb-4 space-y-1.5">
+                          <div className="flex items-center gap-1.5 text-[10px] font-bold text-on-surface uppercase tracking-widest">
+                            <Link2 className="w-3 h-3 text-primary" /> Funded by{' '}
+                            {breakdown.length} source{breakdown.length > 1 ? 's' : ''}
+                          </div>
+                          {breakdown.map((b) => (
+                            <div
+                              key={`${b.type}-${b.id}`}
+                              className="flex items-center justify-between gap-2 text-[11px]"
+                            >
+                              <span className="flex items-center gap-1.5 text-on-surface-variant font-medium truncate">
+                                {b.type === 'account' && <Landmark className="w-3 h-3 shrink-0 text-primary" />}
+                                {b.type === 'mutual_fund' && <TrendingUp className="w-3 h-3 shrink-0 text-primary" />}
+                                {b.type === 'fixed_deposit' && <PiggyBank className="w-3 h-3 shrink-0 text-primary" />}
+                                <span className="truncate">{b.name || b.id}</span>
+                              </span>
+                              <span className="font-bold text-on-surface shrink-0">
+                                {formatCurrency(b.current_value)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    }
+                    return trajectory.has_data ? (
+                      <p className="text-[10px] font-bold text-secondary uppercase tracking-widest mb-4">
+                        Net savings this month:{' '}
+                        {formatCurrency(trajectory.monthly_net_savings)}
+                      </p>
+                    ) : null;
+                  })()}
 
                   <div className="mt-auto space-y-4">
                     <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest">

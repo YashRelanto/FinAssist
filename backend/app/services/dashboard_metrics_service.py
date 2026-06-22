@@ -347,9 +347,22 @@ def format_goals_for_ui(
     goals: list[dict[str, Any]],
     *,
     transactions: list[dict[str, Any]] | None = None,
+    source_values: dict[str, dict[str, dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
+    """Shape goal rows for the UI.
+
+    A goal with linked ``funding_sources`` derives its progress from the live value of
+    those sources (mutual funds, FDs, bank accounts). Goals without links fall back to
+    cumulative net savings (or the stored current_amount when transactions are absent).
+    """
+    from app.services.goal_funding_service import (
+        compute_funded_amount,
+        normalize_funding_sources,
+    )
+
     icons = ["Target", "ShieldCheck", "PlaneTakeoff", "Laptop"]
     colors = ["bg-primary", "bg-secondary", "bg-tertiary", "bg-outline"]
+    valid_colors = {"bg-primary", "bg-secondary", "bg-tertiary", "bg-error", "bg-outline"}
     live_savings = (
         compute_net_savings(transactions) if transactions is not None else None
     )
@@ -357,8 +370,21 @@ def format_goals_for_ui(
     for index, goal in enumerate(goals):
         target = float(goal.get("target_amount") or 0)
         stored_current = float(goal.get("current_amount") or 0)
-        current = live_savings if live_savings is not None else stored_current
+        funding_sources = normalize_funding_sources(goal.get("funding_sources"))
+
+        funded_breakdown: list[dict[str, Any]] = []
+        if funding_sources and source_values is not None:
+            current, funded_breakdown = compute_funded_amount(
+                funding_sources, source_values
+            )
+        elif live_savings is not None:
+            current = live_savings
+        else:
+            current = stored_current
+
         progress_pct = round((current / target) * 100) if target > 0 else 0
+        stored_color = goal.get("color")
+        color = stored_color if stored_color in valid_colors else colors[index % len(colors)]
         formatted.append(
             {
                 "id": goal.get("goal_id"),
@@ -366,12 +392,14 @@ def format_goals_for_ui(
                 "label": goal.get("goal_name"),
                 "sub": goal.get("description") or "",
                 "target": target,
-                "current": current,
+                "current": round(current, 2),
                 "date": goal.get("target_date"),
                 "status": goal.get("status"),
                 "progress_pct": min(progress_pct, 100),
+                "funding_sources": funding_sources,
+                "funded_breakdown": funded_breakdown,
                 "icon": icons[index % len(icons)],
-                "color": colors[index % len(colors)],
+                "color": color,
             }
         )
     return formatted
@@ -383,17 +411,31 @@ def build_budget_goals_payload(
     transactions: list[dict[str, Any]],
     goals: list[dict[str, Any]],
     goal_transactions: list[dict[str, Any]] | None = None,
+    user_id: str | None = None,
     reference: datetime | None = None,
 ) -> dict[str, Any]:
     ref = reference or datetime.now()
     trajectory = compute_savings_trajectory(transactions, reference=ref)
     txs_for_goals = goal_transactions if goal_transactions is not None else transactions
+
+    from app.services.goal_funding_service import (
+        fetch_source_values,
+        needed_types_for_goals,
+    )
+
+    source_values = None
+    needed_types = needed_types_for_goals(goals)
+    if user_id and needed_types:
+        source_values = fetch_source_values(user_id, needed_types)
+
     return {
         "success": True,
         "budget_utilization": compute_budget_utilization(
             budgets, transactions, reference=ref
         ),
-        "goals": format_goals_for_ui(goals, transactions=txs_for_goals),
+        "goals": format_goals_for_ui(
+            goals, transactions=txs_for_goals, source_values=source_values
+        ),
         "trajectory": trajectory,
     }
 

@@ -1,6 +1,11 @@
 
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Transaction, Goal, Category, Report, HeatmapData, UserProfile, Budget } from '../types';
+import {
+  buildFundedSnapshot,
+  toGoalWithProgress,
+  type GoalWithProgress,
+} from '../lib/budgetGoalsApi';
 import { format, eachDayOfInterval, startOfYear, endOfYear } from 'date-fns';
 import {
   clearAuthSession,
@@ -35,11 +40,17 @@ interface AppContextType {
   prependTransaction: (t: Transaction) => void;
   refreshAfterTransactionChange: () => void;
   loadAccounts: (options?: { force?: boolean }) => void;
+  upsertAccount: (account: Record<string, unknown>) => void;
   loadDbCategories: () => void;
   analysisPeriod: AnalysisPeriod;
   setAnalysisPeriod: (period: AnalysisPeriod) => void;
   loadDashboardSummary: (options?: { force?: boolean }) => Promise<void>;
   loadBudgetGoalsSummary: (options?: { force?: boolean }) => Promise<void>;
+  patchLinkedGoalProgress: (accountPatch?: Record<string, unknown>) => void;
+  investmentsData: any | null;
+  fixedDepositsData: any | null;
+  loadInvestments: (options?: { force?: boolean }) => Promise<any | null>;
+  loadFixedDeposits: (options?: { force?: boolean }) => Promise<any | null>;
   loadForecast: (params: {
     period?: AnalysisPeriod;
     accountId?: string;
@@ -110,6 +121,8 @@ const TTL = {
   dbCategoriesMs: 5 * 60_000,
   dashboardSummaryMs: 30_000,
   budgetGoalsSummaryMs: 30_000,
+  investmentsMs: 60_000,
+  fixedDepositsMs: 60_000,
   forecastMs: 30_000,
   spendingAnalyticsMs: 30_000,
   financialInsightsMs: 30_000,
@@ -294,6 +307,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [dashboardSummary, setDashboardSummary] = useState<any | null>(null);
   const [dashboardSummaryLoading, setDashboardSummaryLoading] = useState(false);
   const [budgetGoalsSummary, setBudgetGoalsSummary] = useState<any | null>(null);
+  const [investmentsData, setInvestmentsData] = useState<any | null>(null);
+  const [fixedDepositsData, setFixedDepositsData] = useState<any | null>(null);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const categories = initialCategories;
@@ -328,6 +343,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     dbCategories: 0,
     dashboardSummary: 0,
     budgetGoalsSummary: 0,
+    investments: 0,
+    fixedDeposits: 0,
   });
 
   const inflightRef = useRef<{
@@ -338,6 +355,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     dbCategories?: Promise<void>;
     dashboardSummary?: Promise<void>;
     budgetGoalsSummary?: Promise<void>;
+    investments?: Promise<any | null>;
+    fixedDeposits?: Promise<any | null>;
     forecast?: Map<string, Promise<any | null>>;
     spendingAnalytics?: Map<string, Promise<any | null>>;
     financialInsights?: Map<string, Promise<any | null>>;
@@ -347,6 +366,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const accountHubAnalysisRef = useRef<any | null>(null);
   const accountHubLoadedRef = useRef(false);
+  const investmentsDataRef = useRef<any | null>(null);
+  const fixedDepositsDataRef = useRef<any | null>(null);
 
   const forecastCacheRef = useRef<
     Map<string, { ts: number; data: any }>
@@ -552,6 +573,110 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         inflightRef.current.accounts = undefined;
       });
   }, [isAuthed, uid]);
+
+  const upsertAccount = useCallback((account: Record<string, unknown>) => {
+    const id = account.account_id;
+    if (!id) return;
+    setAccounts((prev) => {
+      const idx = prev.findIndex((a) => a.account_id === id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], ...account };
+        return next;
+      }
+      return [...prev, account];
+    });
+  }, []);
+
+  // Shared investments / fixed-deposit data, fetched once and reused across
+  // the Investments tab and the goal money-source picker.
+  const loadInvestments = useCallback(
+    async (options?: { force?: boolean }) => {
+      if (!isAuthed || !uid) {
+        setInvestmentsData(null);
+        investmentsDataRef.current = null;
+        return null;
+      }
+      const now = Date.now();
+      if (!options?.force) {
+        if (
+          now - lastLoadedRef.current.investments < TTL.investmentsMs &&
+          investmentsDataRef.current
+        )
+          return investmentsDataRef.current;
+        if (inflightRef.current.investments) return inflightRef.current.investments;
+      } else {
+        lastLoadedRef.current.investments = 0;
+      }
+
+      const promise = apiFetch('/api/investments')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data?.success) {
+            setInvestmentsData(data);
+            investmentsDataRef.current = data;
+            lastLoadedRef.current.investments = Date.now();
+            return data;
+          }
+          return investmentsDataRef.current;
+        })
+        .catch((err) => {
+          console.warn('Failed to load investments:', err);
+          return investmentsDataRef.current;
+        })
+        .finally(() => {
+          inflightRef.current.investments = undefined;
+        });
+
+      inflightRef.current.investments = promise;
+      return promise;
+    },
+    [isAuthed, uid],
+  );
+
+  const loadFixedDeposits = useCallback(
+    async (options?: { force?: boolean }) => {
+      if (!isAuthed || !uid) {
+        setFixedDepositsData(null);
+        fixedDepositsDataRef.current = null;
+        return null;
+      }
+      const now = Date.now();
+      if (!options?.force) {
+        if (
+          now - lastLoadedRef.current.fixedDeposits < TTL.fixedDepositsMs &&
+          fixedDepositsDataRef.current
+        )
+          return fixedDepositsDataRef.current;
+        if (inflightRef.current.fixedDeposits) return inflightRef.current.fixedDeposits;
+      } else {
+        lastLoadedRef.current.fixedDeposits = 0;
+      }
+
+      const promise = apiFetch('/api/fixed-deposits')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data?.success) {
+            setFixedDepositsData(data);
+            fixedDepositsDataRef.current = data;
+            lastLoadedRef.current.fixedDeposits = Date.now();
+            return data;
+          }
+          return fixedDepositsDataRef.current;
+        })
+        .catch((err) => {
+          console.warn('Failed to load fixed deposits:', err);
+          return fixedDepositsDataRef.current;
+        })
+        .finally(() => {
+          inflightRef.current.fixedDeposits = undefined;
+        });
+
+      inflightRef.current.fixedDeposits = promise;
+      return promise;
+    },
+    [isAuthed, uid],
+  );
 
   const loadDbCategories = useCallback(() => {
     if (!authReady) return;
@@ -789,6 +914,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void loadBudgetGoalsSummary({ force: true });
     invalidateDerivedCaches();
   }, [loadTransactions, loadDashboardSummary, loadBudgetGoalsSummary]);
+
+  const patchLinkedGoalProgress = useCallback(
+    (accountPatch?: Record<string, unknown>) => {
+      const accountList =
+        accountPatch?.account_id != null
+          ? accounts.map((a) =>
+              a.account_id === accountPatch.account_id
+                ? { ...a, ...accountPatch }
+                : a,
+            )
+          : accounts;
+      const invData = investmentsDataRef.current ?? investmentsData;
+      const fdData = fixedDepositsDataRef.current ?? fixedDepositsData;
+      setBudgetGoalsSummary((prev) => {
+        if (!prev?.goals?.length) return prev;
+        const nextGoals = (prev.goals as GoalWithProgress[]).map((goal) => {
+          const fundingSources =
+            goal.fundingSources ?? goal.funding_sources ?? [];
+          if (!fundingSources.length) return goal;
+          const funded = buildFundedSnapshot(
+            fundingSources,
+            accountList,
+            invData,
+            fdData,
+          );
+          return toGoalWithProgress(goal, funded, fundingSources);
+        });
+        return { ...prev, goals: nextGoals };
+      });
+    },
+    [accounts, investmentsData, fixedDepositsData],
+  );
 
   const loadForecast = useCallback(
     async (params: {
@@ -1213,67 +1370,177 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addGoal = (g: Omit<Goal, 'id'>) => {
-    if (uid) {
-      apiFetch('/api/goals', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: uid,
-          goal_name: g.label,
-          description: g.sub,
-          target_amount: g.target,
-          current_amount: g.current,
-          target_date: g.date,
-          status: 'active'
-        })
+    if (!uid) return;
+
+    const tempId = `temp-${Date.now()}`;
+    const fundingSources = g.fundingSources || [];
+    const funded = buildFundedSnapshot(
+      fundingSources,
+      accounts,
+      investmentsDataRef.current ?? investmentsData,
+      fixedDepositsDataRef.current ?? fixedDepositsData,
+    );
+    const optimistic = toGoalWithProgress(
+      { ...g, id: tempId, icon: g.icon || 'Target', color: g.color || 'bg-primary' },
+      funded,
+      fundingSources,
+    );
+
+    setGoals((prev) => [...prev, optimistic]);
+    setBudgetGoalsSummary((prev) =>
+      prev ? { ...prev, goals: [...(prev.goals || []), optimistic] } : prev,
+    );
+
+    apiFetch('/api/goals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: uid,
+        goal_name: g.label,
+        description: g.sub,
+        target_amount: g.target,
+        current_amount: optimistic.current,
+        target_date: g.date,
+        status: 'active',
+        color: g.color || 'bg-primary',
+        funding_sources: fundingSources,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data?.success) throw new Error(data?.detail || 'Failed to create goal');
+        const realId = data.data?.goal_id;
+        if (!realId) return;
+        const applyRealId = (goal: GoalWithProgress) =>
+          goal.id === tempId ? { ...goal, id: realId } : goal;
+        setGoals((prev) => prev.map(applyRealId));
+        setBudgetGoalsSummary((prev) =>
+          prev
+            ? { ...prev, goals: (prev.goals || []).map(applyRealId) }
+            : prev,
+        );
       })
-      .then(res => res.json())
-      .then(() => {
-        lastLoadedRef.current.goals = 0;
-        loadGoals();
-        lastLoadedRef.current.budgetGoalsSummary = 0;
-        void loadBudgetGoalsSummary({ force: true });
-      })
-      .catch(err => console.error("Failed to add goal:", err));
-    }
+      .catch((err) => {
+        console.error('Failed to add goal:', err);
+        setGoals((prev) => prev.filter((x) => x.id !== tempId));
+        setBudgetGoalsSummary((prev) =>
+          prev
+            ? {
+                ...prev,
+                goals: (prev.goals || []).filter((x: GoalWithProgress) => x.id !== tempId),
+              }
+            : prev,
+        );
+      });
   };
 
   const updateGoal = (id: string, g: Partial<Goal>) => {
+    const existing =
+      ((budgetGoalsSummary?.goals as GoalWithProgress[] | undefined)?.find(
+        (x) => x.id === id,
+      ) as GoalWithProgress | undefined) ||
+      (goals.find((x) => x.id === id) as GoalWithProgress | undefined);
+    if (!existing) return;
+
+    const fundingSources =
+      g.fundingSources ??
+      existing.fundingSources ??
+      existing.funding_sources ??
+      [];
+    const funded = buildFundedSnapshot(
+      fundingSources,
+      accounts,
+      investmentsDataRef.current ?? investmentsData,
+      fixedDepositsDataRef.current ?? fixedDepositsData,
+    );
+    const merged = toGoalWithProgress(
+      {
+        ...existing,
+        label: g.label ?? existing.label,
+        sub: g.sub ?? existing.sub,
+        target: g.target ?? existing.target,
+        date: g.date ?? existing.date,
+        icon: g.icon ?? existing.icon,
+        color: g.color ?? existing.color,
+        fundingSources,
+      },
+      funded,
+      fundingSources,
+    );
+
+    let goalsBefore: Goal[] = [];
+    let summaryGoalsBefore: GoalWithProgress[] = [];
+
+    setGoals((prev) => {
+      goalsBefore = prev;
+      return prev.map((goal) => (goal.id === id ? merged : goal));
+    });
+    setBudgetGoalsSummary((prev) => {
+      if (!prev) return prev;
+      summaryGoalsBefore = (prev.goals || []) as GoalWithProgress[];
+      return {
+        ...prev,
+        goals: summaryGoalsBefore.map((goal) => (goal.id === id ? merged : goal)),
+      };
+    });
+
     apiFetch(`/api/goals/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         user_id: user.userId || user.id,
-        goal_name: g.label || '',
-        description: g.sub || '',
-        target_amount: g.target || 0,
-        current_amount: g.current || 0,
-        target_date: g.date || '',
-        status: 'active'
+        goal_name: merged.label,
+        description: merged.sub,
+        target_amount: merged.target,
+        current_amount: merged.current,
+        target_date: merged.date,
+        status: 'active',
+        color: merged.color || 'bg-primary',
+        funding_sources: fundingSources,
+      }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data?.success) throw new Error(data?.detail || 'Failed to update goal');
       })
-    })
-    .then(res => res.json())
-    .then(() => {
-      lastLoadedRef.current.goals = 0;
-      loadGoals();
-      lastLoadedRef.current.budgetGoalsSummary = 0;
-      void loadBudgetGoalsSummary({ force: true });
-    })
-    .catch(err => console.error("Failed to update goal:", err));
+      .catch((err) => {
+        console.error('Failed to update goal:', err);
+        setGoals(goalsBefore);
+        setBudgetGoalsSummary((prev) =>
+          prev ? { ...prev, goals: summaryGoalsBefore } : prev,
+        );
+      });
   };
 
   const deleteGoal = (id: string) => {
-    apiFetch(`/api/goals/${id}`, {
-      method: 'DELETE'
-    })
-    .then(res => res.json())
-    .then(() => {
-      lastLoadedRef.current.goals = 0;
-      loadGoals();
-      lastLoadedRef.current.budgetGoalsSummary = 0;
-      void loadBudgetGoalsSummary({ force: true });
-    })
-    .catch(err => console.error("Failed to delete goal:", err));
+    let goalsBefore: Goal[] = [];
+    let summaryGoalsBefore: GoalWithProgress[] = [];
+
+    setGoals((prev) => {
+      goalsBefore = prev;
+      return prev.filter((goal) => goal.id !== id);
+    });
+    setBudgetGoalsSummary((prev) => {
+      if (!prev) return prev;
+      summaryGoalsBefore = (prev.goals || []) as GoalWithProgress[];
+      return {
+        ...prev,
+        goals: summaryGoalsBefore.filter((goal) => goal.id !== id),
+      };
+    });
+
+    apiFetch(`/api/goals/${id}`, { method: 'DELETE' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data?.success) throw new Error(data?.detail || 'Failed to delete goal');
+      })
+      .catch((err) => {
+        console.error('Failed to delete goal:', err);
+        setGoals(goalsBefore);
+        setBudgetGoalsSummary((prev) =>
+          prev ? { ...prev, goals: summaryGoalsBefore } : prev,
+        );
+      });
   };
 
   const navigateToAddTransaction = (date: string) => {
@@ -1361,9 +1628,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       addTransaction, updateTransaction, deleteTransaction, loadTransactions, prependTransaction,
       refreshAfterTransactionChange,
       loadAccounts,
+      upsertAccount,
       loadDbCategories,
       loadDashboardSummary,
       loadBudgetGoalsSummary,
+      patchLinkedGoalProgress,
+      investmentsData,
+      fixedDepositsData,
+      loadInvestments,
+      loadFixedDeposits,
       loadForecast,
       loadSpendingAnalytics,
       loadFinancialInsights,

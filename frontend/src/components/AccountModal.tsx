@@ -22,7 +22,7 @@ const accountTypes = [
 ];
 
 export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onSuccess, editAccount }) => {
-  const { user } = useAppContext();
+  const { user, loadBudgetGoalsSummary, patchLinkedGoalProgress, upsertAccount } = useAppContext();
   const [formData, setFormData] = useState({
     account_name: '',
     account_type: 'checking',
@@ -109,8 +109,14 @@ export const AccountModal: React.FC<AccountModalProps> = ({ isOpen, onClose, onS
       }
 
       if (onSuccess && data.data) {
+        upsertAccount(data.data);
+        patchLinkedGoalProgress(data.data);
         onSuccess(data.data);
+      } else if (data.data) {
+        upsertAccount(data.data);
+        patchLinkedGoalProgress(data.data);
       }
+      void loadBudgetGoalsSummary({ force: true });
       onClose();
     } catch (err: any) {
       console.error(err);

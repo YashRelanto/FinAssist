@@ -44,6 +44,19 @@ export interface Transaction {
   recurrence_skips?: number;
 }
 
+export type FundingSourceType = 'mutual_fund' | 'fixed_deposit' | 'account';
+
+export interface FundingSource {
+  type: FundingSourceType;
+  id: string;
+  name?: string;
+}
+
+export interface FundedBreakdownItem extends FundingSource {
+  current_value: number;
+  available: boolean;
+}
+
 export interface Goal {
   id: string;
   label: string;
@@ -53,6 +66,7 @@ export interface Goal {
   date: string;
   icon: string;
   color: string;
+  fundingSources?: FundingSource[];
 }
 
 export interface Report {

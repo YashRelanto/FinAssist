@@ -1036,6 +1036,11 @@ class BudgetCreate(BaseModel):
     end_date: Optional[str] = None
     alert_threshold: float = 80.0
 
+class FundingSource(BaseModel):
+    type: str  # mutual_fund | fixed_deposit | account
+    id: str
+    name: Optional[str] = ""
+
 class GoalCreate(BaseModel):
     user_id: Optional[str] = None  # ignored — identity comes from JWT
     goal_name: str
@@ -1044,6 +1049,8 @@ class GoalCreate(BaseModel):
     current_amount: float = 0.0
     target_date: str
     status: str = "active"
+    color: Optional[str] = None
+    funding_sources: Optional[list[FundingSource]] = None
 
 @router.get("/budget-goals-summary")
 async def get_budget_goals_summary(current_user: dict = Depends(get_current_user)):
@@ -1116,6 +1123,7 @@ async def get_budget_goals_summary(current_user: dict = Depends(get_current_user
             transactions=trans_response.data or [],
             goals=goals_res.data or [],
             goal_transactions=goal_transactions,
+            user_id=uid,
         )
     except Exception as e:
         print(f"Error fetching budget-goals summary: {e}")
@@ -1249,6 +1257,8 @@ async def delete_budget(
 async def get_goals(current_user: dict = Depends(get_current_user)):
     user_id = current_user["user_id"]
     try:
+        from app.services.goal_funding_service import normalize_funding_sources
+
         res = supabase.table("goals").select("*").eq("user_id", user_id).execute()
         formatted = []
         for g in res.data:
@@ -1261,13 +1271,65 @@ async def get_goals(current_user: dict = Depends(get_current_user)):
                 "current": float(g["current_amount"]) if g["current_amount"] is not None else 0.0,
                 "date": g["target_date"],
                 "status": g["status"],
+                "funding_sources": normalize_funding_sources(g.get("funding_sources")),
                 "icon": "Target",
-                "color": "bg-primary"
+                "color": g.get("color") or "bg-primary"
             })
         return {"success": True, "data": formatted}
     except Exception as e:
         print(f"Error fetching goals: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+def _resolve_funding_sources(req: "GoalCreate") -> list[dict]:
+    """Normalize the request's funding sources into clean dict rows."""
+    from app.services.goal_funding_service import normalize_funding_sources
+
+    raw = [s.dict() for s in (req.funding_sources or [])]
+    return normalize_funding_sources(raw)
+
+
+def _current_amount_from_sources(uid: str, funding_sources: list[dict]) -> float:
+    """Live funded amount for linked sources, used to seed current_amount on write."""
+    from app.services.goal_funding_service import (
+        compute_funded_amount,
+        fetch_source_values,
+    )
+
+    needed = {s["type"] for s in funding_sources}
+    values = fetch_source_values(uid, needed)
+    amount, _ = compute_funded_amount(funding_sources, values)
+    return amount
+
+
+def _write_goal_row(operation: str, payload: dict, goal_id: str | None = None):
+    """Insert/update a goal, gracefully retrying without funding_sources if the
+    column has not been migrated yet (mirrors the accounts.credit_limit fallback)."""
+    optional_columns = ("funding_sources", "color")
+
+    def _execute(p: dict):
+        if operation == "insert":
+            return supabase.table("goals").insert(p).execute()
+        return supabase.table("goals").update(p).eq("goal_id", goal_id).execute()
+
+    attempt = dict(payload)
+    # Retry while the schema is missing an optional column that hasn't been migrated yet.
+    for _ in range(len(optional_columns) + 1):
+        try:
+            return _execute(attempt)
+        except Exception as exc:
+            msg = str(exc).lower()
+            dropped = next(
+                (c for c in optional_columns if c in msg and c in attempt), None
+            )
+            if not dropped:
+                raise
+            print(
+                f"[goals] '{dropped}' column missing — apply the goal migrations. "
+                f"Saving goal without '{dropped}'."
+            )
+            attempt = {k: v for k, v in attempt.items() if k != dropped}
+    return _execute(attempt)
+
 
 @router.post("/goals")
 async def create_goal(
@@ -1276,8 +1338,13 @@ async def create_goal(
 ):
     try:
         uid = current_user["user_id"]
+        funding_sources = _resolve_funding_sources(req)
         current_amount = float(req.current_amount or 0)
-        if current_amount <= 0:
+
+        if funding_sources:
+            # Linked goals derive progress from their sources' live value.
+            current_amount = _current_amount_from_sources(uid, funding_sources)
+        elif current_amount <= 0:
             tx_res = (
                 supabase.table("transactions")
                 .select("amount, transaction_type")
@@ -1293,12 +1360,16 @@ async def create_goal(
             "target_amount": req.target_amount,
             "current_amount": current_amount,
             "target_date": req.target_date,
-            "status": req.status
+            "status": req.status,
+            "color": req.color or "bg-primary",
+            "funding_sources": funding_sources,
         }
-        res = supabase.table("goals").insert(insert_data).execute()
+        res = _write_goal_row("insert", insert_data)
         if not res.data:
             raise HTTPException(status_code=500, detail="Failed to create goal")
         return {"success": True, "data": res.data[0]}
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error creating goal: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1311,16 +1382,26 @@ async def update_goal(
 ):
     _assert_owner(_fetch_owner("goals", "goal_id", goal_id), current_user)
     try:
+        uid = current_user["user_id"]
+        funding_sources = _resolve_funding_sources(req)
+        current_amount = float(req.current_amount or 0)
+        if funding_sources:
+            current_amount = _current_amount_from_sources(uid, funding_sources)
+
         update_data = {
             "goal_name": req.goal_name,
             "description": req.description,
             "target_amount": req.target_amount,
-            "current_amount": req.current_amount,
+            "current_amount": current_amount,
             "target_date": req.target_date,
-            "status": req.status
+            "status": req.status,
+            "color": req.color or "bg-primary",
+            "funding_sources": funding_sources,
         }
-        res = supabase.table("goals").update(update_data).eq("goal_id", goal_id).execute()
+        res = _write_goal_row("update", update_data, goal_id=goal_id)
         return {"success": True, "data": res.data[0] if res.data else None}
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error updating goal: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -67,7 +67,11 @@ interface FixedDeposit {
 }
 
 export const Investments: React.FC = () => {
-  const { user } = useAppContext();
+  const { user, loadBudgetGoalsSummary, patchLinkedGoalProgress, loadInvestments, loadFixedDeposits } = useAppContext();
+  const refreshLinkedGoals = () => {
+    patchLinkedGoalProgress();
+    void loadBudgetGoalsSummary({ force: true });
+  };
   
   // Dynamic API State
   const [holdings, setHoldings] = useState<Holding[]>([]);
@@ -112,13 +116,12 @@ export const Investments: React.FC = () => {
     compounding_frequency: 'quarterly', payout_type: 'cumulative', premature_penalty_pct: '1',
   });
 
-  // Fetch fixed deposits
-  const fetchFDs = async () => {
+  // Fetch fixed deposits via the shared app cache (reused by the goal source picker)
+  const fetchFDs = async (force = false) => {
     if (!user?.id) return;
     try {
-      const response = await apiFetch(`/api/fixed-deposits`);
-      const data = await response.json();
-      if (data.success) {
+      const data = await loadFixedDeposits(force ? { force: true } : undefined);
+      if (data?.success) {
         setFds(data.fixed_deposits || []);
         setFdSummary(data.summary || { count: 0, total_principal: 0, total_current_value: 0, total_maturity_value: 0 });
       }
@@ -155,7 +158,8 @@ export const Investments: React.FC = () => {
           start_date: new Date().toISOString().split('T')[0], maturity_date: '',
           compounding_frequency: 'quarterly', payout_type: 'cumulative', premature_penalty_pct: '1',
         });
-        fetchFDs();
+        await fetchFDs(true);
+        refreshLinkedGoals();
       }
     } catch (error) {
       console.error('Error adding fixed deposit:', error);
@@ -169,20 +173,22 @@ export const Investments: React.FC = () => {
     try {
       const response = await apiFetch(`/api/fixed-deposits/${fdId}`, { method: 'DELETE' });
       const data = await response.json();
-      if (data.success) fetchFDs();
+      if (data.success) {
+        await fetchFDs(true);
+        refreshLinkedGoals();
+      }
     } catch (error) {
       console.error('Error deleting fixed deposit:', error);
     }
   };
 
-  // Fetch investments data
-  const fetchInvestments = async () => {
+  // Fetch investments via the shared app cache (reused by the goal source picker)
+  const fetchInvestments = async (force = false) => {
     if (!user?.id) return;
     try {
       setLoading(true);
-      const response = await apiFetch(`/api/investments`);
-      const data = await response.json();
-      if (data.success) {
+      const data = await loadInvestments(force ? { force: true } : undefined);
+      if (data?.success) {
         setHoldings(data.holdings);
         setSummary(data.summary);
         setRawChartData(data.chart_data);
@@ -274,7 +280,8 @@ export const Investments: React.FC = () => {
         setQuantity('');
         setPurchaseNav('');
         // Refresh dashboard
-        fetchInvestments();
+        await fetchInvestments(true);
+        refreshLinkedGoals();
       }
     } catch (error) {
       console.error("Error adding investment:", error);
@@ -295,7 +302,8 @@ export const Investments: React.FC = () => {
       const data = await response.json();
       if (data.success) {
         // Refresh
-        fetchInvestments();
+        await fetchInvestments(true);
+        refreshLinkedGoals();
       }
     } catch (error) {
       console.error("Error deleting transaction:", error);
