@@ -1343,8 +1343,10 @@ def _plan_car(goal: dict, agg: dict) -> dict:
     cuts     = agg.get("total_spending_cuts", 0.0)
     tenure_months = max(1, int(_num(goal.get("loan_tenure_months"), 60)))
     rate = _num(goal.get("loan_interest_rate_pct"), 10.0)
-    # "What car can I afford?" → COMPUTE the max price (down payment + biggest EMI-affordable loan).
+    # "What car can I afford?" → deploy EVERYTHING and COMPUTE the max price (funds + biggest
+    # EMI-affordable loan). Force the everything-source so the price and the scenario reconcile.
     if goal.get("find_max_affordable"):
+        goal = {**goal, "down_payment_source": goal.get("down_payment_source") or "everything"}
         price = _max_affordable_price(goal, agg, rate, tenure_months, months)
     user_dp  = _resolve_down_payment_pct(goal, agg, price, months, user_dp)   # what-if dp overrides
 
@@ -1415,10 +1417,11 @@ def _plan_house(goal: dict, agg: dict) -> dict:
     existing = _parse_amount(goal.get("existing_savings") or 0) or 0.0
     months   = _months_from_timeline(goal.get("timeline")) or 36.0
     rate     = _num(goal.get("loan_interest_rate_pct"), 8.5)
-    if goal.get("find_max_affordable"):                       # "what house can I afford?"
-        prop = _max_affordable_price(goal, agg, rate, 240, months)
-    user_dp  = _resolve_down_payment_pct(goal, agg, prop, months, user_dp)   # what-if dp overrides
     stamp_pct = _num(goal.get("stamp_duty_pct"), 7.0)        # rough default; varies by state
+    if goal.get("find_max_affordable"):                      # "what house can I afford?"
+        goal = {**goal, "down_payment_source": goal.get("down_payment_source") or "everything"}
+        prop = _max_affordable_price(goal, agg, rate, 240, months, stamp_pct=stamp_pct)
+    user_dp  = _resolve_down_payment_pct(goal, agg, prop, months, user_dp)   # what-if dp overrides
     stamp     = round(prop * stamp_pct / 100.0, 2)
     net      = agg["monthly_net_flow"]
     cuts     = agg.get("total_spending_cuts", 0.0)
@@ -1768,19 +1771,24 @@ def _resolve_down_payment_pct(goal: dict, agg: dict, price: float, months: float
     return min(100.0, max(0.0, amt / price * 100.0))
 
 
-def _max_affordable_price(goal: dict, agg: dict, rate: float, tenure: int, months: float) -> float:
-    """Largest purchase the user can afford = down payment (from the chosen funds) + the BIGGEST loan
-    whose EMI fits 70% of their monthly saving. Used by "what … can I afford?" what-ifs so the price
-    is COMPUTED, not guessed by the model."""
-    save = max(0.0, float(agg.get("monthly_net_flow") or 0.0))
-    max_loan = _inv_emi(_CAP_UTIL * save, rate, tenure)               # EMI ≤ 70% of saving
+def _max_affordable_price(goal: dict, agg: dict, rate: float, tenure: int, months: float,
+                          stamp_pct: float = 0.0) -> float:
+    """Largest purchase the user can afford = the funds they can muster (down payment) + the BIGGEST
+    loan whose EMI fits 70% of their SUSTAINABLE saving (surplus + reclaimable cuts). COMPUTED, not
+    guessed. Stamp duty/fees are charged as a % of the price, so we solve the circular dependency:
+        price = down + max_loan,  down + stamp = funds,  stamp = price·sp  ⇒  price = (funds+max_loan)/(1+sp)
+    """
+    capacity = max(0.0, float(agg.get("monthly_net_flow") or 0.0)
+                   + max(0.0, float(agg.get("total_spending_cuts") or 0.0)))   # the most they can save
+    max_loan = _inv_emi(_CAP_UTIL * capacity, rate, tenure)               # EMI ≤ 70% of that saving
     bank = max(0.0, float(agg.get("total_current_balance") or 0.0))
     existing = _parse_amount(goal.get("existing_savings") or 0) or 0.0
-    down = bank + existing + save * max(1.0, months)                 # bank + saving over the timeline
+    funds = bank + existing + capacity * max(1.0, months)                # bank + saving over the timeline
     src = str(goal.get("down_payment_source") or "everything").lower()
     if any(k in src for k in ("everything", "all", "liquid", "fd", "fund")):
-        down += _minimal_deployment(1e12, agg, include_bank=False)["deployed_total"]   # + broken FDs/funds
-    return round(down + max_loan, 2)
+        funds += _minimal_deployment(1e12, agg, include_bank=False)["deployed_total"]   # + broken FDs/funds
+    sp = max(0.0, stamp_pct) / 100.0
+    return round((funds + max_loan) / (1.0 + sp), 2)
 
 
 _GOAL_PLANNERS = {
@@ -1816,6 +1824,11 @@ def goal_planner_tool(state: AgentState) -> dict:
     task      = state.get("brain_task") or {}
     goal      = task.get("goal") or {}
     evidence  = state.get("evidence") or []
+
+    # A "max … can I afford?" query is a single-scenario what-if too — treat it as one so it always
+    # returns one clear "max affordable" card (not a 4-scenario plan), regardless of what the brain set.
+    if goal.get("find_max_affordable"):
+        goal = {**goal, "what_if": True}
 
     # A what-if BUILDS ON the prior goal. The supervisor LLM is unreliable at re-extracting every
     # field from history (it often drops target_amount → price 0 → no loan), so merge the persisted
@@ -1987,6 +2000,7 @@ def goal_planner_tool(state: AgentState) -> dict:
                       "summary": summary, "data": data}],
         "sources": ["Supabase Transactions", "Goal Planner"],
         # Persist the resolved goal so the NEXT what-if can build on it (carries target_amount,
-        # timeline, etc. even when the supervisor LLM drops them).
-        "last_goal": goal,
+        # timeline, etc. even when the supervisor LLM drops them). Strip the per-query flags so a
+        # later what-if doesn't accidentally inherit "what_if"/"find_max_affordable".
+        "last_goal": {k: v for k, v in goal.items() if k not in ("what_if", "find_max_affordable")},
     }

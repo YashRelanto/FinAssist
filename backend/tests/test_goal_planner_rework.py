@@ -318,12 +318,25 @@ def test_down_payment_source_everything_adds_liquidity():
 
 
 def test_max_affordable_price_is_downpayment_plus_max_loan():
+    # No stamp (car): price = funds (bank + saving×months + liquid) + max loan at 70% of capacity.
     from app.graph.tools.goal_planner_tool import _max_affordable_price, _inv_emi, _CAP_UTIL
-    agg = _agg(monthly_net_flow=10642.0, total_current_balance=157246.0, liquid_fund_value=100000.0)
+    agg = _agg(monthly_net_flow=10642.0, total_current_balance=157246.0, liquid_fund_value=100000.0,
+               total_spending_cuts=0.0)
     price = _max_affordable_price({"down_payment_source": "everything"}, agg, 10.0, 60, 12)
     max_loan = _inv_emi(_CAP_UTIL * 10642.0, 10.0, 60)
-    down = 157246.0 + 10642.0 * 12 + 100000.0      # bank + savings + liquid (everything)
-    assert abs(price - (down + max_loan)) < 1.0
+    funds = 157246.0 + 10642.0 * 12 + 100000.0      # bank + savings + liquid (everything)
+    assert abs(price - (funds + max_loan)) < 1.0
+
+
+def test_max_affordable_price_accounts_for_stamp_duty():
+    # House: stamp duty is a % of price → price = (funds + max loan) / (1 + stamp%).
+    from app.graph.tools.goal_planner_tool import _max_affordable_price, _inv_emi, _CAP_UTIL
+    agg = _agg(monthly_net_flow=10642.0, total_current_balance=157246.0, liquid_fund_value=100000.0,
+               total_spending_cuts=0.0)
+    no_stamp = _max_affordable_price({"down_payment_source": "everything"}, agg, 8.5, 240, 24)
+    with_stamp = _max_affordable_price({"down_payment_source": "everything"}, agg, 8.5, 240, 24, stamp_pct=7.0)
+    assert with_stamp < no_stamp                       # stamp leaves less room for the property
+    assert abs(with_stamp - no_stamp / 1.07) < 1.0
 
 
 def test_find_max_affordable_emi_at_cap():

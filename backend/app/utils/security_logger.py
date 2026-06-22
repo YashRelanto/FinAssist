@@ -57,7 +57,7 @@ def log_security_event(
             data = data[-1000:]
 
         with open(SECURITY_EVENTS_FILE, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2, ensure_ascii=False)
+            json.dump(data, fh, indent=2, ensure_ascii=False)   
             
     except Exception as exc:
         logger.error("Failed to persist security event: %s", exc)
