@@ -1045,6 +1045,7 @@ def _loan_scenarios(*, price: float, existing: float, user_months: float, user_d
             "emi_pre_funded_monthly": round(emi_reserve_monthly, 2),
             "total_interest_paid": interest,
             "total_cost_of_ownership": round(price + interest + extra_upfront, 2),
+            "extra_upfront": round(extra_upfront, 2),                 # stamp duty / registration / fees
             "timeline_months": months,
             "monthly_savings_needed": monthly_save,
             "assumed_monthly_saving": round(capacity, 2),
@@ -1089,14 +1090,20 @@ def _loan_scenarios(*, price: float, existing: float, user_months: float, user_d
     #     all-in plan, so it deploys more than C's minimal break — distinguishing it from B and C.
     liquidity_all = _minimal_deployment(price + extra_upfront, agg, include_bank=False)["deployed_total"]
     # Throw bank cash + cuts-boosted savings + every breakable fund at the down payment (cap at price).
-    dp_amt_d = min(price, max(round(price * user_dp_pct / 100.0, 2),
-                              available_now + updated_save * months + liquidity_all - extra_upfront))
+    # NO user-% floor here: when the goal is out of reach this yields the HONEST max down payment the
+    # funds can actually provide (which may be BELOW the stated %), with the real (larger) loan/EMI —
+    # so the answer can say "even deploying everything, the most you can put down is X".
+    dp_amt_d = min(price, max(0.0, available_now + updated_save * months + liquidity_all - extra_upfront))
     dp_pct_d = (dp_amt_d / price * 100.0) if price else user_dp_pct
     loan_d = max(0.0, price - dp_amt_d)
     emi_d = _calc_emi(loan_d, rate, tenure) if loan_d > 0 else 0.0
-    reserve_monthly_d = max(0.0, emi_d - _CAP_UTIL * updated_save)     # EMI the saving can't cover
-    # Liquidity actually broken = the down-payment beyond bank + cuts-boosted savings, plus any reserve.
+    # Liquidity is used FIRST for the down payment; only what's LEFT can pre-fund the EMI gap. Cap the
+    # reserve by that leftover — otherwise D would claim a phantom reserve (e.g. ₹1.6cr) it can't fund
+    # and falsely report an unaffordable goal as feasible.
     shortfall_dp_d = max(0.0, dp_amt_d + extra_upfront - available_now - updated_save * months)
+    liquidity_left = max(0.0, liquidity_all - shortfall_dp_d)
+    reserve_needed = max(0.0, emi_d - _CAP_UTIL * updated_save)        # EMI the saving can't cover
+    reserve_monthly_d = min(reserve_needed, liquidity_left / tenure) if tenure else 0.0
     deploy_d = _minimal_deployment(shortfall_dp_d + reserve_monthly_d * tenure, agg, include_bank=False)
     sc_d = build("D", f"Everything in — spending cuts + break funds for the biggest down payment / smallest loan{cuts_note}",
                  dp_pct=dp_pct_d, capacity=updated_save, deployment=deploy_d,
@@ -1110,6 +1117,22 @@ def _loan_scenarios(*, price: float, existing: float, user_months: float, user_d
     any_feasible = feasible is not None
     meta = {"target_out_of_reach": not any_feasible, "max_financeable_target": round(price, 2),
             "any_feasible": any_feasible}
+
+    # When NOTHING is feasible, precompute the honest "out of reach" explainer from D (the fullest
+    # deployment) so the answer can state exactly WHY — no LLM arithmetic. D is the smallest loan /
+    # EMI achievable; if even that EMI exceeds 70% of the user's sustainable saving, the goal can't
+    # be financed, and we also surface the largest price they COULD afford.
+    if not any_feasible:
+        affordable_emi = round(_CAP_UTIL * updated_save, 2)            # most EMI they can sustain
+        affordable_price = round(sc_d["down_payment_amount"] + _inv_emi(affordable_emi, rate, tenure), 2)
+        meta["out_of_reach"] = {
+            "max_down_payment": sc_d["down_payment_amount"],          # deploying EVERYTHING
+            "min_loan": sc_d["loan_amount"],                          # target − max down payment
+            "min_emi": sc_d["estimated_emi"],                         # the lowest EMI achievable
+            "affordable_emi": affordable_emi,                         # 70% of (surplus + cuts)
+            "emi_gap": round(max(0.0, sc_d["estimated_emi"] - affordable_emi), 2),
+            "affordable_price": affordable_price,                     # the most you could actually afford
+        }
     return scenarios, meta
 
 
@@ -1320,8 +1343,10 @@ def _plan_car(goal: dict, agg: dict) -> dict:
     cuts     = agg.get("total_spending_cuts", 0.0)
     tenure_months = max(1, int(_num(goal.get("loan_tenure_months"), 60)))
     rate = _num(goal.get("loan_interest_rate_pct"), 10.0)
-    # "What car can I afford?" → COMPUTE the max price (down payment + biggest EMI-affordable loan).
+    # "What car can I afford?" → deploy EVERYTHING and COMPUTE the max price (funds + biggest
+    # EMI-affordable loan). Force the everything-source so the price and the scenario reconcile.
     if goal.get("find_max_affordable"):
+        goal = {**goal, "down_payment_source": goal.get("down_payment_source") or "everything"}
         price = _max_affordable_price(goal, agg, rate, tenure_months, months)
     user_dp  = _resolve_down_payment_pct(goal, agg, price, months, user_dp)   # what-if dp overrides
 
@@ -1392,10 +1417,11 @@ def _plan_house(goal: dict, agg: dict) -> dict:
     existing = _parse_amount(goal.get("existing_savings") or 0) or 0.0
     months   = _months_from_timeline(goal.get("timeline")) or 36.0
     rate     = _num(goal.get("loan_interest_rate_pct"), 8.5)
-    if goal.get("find_max_affordable"):                       # "what house can I afford?"
-        prop = _max_affordable_price(goal, agg, rate, 240, months)
-    user_dp  = _resolve_down_payment_pct(goal, agg, prop, months, user_dp)   # what-if dp overrides
     stamp_pct = _num(goal.get("stamp_duty_pct"), 7.0)        # rough default; varies by state
+    if goal.get("find_max_affordable"):                      # "what house can I afford?"
+        goal = {**goal, "down_payment_source": goal.get("down_payment_source") or "everything"}
+        prop = _max_affordable_price(goal, agg, rate, 240, months, stamp_pct=stamp_pct)
+    user_dp  = _resolve_down_payment_pct(goal, agg, prop, months, user_dp)   # what-if dp overrides
     stamp     = round(prop * stamp_pct / 100.0, 2)
     net      = agg["monthly_net_flow"]
     cuts     = agg.get("total_spending_cuts", 0.0)
@@ -1745,19 +1771,24 @@ def _resolve_down_payment_pct(goal: dict, agg: dict, price: float, months: float
     return min(100.0, max(0.0, amt / price * 100.0))
 
 
-def _max_affordable_price(goal: dict, agg: dict, rate: float, tenure: int, months: float) -> float:
-    """Largest purchase the user can afford = down payment (from the chosen funds) + the BIGGEST loan
-    whose EMI fits 70% of their monthly saving. Used by "what … can I afford?" what-ifs so the price
-    is COMPUTED, not guessed by the model."""
-    save = max(0.0, float(agg.get("monthly_net_flow") or 0.0))
-    max_loan = _inv_emi(_CAP_UTIL * save, rate, tenure)               # EMI ≤ 70% of saving
+def _max_affordable_price(goal: dict, agg: dict, rate: float, tenure: int, months: float,
+                          stamp_pct: float = 0.0) -> float:
+    """Largest purchase the user can afford = the funds they can muster (down payment) + the BIGGEST
+    loan whose EMI fits 70% of their SUSTAINABLE saving (surplus + reclaimable cuts). COMPUTED, not
+    guessed. Stamp duty/fees are charged as a % of the price, so we solve the circular dependency:
+        price = down + max_loan,  down + stamp = funds,  stamp = price·sp  ⇒  price = (funds+max_loan)/(1+sp)
+    """
+    capacity = max(0.0, float(agg.get("monthly_net_flow") or 0.0)
+                   + max(0.0, float(agg.get("total_spending_cuts") or 0.0)))   # the most they can save
+    max_loan = _inv_emi(_CAP_UTIL * capacity, rate, tenure)               # EMI ≤ 70% of that saving
     bank = max(0.0, float(agg.get("total_current_balance") or 0.0))
     existing = _parse_amount(goal.get("existing_savings") or 0) or 0.0
-    down = bank + existing + save * max(1.0, months)                 # bank + saving over the timeline
+    funds = bank + existing + capacity * max(1.0, months)                # bank + saving over the timeline
     src = str(goal.get("down_payment_source") or "everything").lower()
     if any(k in src for k in ("everything", "all", "liquid", "fd", "fund")):
-        down += _minimal_deployment(1e12, agg, include_bank=False)["deployed_total"]   # + broken FDs/funds
-    return round(down + max_loan, 2)
+        funds += _minimal_deployment(1e12, agg, include_bank=False)["deployed_total"]   # + broken FDs/funds
+    sp = max(0.0, stamp_pct) / 100.0
+    return round((funds + max_loan) / (1.0 + sp), 2)
 
 
 _GOAL_PLANNERS = {
@@ -1793,6 +1824,11 @@ def goal_planner_tool(state: AgentState) -> dict:
     task      = state.get("brain_task") or {}
     goal      = task.get("goal") or {}
     evidence  = state.get("evidence") or []
+
+    # A "max … can I afford?" query is a single-scenario what-if too — treat it as one so it always
+    # returns one clear "max affordable" card (not a 4-scenario plan), regardless of what the brain set.
+    if goal.get("find_max_affordable"):
+        goal = {**goal, "what_if": True}
 
     # A what-if BUILDS ON the prior goal. The supervisor LLM is unreliable at re-extracting every
     # field from history (it often drops target_amount → price 0 → no loan), so merge the persisted
@@ -1964,6 +2000,7 @@ def goal_planner_tool(state: AgentState) -> dict:
                       "summary": summary, "data": data}],
         "sources": ["Supabase Transactions", "Goal Planner"],
         # Persist the resolved goal so the NEXT what-if can build on it (carries target_amount,
-        # timeline, etc. even when the supervisor LLM drops them).
-        "last_goal": goal,
+        # timeline, etc. even when the supervisor LLM drops them). Strip the per-query flags so a
+        # later what-if doesn't accidentally inherit "what_if"/"find_max_affordable".
+        "last_goal": {k: v for k, v in goal.items() if k not in ("what_if", "find_max_affordable")},
     }
