@@ -11,7 +11,7 @@ const STEPS = [
   {
     id: 'analyze',
     title: 'Analyze',
-    desc: 'Surface meaningful patterns and performance indicators automatically.',
+    desc: 'Category trends, merchants, and spending behaviour at a glance.',
   },
   {
     id: 'advise',
@@ -57,7 +57,7 @@ function AnalyzePanel() {
   return (
     <div className="w-full max-w-md bg-white-card rounded-2xl shadow-xl border border-lumio-line/20 p-6">
       <p className="font-label text-xs font-bold text-lumio-muted uppercase tracking-widest mb-4">
-        Pattern detection
+        Spending analytics
       </p>
       <div className="flex items-end justify-between gap-2 h-36 mb-4 px-1">
         {bars.map((h, i) => (
@@ -146,7 +146,7 @@ export const FoundationScrollSection: React.FC = () => {
 
   return (
     <section
-      id="features"
+      id="foundation"
       ref={sectionRef}
       className="relative"
       style={{ height: `${STEPS.length * 100}vh` }}

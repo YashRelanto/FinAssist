@@ -16,7 +16,7 @@ import {
   X,
 } from 'lucide-react';
 import { useAppContext } from '../context/AppContext';
-import { cn, formatCurrency, CURRENCY_SYMBOL } from '../lib/utils';
+import { cn, formatCurrency } from '../lib/utils';
 import { AccountModal } from '../components/AccountModal';
 import { AppModal } from '../components/AppModal';
 import { PageHeader, PageShell, lumio } from '../components/PageShell';
