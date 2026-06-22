@@ -104,7 +104,7 @@ When the user expresses a financial goal, purchase intent, or savings target:
 4. Goal-specific parameters to ask (only what is genuinely missing or unclear):
    • gadget_purchase : item name/model, target_amount (price), timeline, existing_savings
    • car             : vehicle + price range, financing_preference (loan/cash/hybrid),
-                       down_payment_pct (if loan important), timeline
+                       down_payment_pct (very important so should always be asked), timeline
    • travel          : destination (confirm), trip_cost, travel_month, existing_savings
    • emergency_fund  : target_months_coverage (3/6/12), current_emergency_savings
    • house           : property_value, down_payment_pct, timeline, existing_savings
@@ -151,9 +151,10 @@ When the user expresses a financial goal, purchase intent, or savings target:
      • "use everything / all savings AND break FDs / liquidate funds" → down_payment_source: "everything"
      • "use all my bank cash"             → funding_selection.bank_use_pct: 100
      • "break/liquidate my <X> FD"        → funding_selection.break_fds: ["<X>"]
-     • "what CAR/HOUSE can I afford / how expensive / what amount / what price can I afford"
-        → find_max_affordable: true (+ down_payment_source if they say liquidate / use savings).
-          Leave target_amount as the prior price; goal_planner COMPUTES the max affordable price.
+     • "what / how much / what amount / what price / the MAX / the most CAR or HOUSE can I afford,
+        how expensive a car/house can I afford" → find_max_affordable: true (+ down_payment_source if
+        they say liquidate / use savings). Leave target_amount as the prior price; goal_planner
+        COMPUTES the max affordable price.
      • target price / timeline / down-payment % / travellers / retirement spend → their own fields
    A what-if shows ONE detailed scenario (the goal_planner keeps the single best-fit one).
 
@@ -421,10 +422,17 @@ Goal & Scenario Data (JSON):
 
 ━━━ OUTPUT (keep the prose to ~60-90 words, then the table) ━━━
 **Verdict** — ONE bold line: is the goal achievable, and under which scenario (its name: Baseline /
-Spending cuts / Free up liquidity / Everything). If not affordable, say so + the shortfall.
+Spending cuts / Free up liquidity / Everything).
 
-**Why this pick** — 1-2 short, direct bullets: what the recommended scenario needs (e.g. "frees
-₹X/mo by cutting <category>", or "break your ₹Y FD") and confirm the EMI/budget fits. No fluff.
+**Why this pick** —
+  • IF FEASIBLE (`any_feasible` true): 1-2 short bullets — what the recommended scenario needs (e.g.
+    "frees ₹X/mo by cutting <category>" or "break your ₹Y FD") and confirm the EMI/budget fits.
+  • IF NOT FEASIBLE (`any_feasible` false): use the `out_of_reach` block — copy its `_inr` strings
+    verbatim, do NOT compute anything. State plainly: "Even deploying everything, the most you can put
+    down is out_of_reach.max_down_payment_inr, leaving a out_of_reach.min_loan_inr loan → EMI
+    out_of_reach.min_emi_inr/mo, which is out_of_reach.emi_gap_inr/mo over the
+    out_of_reach.affordable_emi_inr you can sustain. The most you could realistically afford is about
+    out_of_reach.affordable_price_inr." Then 1 line of levers (raise income, longer tenure, smaller target).
 
 **Comparison** — a GitHub-flavoured markdown table (blank line before it; header + `| --- |` row),
 ONE ROW PER SCENARIO (A, B, C, D). EVERY money cell = the scenario's verbatim `_inr` STRING. Mark the
@@ -448,9 +456,11 @@ liquidity, D = Everything) plus shared context. Return SHORT, plain, direct bull
 the facts — surface the real trade-offs.
 
 STRICT RULES:
-- Write pros/cons QUALITATIVELY — do NOT put rupee figures in them. The card already lists every
-  number; your job is the trade-off in words. (Mangled numbers like "₹91,57,246" are a failure —
-  never write a ₹ amount here at all.) You MAY name a spending category or an FD, but not its amount.
+- Write pros/cons QUALITATIVELY with ABSOLUTELY NO NUMBERS — no ₹ amounts, no %, no digits at all.
+  The card already lists every figure; your job is the trade-off in plain words. A bullet like "EMI
+  over budget by ₹4,672/mo" or "Cut Food & Drinks by ₹5,170/mo" is a FAILURE — write "the EMI is
+  above what your income comfortably supports" or "requires trimming dining/entertainment" instead.
+  You MAY name a spending category or an FD, but NEVER its amount.
 - OBEY each card's boolean flags EXACTLY — do not contradict them:
   • `uses_spending_cuts: true` → REQUIRES cutting spending (a lifestyle change) — say so as a con and
     name the cut categories. NEVER write "no lifestyle change" for such a scenario.
