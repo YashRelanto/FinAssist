@@ -37,7 +37,6 @@ interface SpendingBehaviorPanelProps {
   };
   weekendInsight?: string | string[];
   timeOfDayInsight?: string | string[];
-  frequencyInsight?: string | string[];
   loading?: boolean;
 }
 
@@ -47,7 +46,6 @@ export const SpendingBehaviorPanel: React.FC<SpendingBehaviorPanelProps> = ({
   transactionFrequency,
   weekendInsight,
   timeOfDayInsight,
-  frequencyInsight,
   loading,
 }) => {
   if (loading) {
@@ -152,20 +150,9 @@ export const SpendingBehaviorPanel: React.FC<SpendingBehaviorPanelProps> = ({
       {transactionFrequency && transactionFrequency.avg_per_day > 0 && (
         <div className="border-t border-outline-variant/20 pt-6">
           <p className="text-sm font-black">
-            You average {transactionFrequency.avg_per_day} transactions per active day (
+            You average {Math.round(transactionFrequency.avg_per_day)} transactions per active day (
             {transactionFrequency.total_txns} across {transactionFrequency.total_days_with_txns} days).
           </p>
-          {frequencyInsight && (
-            <div className="text-xs text-outline mt-2">
-              {Array.isArray(frequencyInsight) ? (
-                <ul className="list-disc pl-4 space-y-1">
-                  {frequencyInsight.map((item, i) => <li key={i}>{item}</li>)}
-                </ul>
-              ) : (
-                <p>{frequencyInsight}</p>
-              )}
-            </div>
-          )}
         </div>
       )}
     </div>

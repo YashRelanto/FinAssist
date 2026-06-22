@@ -438,7 +438,9 @@ export const BudgetGoals: React.FC = () => {
                     <p
                       className={cn(
                         'text-[10px] font-bold uppercase tracking-widest mt-0.5',
-                        item.alert ? 'text-error' : 'text-secondary'
+                        item.alert || item.overBudget
+                          ? 'text-error'
+                          : 'text-on-surface-variant'
                       )}
                     >
                       {item.status}
@@ -482,13 +484,6 @@ export const BudgetGoals: React.FC = () => {
           </div>
         )}
       </section>
-
-      <div className="bg-inverse-surface rounded-2xl p-8 text-white">
-        <h4 className="text-2xl font-bold mb-3">{trajectory.title}</h4>
-        <p className="opacity-80 text-sm leading-relaxed font-medium max-w-2xl">
-          {trajectory.description}
-        </p>
-      </div>
 
       <GoalModal
         isOpen={goalModalOpen}

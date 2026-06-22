@@ -38,11 +38,7 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
         >
           <X className="w-4 h-4" />
         </button>
-        <QuickAddForm
-          onSuccess={handleSuccess}
-          accounts={accounts}
-          variant="modal"
-        />
+        <QuickAddForm onSuccess={handleSuccess} accounts={accounts} />
       </div>
     </div>,
     document.body,

@@ -21,6 +21,9 @@ interface ForecastData {
   predicted_month_end?: string;
   prev_period_spend?: number;
   prev_month_spend?: number;
+  total_analyzed_spending?: number;
+  period_label?: string;
+  comparison_period_label?: string;
   period_change_pct?: number;
   budget_alert?: boolean;
   budget_alert_message?: string | null;
@@ -134,6 +137,10 @@ export const Forecasting: React.FC = () => {
   }, [transactions]);
 
   const prevSpend = forecast?.prev_period_spend ?? forecast?.prev_month_spend;
+  const currentSpend = analytics?.total_spend ?? forecast?.total_analyzed_spending;
+  const periodLabel = analytics?.period_label ?? forecast?.period_label;
+  const comparisonLabel =
+    analytics?.comparison_period_label ?? forecast?.comparison_period_label;
   const predicted = forecast?.predicted_next_month ?? 0;
   const changePct = forecast?.period_change_pct ?? 0;
   const changeDown = changePct < 0;
@@ -257,9 +264,15 @@ export const Forecasting: React.FC = () => {
             <motion.h2 className="text-5xl font-black text-on-surface">
               {forecast ? formatCurrency(predicted) : '—'}
             </motion.h2>
-            {forecast && prevSpend != null && (
-              <motion.p className="text-xs text-outline font-bold mt-2">
-                vs {formatCurrency(prevSpend)} in comparison period
+            {forecast && currentSpend != null && (
+              <motion.p className="text-xs text-lumio-muted font-medium mt-2">
+                {formatCurrency(currentSpend)} spent
+                {periodLabel ? ` · ${periodLabel}` : ' in selected period'}
+              </motion.p>
+            )}
+            {forecast && prevSpend != null && comparisonLabel && (
+              <motion.p className="text-[11px] text-outline font-bold mt-1">
+                Prior period spend: {formatCurrency(prevSpend)} ({comparisonLabel})
               </motion.p>
             )}
           </motion.div>
@@ -356,7 +369,6 @@ export const Forecasting: React.FC = () => {
           analytics?.spending_behavior?.peak_insight ??
           insights?.behavior_insights?.time_of_day
         }
-        frequencyInsight={insights?.behavior_insights?.frequency}
         loading={loading}
       />
     </PageShell>

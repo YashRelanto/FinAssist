@@ -176,25 +176,6 @@ export const AIAssistant: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Legacy card data */}
-                  {m.type === 'card' && m.data && (
-                    <div className="mt-4 bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/50 space-y-4">
-                      {m.data.map((item: any, i: number) => (
-                        <div key={i}>
-                          <div className="flex justify-between items-center mb-2">
-                            <div className="flex items-center gap-2">
-                              <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }}></div>
-                              <span className="text-[10px] font-bold text-on-surface uppercase tracking-widest">{item.label}</span>
-                            </div>
-                            <span className="text-xs font-bold text-on-surface">{formatCurrency(item.value)}</span>
-                          </div>
-                          <div className="w-full bg-surface-container-low h-1.5 rounded-full overflow-hidden">
-                            <div className="h-full transition-all duration-1000" style={{ width: `${item.percent}%`, backgroundColor: item.color }}></div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
                 <span className="text-[10px] font-bold text-outline px-1 block uppercase tracking-widest">{m.time}</span>
               </div>

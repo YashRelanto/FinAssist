@@ -109,18 +109,20 @@ export const Dashboard: React.FC = () => {
 
   const loadHealthInsightsPipeline = React.useCallback(
     (force?: boolean) => {
-      if (!force && healthLoadedRef.current && healthInsights) return;
+      // Guard on ref only — StrictMode remount resets state but keeps refs, which
+      // previously re-fired duplicate /financial-health-insights calls.
+      if (!force && healthLoadedRef.current) return;
       healthLoadedRef.current = true;
       void loadFinancialHealthInsights({ force, llm: false }).then((data) => {
         if (data) setHealthInsights(data);
-      });
-      setHealthInsightsLlmLoading(true);
-      void loadFinancialHealthInsights({ force, llm: true }).then((data) => {
-        if (data?.source === 'llm') setHealthInsights(data);
-        setHealthInsightsLlmLoading(false);
+        setHealthInsightsLlmLoading(true);
+        void loadFinancialHealthInsights({ force, llm: true }).then((llmData) => {
+          if (llmData?.source === 'llm') setHealthInsights(llmData);
+          setHealthInsightsLlmLoading(false);
+        });
       });
     },
-    [loadFinancialHealthInsights, healthInsights],
+    [loadFinancialHealthInsights],
   );
 
   const refreshDashboard = React.useCallback(

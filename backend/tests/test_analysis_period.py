@@ -11,6 +11,7 @@ def test_one_month_starts_first_of_current_month():
     assert w["end_date"] == "2026-06-05"
     assert w["comparison_start_date"] == "2026-05-01"
     assert w["comparison_end_date"] == "2026-05-05"
+    assert w["comparison_period_label"] == "May 1–5, 2026 (prior month)"
 
 
 def test_three_month_window():

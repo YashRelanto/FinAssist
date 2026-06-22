@@ -54,6 +54,7 @@ def resolve_analysis_window(
             "end_date": today.isoformat(),
             "comparison_start_date": None,
             "comparison_end_date": None,
+            "comparison_period_label": None,
             "months_in_window": None,
         }
 
@@ -69,6 +70,7 @@ def resolve_analysis_window(
         "end_date": today.isoformat(),
         "comparison_start_date": comp_start.isoformat(),
         "comparison_end_date": comp_end.isoformat(),
+        "comparison_period_label": _comparison_period_label(key, comp_start, comp_end),
         "months_in_window": months,
     }
 
@@ -77,6 +79,25 @@ def _period_label(period: str, start: date, end: date) -> str:
     if period == "1m":
         return end.strftime("%B %Y") + " (month to date)"
     return f"{start.strftime('%b %Y')} – {end.strftime('%b %Y')}"
+
+
+def _comparison_period_label(period: str, comp_start: date, comp_end: date) -> str:
+    if period == "1m":
+        if comp_start.year == comp_end.year and comp_start.month == comp_end.month:
+            return (
+                f"{comp_start.strftime('%b')} {comp_start.day}–{comp_end.day}, "
+                f"{comp_end.year} (prior month)"
+            )
+        return (
+            f"{comp_start.strftime('%b')} {comp_start.day}, {comp_start.year} – "
+            f"{comp_end.strftime('%b')} {comp_end.day}, {comp_end.year} (prior month)"
+        )
+    span = MONTHS_BY_PERIOD.get(period)
+    suffix = f"prior {span} months" if span else "prior period"
+    return (
+        f"{comp_start.strftime('%b')} {comp_start.day}, {comp_start.year} – "
+        f"{comp_end.strftime('%b')} {comp_end.day}, {comp_end.year} ({suffix})"
+    )
 
 
 def filter_rows_by_date(
