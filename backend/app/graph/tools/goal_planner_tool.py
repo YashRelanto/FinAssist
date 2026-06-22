@@ -414,11 +414,29 @@ _LIQUID_INV_KW = ("liquid", "debt", "fd", "fixed deposit", "savings", "money mar
                   "overnight", "ultra short", "short term", "arbitrage")
 
 
-def _liquid_fund_value(inv_data: Optional[Dict]) -> float:
-    """Value of liquid / debt mutual-fund holdings (redeemable in ~1 day) — near-cash."""
+def _liquid_fund_current_value(inv_data: Optional[Dict]) -> float:
+    """Current market value of liquid/debt holdings (near-cash). Uses each holding's
+    `current_value`, which the caller fills from LIVE NAV (see _fetch_investment_holdings)."""
     holdings = (inv_data or {}).get("holdings") or []
     return round(sum(float(h.get("current_value") or 0) for h in holdings
                      if any(kw in (h.get("name") or "").lower() for kw in _LIQUID_INV_KW)), 2)
+
+
+def _liquid_fund_value_at(inv_data: Optional[Dict], months: float,
+                          annual_return_pct: Optional[float] = None) -> float:
+    """Liquid-fund value at the goal horizon: current value grown at a debt-fund return for goals
+    longer than _RETURN_MIN_MONTHS; kept flat (liquid) for short goals."""
+    if annual_return_pct is None:
+        annual_return_pct = _SAVINGS_RETURN_PCT
+    current = _liquid_fund_current_value(inv_data)
+    if current <= 0 or months <= _RETURN_MIN_MONTHS or annual_return_pct <= 0:
+        return current
+    return round(_corpus_growth(current, 0.0, annual_return_pct / 100.0, int(round(months))), 2)
+
+
+# Back-compat alias: existing callers expect the goal-horizon value via `_liquid_fund_value`.
+def _liquid_fund_value(inv_data: Optional[Dict], months: float = 0.0) -> float:
+    return _liquid_fund_value_at(inv_data, months) if months else _liquid_fund_current_value(inv_data)
 
 
 # ── Evidence extraction helpers ───────────────────────────────────────────────
@@ -688,26 +706,41 @@ def _compute_category_breakdown(user_id: str, months_observed: int) -> List[Dict
     return out
 
 
-def _fetch_investment_holdings(user_id: str) -> Optional[Dict]:
-    """Lightweight portfolio snapshot at purchase value (no live NAV calls, for speed)."""
+def _fetch_investment_holdings(user_id: str, live_nav: bool = False) -> Optional[Dict]:
+    """Portfolio snapshot.
+
+    By DEFAULT values holdings at PURCHASE NAV — a pure DB read, no network — so hot paths like
+    the dashboard summary and financial-health-insights endpoints stay fast. Pass `live_nav=True`
+    (the goal planner) to value liquid/debt holdings at their true LIVE market NAV via mfapi
+    (per-scheme network calls, ~seconds), falling back to purchase NAV per holding on failure.
+    """
+    fetch_hist = latest = None
+    if live_nav:
+        from app.graph.tools.investment_tool import _fetch_scheme_history, _latest_nav
+        fetch_hist, latest = _fetch_scheme_history, _latest_nav
     try:
-        if supabase_db:
-            resp = (supabase_db.table("investments")
-                    .select("scheme_name, quantity, purchase_nav")
-                    .eq("user_id", user_id).execute())
-            rows = resp.data or []
-            if not rows:
-                return None
-            holdings, total = [], 0.0
-            for r in rows:
-                val = float(r.get("quantity") or 0) * float(r.get("purchase_nav") or 0)
-                total += val
-                holdings.append({"name": r.get("scheme_name"), "current_value": round(val, 2)})
-            for h in holdings:
-                h["share_pct"] = round(h["current_value"] / total * 100, 2) if total > 0 else 0.0
-            # Values are cost basis (quantity * purchase_nav), NOT live NAV — flag it honestly.
-            return {"total_current": round(total, 2), "holdings": holdings,
-                    "valuation_basis": "purchase_cost"}
+        if not supabase_db:
+            return None
+        cols = "scheme_name, scheme_code, quantity, purchase_nav" if live_nav else "scheme_name, quantity, purchase_nav"
+        resp = supabase_db.table("investments").select(cols).eq("user_id", user_id).execute()
+        rows = resp.data or []
+        if not rows:
+            return None
+        holdings, total = [], 0.0
+        for r in rows:
+            qty = float(r.get("quantity") or 0)
+            nav = float(r.get("purchase_nav") or 0)
+            if live_nav and r.get("scheme_code"):
+                live = latest(fetch_hist(r.get("scheme_code")))
+                if live and live > 0:
+                    nav = live
+            val = qty * nav
+            total += val
+            holdings.append({"name": r.get("scheme_name"), "current_value": round(val, 2)})
+        for h in holdings:
+            h["share_pct"] = round(h["current_value"] / total * 100, 2) if total > 0 else 0.0
+        return {"total_current": round(total, 2), "holdings": holdings,
+                "valuation_basis": "live_nav" if live_nav else "purchase_cost"}
     except Exception as exc:
         logger.warning("[goal_planner] investment fetch error: %s", exc)
     return None
@@ -868,285 +901,338 @@ def _funding_sources(agg: dict) -> Dict[str, Any]:
     }
 
 
+def _max_sustainable_save(agg: dict) -> float:
+    """Most the user can be asked to save per month: current surplus + reclaimable category cuts.
+    The saving phase may use this in full; the permanent EMI is capped at 70% of it (see _loan_scenarios)."""
+    return round(max(0.0, agg.get("monthly_net_flow", 0.0))
+                 + max(0.0, agg.get("total_spending_cuts", 0.0)), 2)
+
+
+def _minimal_deployment(gap: float, agg: dict, include_bank: bool = True) -> dict:
+    """Cover `gap` with the LEAST-disruptive assets, in order:
+       1. FDs maturing by the goal date  (free — already becoming cash),
+       2. liquid/debt funds              (partial redemption to the EXACT amount needed),
+       3. bank cash                      (only when include_bank — keeping the chosen cushion),
+       4. a still-locked FD broken ONLY if still short — the one whose usable value is CLOSEST
+          to the remaining need (minimise forfeited interest; never break everything).
+
+    Set include_bank=False for the LIQUIDITY scenarios (C/D), where bank cash is already counted
+    as 'available cash' and only FDs / liquid funds are 'broken'.
+    """
+    gap = max(0.0, round(gap, 2))
+    used = {"from_fds_matured": 0.0, "from_liquid": 0.0, "from_bank": 0.0,
+            "from_fds_broken": 0.0, "fds_broken": [], "penalty_paid": 0.0}
+    remaining = gap
+    view = agg.get("fd_funding_view") or []
+
+    for fd in view:                                   # 1. matured-by-goal-end FDs (free)
+        if remaining <= 0:
+            break
+        if fd.get("matures_by_goal_end"):
+            take = min(remaining, float(fd.get("usable_value") or 0.0))
+            used["from_fds_matured"] += take
+            remaining -= take
+
+    if remaining > 0:                                 # 2. liquid/debt funds (exact partial)
+        take = min(remaining, float(agg.get("liquid_fund_value") or 0.0))
+        used["from_liquid"] += take
+        remaining -= take
+
+    if include_bank and remaining > 0:                # 3. bank cash (keep cushion)
+        sel = agg.get("funding_selection") or {}
+        pct = float(sel.get("bank_use_pct", (1.0 - _BANK_RETAIN_FRAC) * 100.0))
+        bank_avail = max(0.0, float(agg.get("total_current_balance") or 0.0) * pct / 100.0)
+        take = min(remaining, bank_avail)
+        used["from_bank"] += take
+        remaining -= take
+
+    if remaining > 0:                                 # 4. break the FD closest to the remaining need
+        locked = [fd for fd in view if not fd.get("matures_by_goal_end")]
+        locked.sort(key=lambda fd: abs(float(fd.get("usable_value") or 0.0) - remaining))
+        for fd in locked:
+            if remaining <= 0:
+                break
+            take = min(remaining, float(fd.get("usable_value") or 0.0))
+            if take <= 0:
+                continue
+            used["from_fds_broken"] += take
+            used["penalty_paid"] += float(fd.get("penalty_if_broken") or 0.0)
+            used["fds_broken"].append(fd.get("bank_name") or fd.get("label") or "FD")
+            remaining -= take
+
+    for k in ("from_fds_matured", "from_liquid", "from_bank", "from_fds_broken", "penalty_paid"):
+        used[k] = round(used[k], 2)
+    used["deployed_total"] = round(gap - remaining, 2)
+    used["shortfall_uncovered"] = round(max(0.0, remaining), 2)
+    return used
+
+
 def _loan_scenarios(*, price: float, existing: float, user_months: float, user_dp_pct: float,
                     surplus: float, cuts: float, rate: float, tenure: int,
-                    deployable: float = 0.0,
+                    agg: dict,
                     extra_upfront: float = 0.0, down_label: str = "down payment",
                     asset: str = "purchase",
-                    instrument: str = "Recurring Deposit or Liquid MF") -> List[Dict]:
+                    instrument: str = "Recurring Deposit or Liquid MF") -> tuple:
     """
-    Three DYNAMIC scenarios that RESPECT the user's timeline. Levers tried in order:
-      1. deploy idle liquid funds as a lump-sum head-start on the down payment;
-      2. raise the down payment % so the EMI fits the monthly capacity;
-      3. keep the timeline; stretch only MODESTLY (≤1.5x) if no down payment works;
-      4. if it still doesn't fit, right-size the purchase.
-        A 'Your Plan'   — exactly the user's inputs (no fund deployment, judged honestly).
-        B 'Recommended' — SOLVED to be feasible: deploys spare funds + adjusts the down payment,
-                          keeping the timeline (or a modest extension). Always shows the down
-                          payment split, EMI, total interest and total cost.
-        C 'Right-Size'  — biggest purchase that fits the ORIGINAL timeline (or "buy sooner").
-    """
-    surplus = max(surplus, 0.0)
-    cuts = max(cuts, 0.0)
-    price = max(price, 0.0)
-    deployable = max(deployable, 0.0)
-    user_months = max(1, int(round(user_months)))
-    cap = surplus + cuts                      # SAVING-phase capacity (short-term cuts are OK)
-    # The EMI runs for years, so it must be sustainable from the BASE surplus alone — we do NOT
-    # assume the user permanently slashes spending to pay an EMI. (Cuts help the down payment, not
-    # the long-term EMI.)
-    emi_cap = surplus * _CAP_UTIL
-    cuts_note = f" (with ₹{round(cuts):,}/mo spending cuts)" if cuts > 0 else ""
-    max_months = _max_stretch_months(user_months)
+    FOUR orthogonal scenarios. Bank cash (+ any earmarked existing savings) is 'available cash' in
+    EVERY scenario; only FDs / liquid FUNDS are ever 'broken' (scenarios C/D).
 
-    def make(tag, label, recommended, dp_pct, months, capacity, P, head_start):
+      A — Baseline. Current saving rate, no cuts, no breaking. The user's exact down payment %.
+          Feasible if the down payment is reachable from cash + saving×timeline AND the EMI fits
+          70% of current saving.
+      B — Spending cuts. Same as A but saving = surplus + reclaimable category cuts; the bank grows
+          faster and the EMI is judged against 70% of that higher saving. (Cut breakdown attached.)
+      C — Liquidity (no cuts). Break MINIMAL least-disruptive FDs/funds to RAISE the down payment →
+          shrink the loan → bring the EMI within 70% of current saving.
+      D — Everything. Cuts AND liquidity; liquidity raises the down payment and may also be reserved
+          to PRE-FUND the EMI shortfall the saving can't cover. The 'throw everything at it' plan.
+
+    Recommended = the first FEASIBLE scenario in order A→B→C→D; all four are always returned.
+    """
+    price = max(price, 0.0)
+    months = max(1, int(round(user_months)))
+    save = max(0.0, surplus)
+    cuts = max(0.0, cuts)
+    updated_save = save + cuts
+    bank = max(0.0, float(agg.get("total_current_balance") or 0.0))
+    available_now = bank + max(0.0, existing)          # cash on hand (bank + earmarked savings)
+    user_dp_pct = min(max(user_dp_pct, 0.0), 100.0)
+    zero_deploy = _minimal_deployment(0.0, agg)
+    cuts_note = f" (with ₹{round(cuts):,}/mo spending cuts)" if cuts > 0 else ""
+
+    def build(tag, label, *, dp_pct, capacity, deployment, emi_reserve_monthly=0.0):
+        """One scenario. `capacity` = the monthly saving this scenario assumes (A/C: save; B/D:
+        updated_save). `deployment` = FD/liquid funds broken (C/D). `emi_reserve_monthly` = part of
+        the EMI pre-funded from liquidity (D)."""
         dp_pct = min(max(dp_pct, 0.0), 100.0)
-        dp_amt = round(P * dp_pct / 100.0, 2)
-        loan = round(max(0.0, P - dp_amt), 2)
+        dp_amt = round(price * dp_pct / 100.0, 2)
+        loan = round(max(0.0, price - dp_amt), 2)
         emi = round(_calc_emi(loan, rate, tenure), 2) if loan > 0 else 0.0
-        months = max(1, int(months))
-        upfront_need = dp_amt + extra_upfront
-        available = existing + head_start
-        lump = round(min(upfront_need, available), 2)          # funded now from spare cash/savings
-        to_save = round(max(0.0, upfront_need - lump), 2)      # the rest, saved monthly
-        save = round(to_save / months, 2)
         interest = round(emi * tenure - loan, 2) if loan > 0 else 0.0
+        upfront = dp_amt + extra_upfront
+        deployed = deployment["deployed_total"]
+        cash_now = available_now + deployed                      # cash + broken funds available today
+        to_save = round(max(0.0, upfront - cash_now), 2)         # the rest, saved monthly
+        monthly_save = round(to_save / months, 2)
+        # Down payment is reachable if cash + broken funds + saving×timeline covers the upfront.
+        dp_feasible = upfront <= cash_now + capacity * months + 1
+        # The EMI must fit 70% of this scenario's saving, after any pre-funded reserve.
+        emi_self = max(0.0, emi - emi_reserve_monthly)
+        emi_feasible = emi_self <= _CAP_UTIL * capacity + 1
+        # Per-SOURCE split of the down payment (so the answer/card can name where each rupee comes
+        # from). `deployed` is FD + liquid funds broken; the rest of the lump is bank cash.
+        lump = round(min(upfront, cash_now), 2)
+        dp_from_fd_amount = round(float(deployment.get("from_fds_matured") or 0)
+                                  + float(deployment.get("from_fds_broken") or 0), 2)
+        dp_from_liquid_amount = round(float(deployment.get("from_liquid") or 0), 2)
+        dp_from_bank_amount = round(max(0.0, lump - dp_from_fd_amount - dp_from_liquid_amount), 2)
         return {
-            "tag": tag, "label": label, "recommended": recommended,
-            "purchase_price": round(P, 2),
+            "tag": tag, "label": label, "recommended": False,
+            "purchase_price": round(price, 2),
             "down_payment_pct": round(dp_pct, 1),
             "down_payment_amount": dp_amt,
             "down_payment_from_existing": lump,
             "down_payment_from_savings": to_save,
+            "dp_from_bank_amount": dp_from_bank_amount,
+            "dp_from_fd_amount": dp_from_fd_amount,
+            "dp_from_liquid_amount": dp_from_liquid_amount,
+            "dp_from_savings_amount": to_save,
             "loan_amount": loan,
             "loan_tenure_months": tenure if loan > 0 else 0,
+            "loan_rate_pct": round(rate, 2),
             "estimated_emi": emi,
             "monthly_post_purchase": emi,
+            "emi_pre_funded_monthly": round(emi_reserve_monthly, 2),
             "total_interest_paid": interest,
-            "total_cost_of_ownership": round(P + interest + extra_upfront, 2),
+            "total_cost_of_ownership": round(price + interest + extra_upfront, 2),
             "timeline_months": months,
-            "monthly_savings_needed": save,
-            # The down-payment SAVING must fit ~70% of the saving capacity (surplus + short-term
-            # cuts); the post-purchase EMI must fit ~70% of the BASE surplus (emi_cap) — a plan
-            # whose EMI eats the whole surplus is NOT affordable, even with cuts.
-            "feasible": (save <= capacity * _CAP_UTIL + 1) and (emi <= emi_cap + 1),
-            "shortfall_per_month": round(max(0.0, save - capacity * _CAP_UTIL), 2),
-            "emi_fits_base_surplus": emi <= emi_cap + 1,
+            "monthly_savings_needed": monthly_save,
+            "assumed_monthly_saving": round(capacity, 2),
+            # Bank-balance story (precomputed so the answer never does its own arithmetic):
+            "available_balance_now": round(available_now, 2),
+            "total_savings_pot": round(capacity * months, 2),
+            "balance_after_upfront": round(available_now + deployed + capacity * months - upfront, 2),
+            "deployment": deployment,
+            "feasible": bool(dp_feasible and emi_feasible),
+            "emi_fits_capacity": bool(emi_feasible),
+            "down_payment_fundable": bool(dp_feasible),
+            "shortfall_per_month": round(max(0.0, monthly_save - capacity), 2),
             "recommended_instrument": instrument,
         }
 
-    def feasible_band(months, capacity, available):
-        """[dp_lo, dp_hi] of down-payment % that keeps the EMI within base surplus AND the monthly
-        saving within the saving capacity, after using `available` (existing + spare funds) up front."""
-        c = capacity * _CAP_UTIL                          # this month's saving allowance
-        max_loan = _inv_emi(emi_cap, rate, tenure)        # EMI must fit BASE surplus, not surplus+cuts
-        dp_lo = max(0.0, (price - max_loan) / price * 100.0) if price else 0.0                       # EMI fits
-        dp_hi = ((c * months + available - extra_upfront) / price * 100.0) if price else 100.0       # saving fits
-        return dp_lo, min(100.0, dp_hi)
+    # A — baseline: user's down payment %, current saving, no cuts, no breaking.
+    sc_a = build("A", f"Baseline — {user_dp_pct:.0f}% {down_label} over {months} months on your current savings",
+                 dp_pct=user_dp_pct, capacity=save, deployment=zero_deploy)
 
-    # A — user's exact plan (their down-payment % and timeline), DEPLOYING their available assets
-    # (idle bank cash + liquid funds + breakable FDs) toward the upfront, judged honestly against
-    # the base surplus. This reflects "use my money / break my FDs" in the user's own plan.
-    sc_a = make("A", f"Your Plan — {user_dp_pct:.0f}% {down_label} over {user_months} months",
-                False, user_dp_pct, user_months, surplus, price, deployable)
+    # B — spending cuts: same plan, judged against the higher (surplus + cuts) saving.
+    sc_b = build("B", f"With spending cuts — {user_dp_pct:.0f}% {down_label}, freeing ₹{round(cuts):,}/mo from your budget",
+                 dp_pct=user_dp_pct, capacity=updated_save, deployment=zero_deploy)
 
-    # B — SOLVE for feasibility: deploy spare funds, raise the down payment so the EMI fits, keep
-    #     the timeline (modest stretch only if no down payment works at all).
-    avail_b = existing + deployable
-    months_b = user_months
-    dp_lo, dp_hi = feasible_band(months_b, cap, avail_b)
-    while dp_lo > dp_hi + 0.01 and months_b < max_months:
-        months_b = min(months_b + 3, max_months)
-        dp_lo, dp_hi = feasible_band(months_b, cap, avail_b)
-    if dp_lo <= dp_hi + 0.01:
-        dp_b = min(max(user_dp_pct, dp_lo), dp_hi)        # honour the user's % unless EMI forces higher
-        deploy_note = f", deploy {_inr(deployable)} now" if deployable > 0 else ""
-        ext = "" if months_b == user_months else f" ({months_b-user_months}-month extension)"
-        label_b = f"Keep this {asset} — {dp_b:.0f}% {down_label} over {months_b} months{ext}{deploy_note}{cuts_note}"
-        sc_b = make("B", label_b, False, dp_b, months_b, cap, price, deployable)
-    else:
-        dp_b = min(100.0, max(user_dp_pct, dp_lo))
-        sc_b = make("B", f"Keep this {asset} — a stretch even at {max_months} months on your budget{cuts_note}",
-                    False, dp_b, max_months, cap, price, deployable)
+    # C — liquidity (no cuts): raise the down payment with MINIMAL broken funds so the EMI fits
+    #     70% of CURRENT saving — but NEVER beyond what the user can actually fund (bank + savings +
+    #     all breakable liquidity). If the funds can't reach that down payment, C keeps the real
+    #     (higher) loan/EMI and stays infeasible rather than inventing an unfundable down payment.
+    user_dp_amt = round(price * user_dp_pct / 100.0, 2)
+    max_loan_c = _inv_emi(_CAP_UTIL * save, rate, tenure)
+    dp_needed_c = max(user_dp_amt, price - max_loan_c)                 # to bring EMI within 70% of saving
+    liquidity_all = _minimal_deployment(price + extra_upfront, agg, include_bank=False)["deployed_total"]
+    max_fundable_c = available_now + save * months + liquidity_all - extra_upfront
+    dp_amt_c = min(price, max(user_dp_amt, min(dp_needed_c, max_fundable_c)))
+    dp_pct_c = (dp_amt_c / price * 100.0) if price else user_dp_pct
+    shortfall_c = max(0.0, dp_amt_c + extra_upfront - available_now - save * months)
+    deploy_c = _minimal_deployment(shortfall_c, agg, include_bank=False)
+    sc_c = build("C", f"Free up liquidity — break the minimum needed to make the EMI affordable",
+                 dp_pct=dp_pct_c, capacity=save, deployment=deploy_c)
 
-    # C — RIGHT-SIZE / MAX FINANCEABLE: the biggest purchase that fits, putting ALL deployable
-    # funds (idle cash, liquid funds AND broken FDs) toward the down payment, PLUS the largest loan
-    # whose EMI fits the base surplus. Maximising the down payment with assets (incl. breaking FDs)
-    # shrinks the loan, so a bigger car becomes affordable than at the user's stated down-payment %.
-    dp_frac = min(max(user_dp_pct / 100.0, 0.0), 1.0)
-    c = cap * _CAP_UTIL
-    avail_c = existing + deployable
-    max_loan = _inv_emi(emi_cap, rate, tenure)                          # biggest EMI-affordable loan
-    down_avail = max(0.0, avail_c + c * user_months - extra_upfront)    # most we can put down
-    price_c = down_avail + max_loan
-    price_c_capped = min(price_c, price)
-    out_of_reach = price > 0 and price_c < price * _TARGET_FLOOR_FRAC
-    # Down-payment % for the right-sized car: assets first, loan covers the rest. Keep it UNROUNDED
-    # so the loan = exactly max_loan and the EMI lands on emi_cap (rounding the % would push a few
-    # hundred rupees into the loan and trip the EMI cap). make() rounds the % for display.
-    dp_pct_c = min(100.0, down_avail / price_c_capped * 100.0) if price_c_capped > 0 else user_dp_pct
-    deploy_c = f" by deploying {_inr(deployable)} of savings/investments now" if deployable > 0 else ""
-    if price_c >= price * 0.98:
-        need = max(0.0, price * dp_frac + extra_upfront - avail_c)
-        months_fast = max(1, math.ceil(need / c)) if c > 0 else user_months
-        sc_c = make("C", f"Buy Sooner — same {asset} in {months_fast} months{cuts_note}",
-                    False, user_dp_pct, months_fast, cap, price, deployable)
-    elif out_of_reach:
-        sc_c = make("C", f"Most you can finance — a {_inr(price_c_capped)} {asset}{deploy_c} (your {_inr(price)} target is out of reach in {user_months} months){cuts_note}",
-                    False, dp_pct_c, user_months, cap, price_c_capped, deployable)
-    else:
-        sc_c = make("C", f"Right-Size — a {_inr(price_c_capped)} {asset} fits your {user_months}-month timeline{deploy_c}{cuts_note}",
-                    False, dp_pct_c, user_months, cap, price_c_capped, deployable)
+    # D — EVERYTHING: spending cuts AND break ALL useful liquidity to MAXIMISE the down payment
+    #     (smallest loan, least interest); pre-fund any EMI the saving still can't cover. This is the
+    #     all-in plan, so it deploys more than C's minimal break — distinguishing it from B and C.
+    liquidity_all = _minimal_deployment(price + extra_upfront, agg, include_bank=False)["deployed_total"]
+    # Throw bank cash + cuts-boosted savings + every breakable fund at the down payment (cap at price).
+    dp_amt_d = min(price, max(round(price * user_dp_pct / 100.0, 2),
+                              available_now + updated_save * months + liquidity_all - extra_upfront))
+    dp_pct_d = (dp_amt_d / price * 100.0) if price else user_dp_pct
+    loan_d = max(0.0, price - dp_amt_d)
+    emi_d = _calc_emi(loan_d, rate, tenure) if loan_d > 0 else 0.0
+    reserve_monthly_d = max(0.0, emi_d - _CAP_UTIL * updated_save)     # EMI the saving can't cover
+    # Liquidity actually broken = the down-payment beyond bank + cuts-boosted savings, plus any reserve.
+    shortfall_dp_d = max(0.0, dp_amt_d + extra_upfront - available_now - updated_save * months)
+    deploy_d = _minimal_deployment(shortfall_dp_d + reserve_monthly_d * tenure, agg, include_bank=False)
+    sc_d = build("D", f"Everything in — spending cuts + break funds for the biggest down payment / smallest loan{cuts_note}",
+                 dp_pct=dp_pct_d, capacity=updated_save, deployment=deploy_d,
+                 emi_reserve_monthly=reserve_monthly_d)
 
-    # Recommend the plan that actually WORKS.
-    (sc_b if sc_b["feasible"] else sc_c)["recommended"] = True
-    meta = {"max_financeable_target": round(price_c_capped, 2), "target_out_of_reach": bool(out_of_reach)}
-    return [sc_a, sc_b, sc_c], meta
+    scenarios = [sc_a, sc_b, sc_c, sc_d]
+    feasible = next((s for s in scenarios if s["feasible"]), None)
+    # Recommend the first feasible scenario (least disruptive). If none works, fall back to D (the
+    # fullest effort) so there is always a headline plan; meta flags that it is not affordable.
+    (feasible or sc_d)["recommended"] = True
+    any_feasible = feasible is not None
+    meta = {"target_out_of_reach": not any_feasible, "max_financeable_target": round(price, 2),
+            "any_feasible": any_feasible}
+    return scenarios, meta
 
 
 def _savings_scenarios(*, target: float, existing: float, user_months: float,
-                       surplus: float, cuts: float, instrument: str, asset: str = "goal",
-                       annual_return_pct: float = _SAVINGS_RETURN_PCT,
-                       deployable: float = 0.0) -> tuple:
+                       surplus: float, cuts: float, instrument: str, agg: dict,
+                       asset: str = "goal",
+                       annual_return_pct: float = _SAVINGS_RETURN_PCT) -> tuple:
     """
-    Three DYNAMIC scenarios for a cash (no-loan) goal, respecting the user's timeline.
-    Money invested for >12 months GROWS, so the monthly contribution needed for long goals is
-    the SIP amount (lower than a flat gap/months). Short goals (<=12 months) and 0%-return goals
-    (e.g. an emergency fund kept liquid) stay linear.
+    FOUR scenarios for a cash (no-loan) goal — the no-EMI counterpart of _loan_scenarios. Bank cash
+    (+ earmarked existing savings) is 'available cash' in every scenario; only FDs / liquid FUNDS
+    are broken (C/D). A goal is feasible when the chosen resources reach the target by the timeline.
 
-    `deployable` is the user's spare assets (idle bank cash + liquid funds + breakable FDs). It is
-    used as a one-time head-start that REDUCES the gap to save for — so these assets genuinely cut
-    the monthly commitment on every cash goal. Only the amount the goal needs is ever drawn.
-      A 'Your Plan'   — your timeline (no assets deployed — judged honestly).
-      B 'Recommended' — deploy spare assets + keep the timeline if it fits; else stretch MODESTLY.
-      C 'Right-Size'  — the largest target reachable within the original timeline (deploying assets).
+      A — Baseline: bank cash + current saving × timeline.
+      B — Spending cuts: bank cash + (saving + cuts) × timeline.
+      C — Liquidity (no cuts): bank cash + current saving × timeline + minimal broken funds.
+      D — Everything: bank cash + (saving + cuts) × timeline + broken funds.
     """
     surplus = max(surplus, 0.0)
     cuts = max(cuts, 0.0)
-    deployable = max(0.0, deployable)
-    user_months = max(1, int(round(user_months)))
-    cap = surplus + cuts
-    c = cap * _CAP_UTIL
+    months = max(1, int(round(user_months)))
+    save = surplus
+    updated_save = surplus + cuts
+    bank = max(0.0, float(agg.get("total_current_balance") or 0.0))
+    available_now = bank + max(0.0, existing)          # cash on hand
     r = annual_return_pct / 100.0
     grows = annual_return_pct > 0
-    cuts_note = f" (with ₹{round(cuts):,}/mo spending cuts)" if cuts > 0 else ""
-    max_months = _max_stretch_months(user_months)
+    zero_deploy = _minimal_deployment(0.0, agg)
 
-    def _monthly_for(target_amt, months, base):
-        """Monthly contribution needed to reach target_amt from `base` (existing + deployed) over `months`."""
+    def _reach(base, capacity):
+        """Value reached by the goal date from `base` cash contributing `capacity`/month."""
         if months > _RETURN_MIN_MONTHS and grows:
-            base_fv = _corpus_growth(base, 0.0, r, months)
-            need = max(0.0, target_amt - base_fv)
-            return round(_monthly_sip_for_corpus(need, annual_return_pct, months), 2)
-        return round(max(0.0, target_amt - base) / months, 2)
+            return _corpus_growth(base, capacity, r, months)
+        return base + capacity * months
 
-    def _reachable(months, base):
-        """Largest target reachable from `base` over `months` at full capacity c."""
+    def build(tag, label, *, capacity, deployment):
+        deploy = deployment["deployed_total"]
+        base = available_now + deploy
+        reached = _reach(base, capacity)
+        # Monthly contribution actually needed to hit the target from cash + broken funds.
         if months > _RETURN_MIN_MONTHS and grows:
-            return _corpus_growth(base, c, r, months)
-        return base + c * months
-
-    def build(tag, label, recommended, target_amt, months, capacity, deploy):
-        months = max(1, int(months))
-        deploy = round(min(max(0.0, deploy), max(0.0, target_amt - existing)), 2)  # only what's needed
-        base = existing + deploy
-        save = _monthly_for(target_amt, months, base)
+            need = max(0.0, target - _corpus_growth(base, 0.0, r, months))
+            monthly = round(_monthly_sip_for_corpus(need, annual_return_pct, months), 2)
+        else:
+            monthly = round(max(0.0, target - base) / months, 2)
         return {
-            "tag": tag, "label": label, "recommended": recommended,
+            "tag": tag, "label": label, "recommended": False,
             "timeline_months": months,
-            "monthly_savings_needed": save,
-            "target_amount": round(target_amt, 2),
-            "gap": round(max(0.0, target_amt - existing), 2),
-            "deployed_now": deploy,                       # spare assets put in up-front (incl. broken FDs)
+            "monthly_savings_needed": monthly,
+            "assumed_monthly_saving": round(capacity, 2),
+            "target_amount": round(target, 2),
+            "gap": round(max(0.0, target - available_now), 2),
+            "available_balance_now": round(available_now, 2),
+            "total_savings_pot": round(capacity * months, 2),
+            "deployed_now": round(deploy, 2),
+            "deployment": deployment,
             "assumed_annual_return_pct": annual_return_pct,
-            # Only ~70% of the monthly capacity may be committed — keep a lifestyle cushion.
-            "feasible": save <= capacity * _CAP_UTIL + 1,
-            "shortfall_per_month": round(max(0.0, save - capacity * _CAP_UTIL), 2),
+            "projected_value_at_goal": round(reached, 2),
+            "feasible": bool(reached >= target - 1),
+            "shortfall_per_month": round(max(0.0, monthly - capacity), 2),
             "recommended_instrument": instrument,
         }
 
-    # A — your plan over your timeline, DEPLOYING available assets (bank cash + liquid funds +
-    # breakable FDs), judged honestly against the monthly surplus alone.
-    sc_a = build("A", f"Your Plan — {user_months} months", False, target, user_months, surplus, deployable)
+    # A — baseline.
+    sc_a = build("A", f"Baseline — {months} months on your current savings", capacity=save, deployment=zero_deploy)
+    # B — spending cuts.
+    sc_b = build("B", f"With spending cuts — freeing ₹{round(cuts):,}/mo from your budget", capacity=updated_save, deployment=zero_deploy)
+    # C — liquidity (no cuts): break minimal funds for the gap current saving can't reach.
+    gap_c = max(0.0, target - available_now - save * months)
+    sc_c = build("C", "Free up liquidity — break the minimum needed to reach the target",
+                 capacity=save, deployment=_minimal_deployment(gap_c, agg, include_bank=False))
+    # D — everything: cuts + liquidity.
+    gap_d = max(0.0, target - available_now - updated_save * months)
+    sc_d = build("D", "Everything in — spending cuts + liquidity to reach the target",
+                 capacity=updated_save, deployment=_minimal_deployment(gap_d, agg, include_bank=False))
 
-    # B — deploy spare assets, keep the timeline if it fits; else stretch MODESTLY (capped ~1.5x)
-    deploy_b = round(min(deployable, max(0.0, target - existing)), 2)
-    base_b = existing + deploy_b
-    months_b = user_months
-    while c > 0 and _monthly_for(target, months_b, base_b) > c and months_b < max_months:
-        months_b += 1
-    deploy_note = f", deploy {_inr(deploy_b)} now" if deploy_b > 0 else ""
-    if months_b == user_months:
-        label_b = f"Keep this target — your {user_months}-month timeline{deploy_note}{cuts_note}"
-    else:
-        label_b = f"Keep this target — {months_b} months (a {months_b-user_months}-month extension){deploy_note}{cuts_note}"
-    sc_b = build("B", label_b, False, target, months_b, cap, deployable)
-
-    # C — right-size the target to the original timeline (or reach sooner if it already fits)
-    reachable = _reachable(user_months, existing + deployable)
-    affordable_target = round(min(reachable, target), 2)
-    out_of_reach = target > 0 and affordable_target < target * _TARGET_FLOOR_FRAC
-    if reachable >= target * 0.98:
-        months_fast = user_months
-        while c > 0 and _monthly_for(target, months_fast, existing + deployable) <= c and months_fast > 1:
-            months_fast -= 1
-        months_fast = min(months_fast + 1, user_months)  # smallest months that still fits
-        sc_c = build("C", f"Reach Sooner — same target in {months_fast} months{cuts_note}",
-                     False, target, months_fast, cap, deployable)
-    elif out_of_reach:
-        sc_c = build("C", f"Most you can save — {_inr(affordable_target)} (your {_inr(target)} target is out of reach in {user_months} months){cuts_note}",
-                     False, affordable_target, user_months, cap, deployable)
-    else:
-        sc_c = build("C", f"Right-Size — a {_inr(affordable_target)} target fits your {user_months}-month timeline{cuts_note}",
-                     False, affordable_target, user_months, cap, deployable)
-
-    # Recommend whichever actually works within the user's (modestly stretched) timeline.
-    (sc_b if sc_b["feasible"] else sc_c)["recommended"] = True
-    meta = {"max_financeable_target": affordable_target, "target_out_of_reach": bool(out_of_reach)}
-    return [sc_a, sc_b, sc_c], meta
+    scenarios = [sc_a, sc_b, sc_c, sc_d]
+    feasible = next((s for s in scenarios if s["feasible"]), None)
+    (feasible or sc_d)["recommended"] = True
+    any_feasible = feasible is not None
+    meta = {"target_out_of_reach": not any_feasible, "max_financeable_target": round(target, 2),
+            "any_feasible": any_feasible}
+    return scenarios, meta
 
 
 def _education_scenarios(*, cost: float, existing: float, user_months: float, self_pct: float,
-                         surplus: float, cuts: float, deployable: float,
+                         surplus: float, cuts: float, agg: dict,
                          rate: float = 10.5, tenure: int = 180) -> tuple:
     """
     Education NEVER scales the program cost — a PhD/MS/MBA costs what it costs. Every scenario
     funds the FULL program; the only lever is the FINANCING STRUCTURE.
 
-    Education loans are financed almost entirely by debt (up to 100%), with a moratorium during
-    study and repayment from HIGHER post-graduation income. So feasibility depends ONLY on whether
-    the self-funded slice (paid during study from surplus + short-term cuts) is achievable — it is
-    NOT constrained by whether the loan EMI fits today's surplus.
+    Education loans finance up to 100% of the cost with a moratorium during study and repayment
+    from HIGHER post-graduation income, so the program is ALWAYS financeable and the post-grad EMI
+    is informational — NOT gated on today's saving. The four scenarios apply the A/B/C/D effort
+    ladder to the SELF-FUNDED slice: the more you self-fund, the smaller the loan and the interest.
 
-        A 'Your Plan'              — the user's stated self-funded / loan mix.
-        B 'Maximise the loan'  (RECOMMENDED) — minimal upfront self-funding (<=5% of cost, capped
-                                   by available cash), loan covers the remaining ~95-100%.
-        C 'Minimise the loan'      — self-fund the most you can during study → smaller loan, less
-                                   interest.
-    The program is never "out of reach": financing changes, not the program cost (spec #17).
+      A — Baseline: self-fund what bank cash + current saving allow; loan covers the rest.
+      B — Spending cuts: self-fund more from (saving + cuts) → smaller loan.
+      C — Liquidity (no cuts): break minimal FDs/funds to self-fund more → smaller loan.
+      D — Everything: cuts + liquidity → most self-funding, smallest loan, least interest.
     """
     surplus = max(surplus, 0.0); cuts = max(cuts, 0.0); cost = max(cost, 0.0)
-    deployable = max(deployable, 0.0)
-    user_months = max(1, int(round(user_months)))
-    avail = existing + deployable
-    cuts_note = f" (with ₹{round(cuts):,}/mo spending cuts)" if cuts > 0 else ""
-    # The self-funded portion is saved over the WHOLE study period, so it must come from the
-    # SUSTAINABLE base surplus (~70%) — we never ask the user to save more per month than they
-    # realistically can. (Don't bake in permanent spending cuts to inflate the self-funding.)
-    save_cap = surplus * _CAP_UTIL
+    months = max(1, int(round(user_months)))
+    save = surplus
+    updated_save = surplus + cuts
+    bank = max(0.0, float(agg.get("total_current_balance") or 0.0))
+    available_now = bank + max(0.0, existing)
     yrs = max(1, tenure // 12)
+    zero_deploy = _minimal_deployment(0.0, agg)
 
-    def make(tag, label, recommended, self_amt, months):
-        months = max(1, int(months))
-        self_amt = min(max(self_amt, 0.0), cost)
+    def make(tag, label, *, capacity, deployment):
+        deploy = deployment["deployed_total"]
+        cash_now = available_now + deploy
+        # Self-fund the most these resources allow over the study period; loan covers the remainder.
+        self_amt = min(cost, cash_now + capacity * months)
         loan_amt = round(max(0.0, cost - self_amt), 2)
         emi = round(_calc_emi(loan_amt, rate, tenure), 2) if loan_amt > 0 else 0.0
-        lump = round(min(self_amt, avail), 2)
+        lump = round(min(self_amt, cash_now), 2)
         to_save = round(max(0.0, self_amt - lump), 2)
-        save = round(to_save / months, 2)
+        monthly = round(to_save / months, 2)
         interest = round(emi * tenure - loan_amt, 2) if loan_amt > 0 else 0.0
         return {
-            "tag": tag, "label": label, "recommended": recommended,
+            "tag": tag, "label": label, "recommended": False,
             "purchase_price": round(cost, 2),                       # ALWAYS the full program cost
             "down_payment_pct": round(self_amt / cost * 100, 1) if cost else 0.0,
             "down_payment_amount": round(self_amt, 2),
@@ -1159,34 +1245,33 @@ def _education_scenarios(*, cost: float, existing: float, user_months: float, se
             "total_interest_paid": interest,
             "total_cost_of_ownership": round(cost + interest, 2),
             "timeline_months": months,
-            "monthly_savings_needed": save,
-            # Feasibility = can the SELF-FUNDED slice be saved during study? Repayment of the loan
-            # happens after graduation from higher income, so the EMI is NOT an affordability gate.
-            "feasible": save <= save_cap + 1,
-            "shortfall_per_month": round(max(0.0, save - save_cap), 2),
-            "recommended_instrument": "Education loan + SIP in debt/liquid MF for the self-funded portion",
+            "monthly_savings_needed": monthly,
+            "assumed_monthly_saving": round(capacity, 2),
+            "deployment": deployment,
+            # The program is always financeable (loan covers any remainder); the self-funded slice
+            # here is only ever what the resources actually allow.
+            "feasible": True,
+            "shortfall_per_month": 0.0,
+            "recommended_instrument": "Education loan (tax benefit u/s 80E) + SIP for the self-funded slice",
         }
 
-    # A — user's stated mix
-    sc_a = make("A", f"Your Plan — {self_pct:.0f}% self-funded over {user_months} months",
-                False, cost * self_pct / 100.0, user_months)
+    sc_a = make("A", f"Baseline — self-fund from current savings over a {yrs}-year loan",
+                capacity=save, deployment=zero_deploy)
+    sc_b = make("B", f"With spending cuts — free up ₹{round(cuts):,}/mo to self-fund more, shrinking the loan",
+                capacity=updated_save, deployment=zero_deploy)
+    # C/D self-fund the remaining loan with broken funds (no cuts in C). Size the deployment to the
+    # loan that baseline self-funding still leaves.
+    loan_after_a = max(0.0, cost - (available_now + save * months))
+    sc_c = make("C", "Free up liquidity — break the minimum needed to cut the loan further",
+                capacity=save, deployment=_minimal_deployment(loan_after_a, agg, include_bank=False))
+    loan_after_b = max(0.0, cost - (available_now + updated_save * months))
+    sc_d = make("D", "Everything in — cuts + liquidity for the smallest possible loan",
+                capacity=updated_save, deployment=_minimal_deployment(loan_after_b, agg, include_bank=False))
 
-    # B (RECOMMENDED) — MAXIMISE the loan: self-fund only a minimal upfront slice (<=5% of cost,
-    #   capped by available cash); the education loan covers the rest over a {yrs}-year tenure.
-    self_b = min(avail, cost * _EDU_MIN_SELF_FRAC)
-    loan_pct_b = (cost - self_b) / cost * 100 if cost else 0
-    sc_b = make("B", f"Maximise the education loan — {loan_pct_b:.0f}% financed over a {yrs}-year loan{cuts_note}",
-                True, self_b, user_months)
-
-    # C — minimise the debt: self-fund the most you can during study → smaller loan, less interest.
-    self_c = min(cost, avail + save_cap * user_months)
-    sc_c = make("C", f"Minimise the loan — self-fund {self_c / cost * 100:.0f}%, pay less interest{cuts_note}" if cost else "Minimise the loan",
-                False, self_c, user_months)
-
-    # B is ALWAYS the recommended route — that's how education is normally financed. Its own
-    # `feasible` flag reflects whether the minimal self-funded slice is achievable during study.
-    meta = {"max_financeable_target": round(cost, 2), "target_out_of_reach": False}
-    return [sc_a, sc_b, sc_c], meta
+    scenarios = [sc_a, sc_b, sc_c, sc_d]
+    scenarios[0]["recommended"] = True          # baseline is least-disruptive; all are feasible
+    meta = {"max_financeable_target": round(cost, 2), "target_out_of_reach": False, "any_feasible": True}
+    return scenarios, meta
 
 
 # ── Type-specific planners ────────────────────────────────────────────────────
@@ -1200,7 +1285,7 @@ def _savings_goal(goal: dict, agg: dict, *, target: float, existing: float, mont
     scenarios, meta = _savings_scenarios(
         target=target, existing=existing, user_months=months,
         surplus=agg["monthly_net_flow"], cuts=agg.get("total_spending_cuts", 0.0),
-        deployable=_deployable(agg), instrument=instrument, annual_return_pct=annual_return_pct,
+        agg=agg, instrument=instrument, annual_return_pct=annual_return_pct,
     )
     rec = next(s for s in scenarios if s["recommended"])
     return {
@@ -1234,11 +1319,16 @@ def _plan_car(goal: dict, agg: dict) -> dict:
     net      = agg["monthly_net_flow"]
     cuts     = agg.get("total_spending_cuts", 0.0)
     tenure_months = max(1, int(_num(goal.get("loan_tenure_months"), 60)))
+    rate = _num(goal.get("loan_interest_rate_pct"), 10.0)
+    # "What car can I afford?" → COMPUTE the max price (down payment + biggest EMI-affordable loan).
+    if goal.get("find_max_affordable"):
+        price = _max_affordable_price(goal, agg, rate, tenure_months, months)
+    user_dp  = _resolve_down_payment_pct(goal, agg, price, months, user_dp)   # what-if dp overrides
 
     scenarios, meta = _loan_scenarios(
         price=price, existing=existing, user_months=months, user_dp_pct=user_dp,
-        surplus=net, cuts=cuts, deployable=_deployable(agg),
-        rate=10.0, tenure=tenure_months, down_label="down payment", asset="car",
+        surplus=net, cuts=cuts, agg=agg,
+        rate=rate, tenure=tenure_months, down_label="down payment", asset="car",
         instrument="Recurring Deposit or Liquid MF for the down payment",
     )
     rec = next(s for s in scenarios if s["recommended"])
@@ -1301,6 +1391,10 @@ def _plan_house(goal: dict, agg: dict) -> dict:
     user_dp  = _num(goal.get("down_payment_pct"), 20)
     existing = _parse_amount(goal.get("existing_savings") or 0) or 0.0
     months   = _months_from_timeline(goal.get("timeline")) or 36.0
+    rate     = _num(goal.get("loan_interest_rate_pct"), 8.5)
+    if goal.get("find_max_affordable"):                       # "what house can I afford?"
+        prop = _max_affordable_price(goal, agg, rate, 240, months)
+    user_dp  = _resolve_down_payment_pct(goal, agg, prop, months, user_dp)   # what-if dp overrides
     stamp_pct = _num(goal.get("stamp_duty_pct"), 7.0)        # rough default; varies by state
     stamp     = round(prop * stamp_pct / 100.0, 2)
     net      = agg["monthly_net_flow"]
@@ -1308,8 +1402,8 @@ def _plan_house(goal: dict, agg: dict) -> dict:
 
     scenarios, meta = _loan_scenarios(
         price=prop, existing=existing, user_months=months, user_dp_pct=user_dp,
-        surplus=net, cuts=cuts, deployable=_deployable(agg),
-        rate=8.5, tenure=240, extra_upfront=stamp,
+        surplus=net, cuts=cuts, agg=agg,
+        rate=rate, tenure=240, extra_upfront=stamp,
         down_label="down payment", asset="home",
         instrument="Equity MF SIP (if >3 years away) + FD / RD closer to purchase",
     )
@@ -1357,11 +1451,12 @@ def _plan_education(goal: dict, agg: dict) -> dict:
     # Loan tenure is configurable (10/15/20-year are common); default to 15 years.
     tenure_years = max(1, int(_num(goal.get("loan_tenure_years"), 15)))
     tenure_months = tenure_years * 12
+    edu_rate = _num(goal.get("loan_interest_rate_pct"), 10.5)
 
     # Education program cost is FIXED — the lever is the financing mix, not a cheaper "price".
     scenarios, meta = _education_scenarios(
         cost=cost, existing=existing, user_months=months, self_pct=user_self_pct,
-        surplus=net, cuts=cuts, deployable=_deployable(agg), tenure=tenure_months,
+        surplus=net, cuts=cuts, agg=agg, tenure=tenure_months, rate=edu_rate,
     )
     rec = next(s for s in scenarios if s["recommended"])
     return {
@@ -1613,6 +1708,58 @@ def _plan_generic(goal: dict, agg: dict) -> dict:
                                 "gap": round(max(0.0, target - existing), 2)})
 
 
+def _apply_what_if(agg: dict, goal: dict) -> dict:
+    """Apply goal-level what-if overrides that affect the financial snapshot. Currently:
+    `monthly_savings_override` replaces the user's modelled monthly surplus (so feasibility,
+    the EMI cap and SIP all reflect the hypothetical saving rate)."""
+    override = goal.get("monthly_savings_override")
+    if override is not None:
+        val = _parse_amount(override)
+        if val is not None and val >= 0:
+            agg = {**agg, "monthly_net_flow": float(val), "total_spending_cuts": 0.0}
+    return agg
+
+
+def _resolve_down_payment_pct(goal: dict, agg: dict, price: float, months: float,
+                              default_pct: float) -> float:
+    """What-if down-payment overrides (for loan goals). Precedence:
+       1. `down_payment_amount` — an explicit ₹ figure → converted to a % of the price.
+       2. `down_payment_source` — "savings" sets the down payment to all available cash + saving
+          over the timeline; "everything"/"all"/"liquidity" ALSO adds every breakable FD/liquid fund.
+       3. otherwise the user's stated `down_payment_pct` (default).
+    Lets a what-if say "increase my down payment to whatever I save" or "use everything"."""
+    if price <= 0:
+        return default_pct
+    amt = _parse_amount(goal.get("down_payment_amount"))
+    if amt is None:
+        src = str(goal.get("down_payment_source") or "").lower().strip()
+        if src:
+            bank = max(0.0, float(agg.get("total_current_balance") or 0.0))
+            existing = _parse_amount(goal.get("existing_savings") or 0) or 0.0
+            save = max(0.0, float(agg.get("monthly_net_flow") or 0.0))
+            amt = bank + existing + save * max(1.0, months)
+            if any(k in src for k in ("everything", "all", "liquid", "fd", "fund")):
+                amt += _minimal_deployment(price, agg, include_bank=False)["deployed_total"]
+    if amt is None or amt <= 0:
+        return default_pct
+    return min(100.0, max(0.0, amt / price * 100.0))
+
+
+def _max_affordable_price(goal: dict, agg: dict, rate: float, tenure: int, months: float) -> float:
+    """Largest purchase the user can afford = down payment (from the chosen funds) + the BIGGEST loan
+    whose EMI fits 70% of their monthly saving. Used by "what … can I afford?" what-ifs so the price
+    is COMPUTED, not guessed by the model."""
+    save = max(0.0, float(agg.get("monthly_net_flow") or 0.0))
+    max_loan = _inv_emi(_CAP_UTIL * save, rate, tenure)               # EMI ≤ 70% of saving
+    bank = max(0.0, float(agg.get("total_current_balance") or 0.0))
+    existing = _parse_amount(goal.get("existing_savings") or 0) or 0.0
+    down = bank + existing + save * max(1.0, months)                 # bank + saving over the timeline
+    src = str(goal.get("down_payment_source") or "everything").lower()
+    if any(k in src for k in ("everything", "all", "liquid", "fd", "fund")):
+        down += _minimal_deployment(1e12, agg, include_bank=False)["deployed_total"]   # + broken FDs/funds
+    return round(down + max_loan, 2)
+
+
 _GOAL_PLANNERS = {
     "gadget_purchase": _plan_gadget,
     "car":             _plan_car,
@@ -1647,6 +1794,20 @@ def goal_planner_tool(state: AgentState) -> dict:
     goal      = task.get("goal") or {}
     evidence  = state.get("evidence") or []
 
+    # A what-if BUILDS ON the prior goal. The supervisor LLM is unreliable at re-extracting every
+    # field from history (it often drops target_amount → price 0 → no loan), so merge the persisted
+    # `last_goal` underneath and let the what-if's explicit (non-null) overrides win on top. This
+    # makes what-ifs cumulative ("…and also at 15% interest") and robust to dropped fields.
+    if goal.get("what_if"):
+        prior = state.get("last_goal") or {}
+        if prior:
+            merged = dict(prior)
+            for k, v in goal.items():
+                if v not in (None, "") and not (k == "what_if" and v is False):
+                    merged[k] = v
+            goal = merged
+            task = {**task, "goal": goal}
+
     # Financial baseline: monthly aggregates + LIQUID balance (credit cards excluded).
     agg          = _compute_monthly_aggregates(user_id)
     balance_info = _get_account_balances(user_id)
@@ -1669,7 +1830,7 @@ def goal_planner_tool(state: AgentState) -> dict:
 
     # Investment portfolio + fixed deposits — fetched UP-FRONT (before the planner) so EVERY goal
     # can draw on them as a genuine funding source. We never ask the user for these figures.
-    inv_data = _extract_investment_data(evidence) or _fetch_investment_holdings(user_id)
+    inv_data = _extract_investment_data(evidence) or _fetch_investment_holdings(user_id, live_nav=True)
     fds = _fetch_fixed_deposits(user_id)
 
     # Evaluate each FD AT THE GOAL'S TIMELINE END: matured-by-then FDs are usable in full (no
@@ -1680,17 +1841,35 @@ def goal_planner_tool(state: AgentState) -> dict:
     fd_view = _fd_funding_view(fds, goal_end_date, agg["funding_selection"])
 
     agg["portfolio_value"]    = round(float((inv_data or {}).get("total_current") or 0.0), 2)
-    agg["liquid_fund_value"]  = _liquid_fund_value(inv_data)                     # near-cash MFs
+    agg["liquid_fund_value"]        = _liquid_fund_value(inv_data, _goal_months)   # value at goal end
+    agg["liquid_fund_current_value"] = _liquid_fund_current_value(inv_data)        # value today
     agg["fd_current_value"]   = round(sum(f.get("current_value") or 0.0 for f in fds), 2)  # held-to-maturity
     agg["fd_breakable_value"] = round(sum(f.get("break_value") or 0.0 for f in fds), 2)    # net if broken now
     agg["fd_funding_view"]    = fd_view                                         # per-FD value at goal end + selection
     agg["goal_end_date"]      = goal_end_date.isoformat()
     agg["fd_list"]            = fds                                              # for naming sources by bank
 
+    # What-if overrides (e.g. "what if I save ₹15,000/mo") adjust the snapshot before planning.
+    what_if = bool(goal.get("what_if"))
+    agg = _apply_what_if(agg, goal)
+
     # Run type-specific planner
     goal_type = str(goal.get("goal_type") or "generic").lower().strip()
     planner   = _GOAL_PLANNERS.get(goal_type, _plan_generic)
     extra     = planner(goal, agg)
+
+    # A what-if returns a single direct computation (scenario A) — no A/B/C report.
+    # A what-if answers ONE specific question, so it keeps a SINGLE scenario (the recommended /
+    # best-fit one under the overridden assumptions) — but still rendered in FULL detail (a card
+    # with its money trail + charts), not a one-line answer.
+    if what_if:
+        scns = extra.get("scenarios") or []
+        if scns:
+            keep = dict(next((s for s in scns if s.get("recommended")), scns[0]))
+            keep["recommended"] = True
+            extra["scenarios"] = [keep]
+        extra["what_if"] = True
+        extra["what_if_summary"] = goal.get("description") or task.get("sub_question") or "What-if analysis"
 
     if spend_ops:
         extra["spending_reduction_opportunities"] = spend_ops
@@ -1700,6 +1879,20 @@ def goal_planner_tool(state: AgentState) -> dict:
     # the answer is transparent that some funding may require breaking an FD.
     extra["funding_sources"] = _funding_sources(agg)
     extra["funding_selection_applied"] = agg["funding_selection"]
+
+    # Compact self-funded-vs-loan split for the funding pie (answer_node), taken from the
+    # RECOMMENDED scenario's actual funding: loan + the deployment it breaks (FD/liquid) + the
+    # cash/savings remainder of the down payment.
+    _rec = next((s for s in (extra.get("scenarios") or []) if s.get("recommended")), None) or {}
+    _dep = _rec.get("deployment") or {}
+    _loan = round(float(_rec.get("loan_amount") or 0.0), 2)
+    _liquid = round(float(_dep.get("from_liquid") or 0.0), 2)
+    _fd = round(float(_dep.get("from_fds_matured") or 0.0) + float(_dep.get("from_fds_broken") or 0.0), 2)
+    # The self-funded slice (down payment for loan goals, or the whole target for savings goals)
+    # minus the broken funds is the bank-cash / savings part.
+    _selffunded = float(_rec.get("down_payment_amount") or _rec.get("target_amount") or 0.0)
+    _bank = round(max(0.0, _selffunded - _liquid - _fd), 2)
+    extra["funding_breakdown"] = {"loan": _loan, "bank": _bank, "fd": _fd, "liquid": _liquid}
     if fds:
         extra["fixed_deposits"] = fd_view              # per-FD value at goal end + selection
         extra["fixed_deposits_summary"] = {
@@ -1731,6 +1924,7 @@ def goal_planner_tool(state: AgentState) -> dict:
 
     data = {
         "goal_type": goal_type,
+        "what_if": what_if,
         "goal_description": goal.get("description"),
         "target_amount": target_amount,
         "timeline": goal.get("timeline"),
@@ -1769,4 +1963,7 @@ def goal_planner_tool(state: AgentState) -> dict:
         "evidence": [{"tool": "goal_planner", "task": task.get("sub_question") or state.get("user_query"),
                       "summary": summary, "data": data}],
         "sources": ["Supabase Transactions", "Goal Planner"],
+        # Persist the resolved goal so the NEXT what-if can build on it (carries target_amount,
+        # timeline, etc. even when the supervisor LLM drops them).
+        "last_goal": goal,
     }

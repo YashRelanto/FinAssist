@@ -1003,23 +1003,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [authReady, user.isAuthenticated, user.userId, user.id, refreshUserData]);
 
-  // Refetch when the tab regains focus (e.g. after editing in Supabase)
-  useEffect(() => {
-    if (!authReady || !user.isAuthenticated) return;
-
-    const onFocus = () => {
-      const now = Date.now();
-      // Only refresh if our caches are stale enough (prevents "every focus feels like reload").
-      const anyStale =
-        now - lastLoadedRef.current.transactions > TTL.transactionsMs ||
-        now - lastLoadedRef.current.accounts > TTL.accountsMs ||
-        now - lastLoadedRef.current.budgets > TTL.budgetsMs ||
-        now - lastLoadedRef.current.goals > TTL.goalsMs;
-      if (anyStale) refreshUserData();
-    };
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [authReady, user.isAuthenticated, refreshUserData]);
+  // NOTE: tab-focus refetch was REMOVED intentionally. It called refreshUserData() (which reloads
+  // the dashboard summary and re-runs the financial-health compute) whenever the window regained
+  // focus and a cache was stale — read by users as "random" API calls. Data now loads only on mount
+  // (page reload) and on explicit user actions (add/edit transaction, the refresh button, etc.).
 
   const prependTransaction = (t: Transaction) => {
     setTransactions((prev) => [t, ...prev]);

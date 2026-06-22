@@ -80,6 +80,11 @@ export const Forecasting: React.FC = () => {
     [analyticsPeriod, accountId, categoryId, merchant],
   );
 
+  // Tracks the filter the EXPENSIVE LLM insight last ran for, so it fires only when the filter
+  // actually changes (or on an explicit refresh) — NOT on every re-render / callback churn, which
+  // was launching a fresh ~3-minute LLM call each time (it used force:true, bypassing the cache).
+  const insightsKeyRef = React.useRef<string>('');
+
   const fetchAll = React.useCallback(
     async (options?: { force?: boolean }) => {
       if (!user?.isAuthenticated) return;
@@ -102,8 +107,12 @@ export const Forecasting: React.FC = () => {
       });
       setInsights(instantInsights);
 
+      // Only (re)run the slow LLM narration when the filter changed or the user forced a refresh.
+      const key = JSON.stringify(filterParams);
+      if (!options?.force && insightsKeyRef.current === key) return;
+      insightsKeyRef.current = key;
       setInsightsLlmLoading(true);
-      void loadFinancialInsights({ ...filterParams, llm: true, force: true }).then((data) => {
+      void loadFinancialInsights({ ...filterParams, llm: true, force: options?.force }).then((data) => {
         if (data?.source === 'llm') setInsights(data);
         setInsightsLlmLoading(false);
       });

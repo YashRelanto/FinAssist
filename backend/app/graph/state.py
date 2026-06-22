@@ -40,6 +40,14 @@ def merge_evidence(current: List[Dict[str, Any]] | None,
     return (current or []) + list(update)
 
 
+def keep_last_goal(current: Dict[str, Any] | None,
+                   update: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Reducer for `last_goal`. A NON-EMPTY update REPLACES it (goal_planner stored a fresh goal);
+    an EMPTY update — `make_initial_state`'s per-turn reset — KEEPS the persisted goal so a what-if
+    in a LATER turn can still build on the original plan (carrying target_amount, timeline, etc.)."""
+    return update if update else (current or {})
+
+
 class AgentState(TypedDict, total=False):
     """Lean state passed between nodes in the supervisor graph."""
 
@@ -58,6 +66,8 @@ class AgentState(TypedDict, total=False):
     # ── Brain supervisor loop ────────────────────────────────────────
     next_action: str                # nl2sql | goal_planner | investment | knowledge | out_of_scope | finish
     brain_task:  Dict[str, Any]     # instruction for the chosen tool
+    # Persists across turns (kept by `keep_last_goal` when reset) so what-ifs can build on it.
+    last_goal:   Annotated[Dict[str, Any], keep_last_goal]
     iterations:  int                # number of Brain passes this turn
     evidence:    Annotated[List[Dict[str, Any]], merge_evidence]  # [{tool, task, summary, data}]
 
@@ -75,6 +85,7 @@ class AgentState(TypedDict, total=False):
     # ── Output ───────────────────────────────────────────────────────
     final_answer:   Optional[str]
     artifacts:      List[Dict[str, Any]]   # visualization specs for the frontend
+    scenario_cards: List[Dict[str, Any]]   # per-scenario cards (goal planning) for the frontend
     sources:        List[str]
     final_intent:   Optional[str]
     output_blocked: bool
@@ -104,6 +115,7 @@ def make_initial_state(
         # Brain loop
         next_action="",
         brain_task={},
+        last_goal={},
         iterations=0,
         evidence=[],
 
@@ -121,6 +133,7 @@ def make_initial_state(
         # Output
         final_answer=None,
         artifacts=[],
+        scenario_cards=[],
         sources=[],
         final_intent=None,
         output_blocked=False,

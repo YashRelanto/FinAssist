@@ -4,6 +4,7 @@ import { cn, formatCurrency, APP_NAME } from '../lib/utils';
 import { useAppContext } from '../context/AppContext';
 import { apiFetch } from '../lib/api';
 import { ChatChart } from '../components/ChatChart';
+import { ScenarioCards, type ScenarioCard } from '../components/ScenarioCards';
 import { PageHeader, PageShell } from '../components/PageShell';
 import { Markdown } from '../components/Markdown';
 import { ClarificationCard, type ClarificationQuestion } from '../components/ClarificationCard';
@@ -15,6 +16,7 @@ interface Message {
   text: string;
   type: 'text' | 'clarification' | 'card';
   artifacts?: unknown[];
+  scenarios?: ScenarioCard[];
   clarificationQuestions?: ClarificationQuestion[];
   clarificationAnswered?: boolean;
   data?: { label: string; value: number; color: string; percent: number }[];
@@ -71,6 +73,7 @@ export const AIAssistant: React.FC = () => {
         text: data.answer || data.response || "I didn't quite catch that.",
         type: isClarification && questions.length > 0 ? 'clarification' : 'text',
         artifacts: Array.isArray(data.artifacts) ? data.artifacts : [],
+        scenarios: Array.isArray(data.scenarios) ? data.scenarios : [],
         clarificationQuestions: isClarification && questions.length > 0 ? questions : undefined,
         clarificationAnswered: false,
       };
@@ -176,6 +179,30 @@ export const AIAssistant: React.FC = () => {
                     </div>
                   )}
 
+                  {/* Goal-planning scenario cards (A/B/C/D) */}
+                  {m.role === 'ai' && Array.isArray(m.scenarios) && m.scenarios.length > 0 && (
+                    <ScenarioCards scenarios={m.scenarios as ScenarioCard[]} />
+                  )}
+
+                  {/* Legacy card data */}
+                  {m.type === 'card' && m.data && (
+                    <div className="mt-4 bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/50 space-y-4">
+                      {m.data.map((item: any, i: number) => (
+                        <div key={i}>
+                          <div className="flex justify-between items-center mb-2">
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }}></div>
+                              <span className="text-[10px] font-bold text-on-surface uppercase tracking-widest">{item.label}</span>
+                            </div>
+                            <span className="text-xs font-bold text-on-surface">{formatCurrency(item.value)}</span>
+                          </div>
+                          <div className="w-full bg-surface-container-low h-1.5 rounded-full overflow-hidden">
+                            <div className="h-full transition-all duration-1000" style={{ width: `${item.percent}%`, backgroundColor: item.color }}></div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <span className="text-[10px] font-bold text-outline px-1 block uppercase tracking-widest">{m.time}</span>
               </div>
